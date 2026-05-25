@@ -27,7 +27,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Update
 Run only selected sections:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Include Winget,Choco
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Include Winget Choco
 ```
 
 ## RMM deployment
@@ -45,6 +45,90 @@ Recommended rollout pattern:
 3. Review logs and RMM output before broad deployment.
 4. Reserve `-Force` for known developer workstations or hands-on maintenance.
 
+### Ninja deployment options
+
+Use one of these patterns depending on how you want to manage updates.
+
+| Pattern | Best for | Tradeoff |
+| --- | --- | --- |
+| Paste `Reparo.ps1` into Ninja | Maximum simplicity and no external dependency | Updating Reparo means editing the Ninja script body |
+| Upload `Reparo.ps1` as a Ninja script/file | Controlled copy inside Ninja | Exact execution path depends on how the Ninja script/file is staged |
+| Download from GitHub | Easy updates and version pinning | Requires endpoint access to GitHub raw content |
+
+### Option 1: Paste Reparo into Ninja
+
+Create a Ninja PowerShell script and paste the contents of `Reparo.ps1` directly into the script body.
+
+Recommended arguments for a broad managed-client pass:
+
+```powershell
+-Update
+```
+
+Recommended pilot arguments:
+
+```powershell
+-Preview -Update
+```
+
+Use this option when you want the fewest moving parts. The script runs entirely from Ninja, and no endpoint needs to reach GitHub.
+
+### Option 2: Upload Reparo as a Ninja file
+
+Upload `Reparo.ps1` to Ninja and run it from the staged script directory:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Update
+```
+
+If your Ninja file staging path differs, update the `-File` path to match where Ninja places the uploaded file.
+
+For a safer first pass:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -Update
+```
+
+### Option 3: Download from GitHub at runtime
+
+Use this when the repo is public, or when the endpoint has approved access to the raw file URL. The bootstrapper downloads the current `Reparo.ps1` to `C:\ProgramData\Reparo\Reparo.ps1`, then runs it.
+
+Ninja script body:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+
+$reparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
+$installRoot = "$env:ProgramData\Reparo"
+$scriptPath = Join-Path $installRoot 'Reparo.ps1'
+
+if ([Net.ServicePointManager]::SecurityProtocol -notmatch 'Tls12') {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+}
+
+New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+Invoke-WebRequest -Uri $reparoUrl -OutFile $scriptPath -UseBasicParsing
+
+if (Get-Command Unblock-File -ErrorAction SilentlyContinue) {
+    Unblock-File -Path $scriptPath
+}
+
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -Update
+exit $LASTEXITCODE
+```
+
+For production stability, prefer a tag or commit-pinned raw URL instead of `main`:
+
+```powershell
+$reparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/v1.0.0/Reparo.ps1'
+```
+
+The same bootstrapper is also included at `deploy/Ninja-GitHub.ps1`.
+
+### Private repo note
+
+For client endpoints, a public repo or Ninja-hosted script copy is usually cleaner than embedding GitHub credentials. If the repo is private, avoid hard-coding a personal access token in the Ninja script body. Use Ninja-managed secure variables only if you truly need private GitHub delivery.
+
 ## Modes
 
 | Mode | Behavior |
@@ -52,7 +136,7 @@ Recommended rollout pattern:
 | Default | Runs `Winget` only. |
 | `-Preview` | Logs what would run without executing package manager commands. |
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, and `WindowsUpdate`. |
-| `-Include <sections>` | Runs only the named sections, such as `Winget,Choco`. |
+| `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
 | `-Force` | Runs the full local-dev-tool pass and enables Windows Update and WSL apt handling. Use carefully. |
 
 ## Sections
