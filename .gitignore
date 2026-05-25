@@ -1,0 +1,16 @@
+# PowerShell/editor noise
+*.ps1xml
+*.psm1~
+*.ps1~
+.vscode/
+.idea/
+
+# Runtime logs and temp output
+Logs/
+*.log
+*.tmp
+*.bak
+
+# OS metadata
+Thumbs.db
+desktop.ini
