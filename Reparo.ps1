@@ -4,8 +4,8 @@ Client-safe maintenance runner for RMM/Ninja deployment.
 
 .DESCRIPTION
 Reparo upgrades common package/tool ecosystems when they are present.
-It is intentionally standalone: no CyberShell profile, Dropbox paths, cast
-registry, gitstorm, or VS Code portable sync dependencies.
+It is intentionally standalone and does not depend on profile modules,
+cloud-synced helper paths, editor sync state, or local automation commands.
 
 Default mode runs Winget only. Use -Update for a conservative managed-client
 maintenance pass, -Force for the full gauntlet, or -Include for specific
@@ -20,7 +20,7 @@ param(
     [switch]$WslApt,
     [switch]$Update,
     [switch]$Force,
-    [string]$LogRoot = "$env:ProgramData\Spectral\Reparo\Logs"
+    [string]$LogRoot = "$env:ProgramData\Reparo\Logs"
 )
 
 $ErrorActionPreference = 'Stop'
