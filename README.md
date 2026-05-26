@@ -12,6 +12,12 @@ Reparo does not install package managers from scratch. It only uses tools that a
 
 ## Quick start
 
+Install or update the live ProgramData copy from GitHub:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Install
+```
+
 Preview the managed-client update pass:
 
 ```powershell
@@ -35,7 +41,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Include Wi
 Suggested NinjaOne command:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Update
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\Reparo\Reparo.ps1 -Update
 ```
 
 Recommended rollout pattern:
@@ -53,7 +59,7 @@ Use one of these patterns depending on how you want to manage updates.
 | --- | --- | --- |
 | Paste `Reparo.ps1` into Ninja | Maximum simplicity and no external dependency | Updating Reparo means editing the Ninja script body |
 | Upload `Reparo.ps1` as a Ninja script/file | Controlled copy inside Ninja | Exact execution path depends on how the Ninja script/file is staged |
-| Download from GitHub | Easy updates and version pinning | Requires endpoint access to GitHub raw content |
+| `Reparo.ps1 -New` from GitHub | Easy updates and version pinning | Requires endpoint access to GitHub raw content |
 
 ### Option 1: Paste Reparo into Ninja
 
@@ -89,29 +95,33 @@ For a safer first pass:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -Update
 ```
 
-### Option 3: Download from GitHub at runtime
+### Option 3: Install/update from GitHub with `-New`
 
-Use this when the repo is public, or when the endpoint has approved access to the raw file URL. The bootstrapper downloads the current `Reparo.ps1` to `C:\ProgramData\Reparo\Reparo.ps1`, then runs it.
+Use this when the repo is public, or when the endpoint has approved access to the raw file URL. The first command downloads the current `Reparo.ps1` to `C:\ProgramData\Reparo\Reparo.ps1` with parse validation and backup handling, then the second command runs the installed ProgramData copy.
 
 Ninja script body:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
 
-$reparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
 $installRoot = "$env:ProgramData\Reparo"
 $scriptPath = Join-Path $installRoot 'Reparo.ps1'
+$bootstrapUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
+$bootstrapPath = Join-Path $installRoot 'Reparo.bootstrap.ps1'
 
 if ([Net.ServicePointManager]::SecurityProtocol -notmatch 'Tls12') {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 }
 
 New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
-Invoke-WebRequest -Uri $reparoUrl -OutFile $scriptPath -UseBasicParsing
+Invoke-WebRequest -Uri $bootstrapUrl -OutFile $bootstrapPath -UseBasicParsing
 
 if (Get-Command Unblock-File -ErrorAction SilentlyContinue) {
-    Unblock-File -Path $scriptPath
+    Unblock-File -Path $bootstrapPath
 }
+
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrapPath -New -InstallRoot $installRoot -SourceUrl $bootstrapUrl
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -Update
 exit $LASTEXITCODE
@@ -120,7 +130,7 @@ exit $LASTEXITCODE
 For production stability, prefer a tag or commit-pinned raw URL instead of `main`:
 
 ```powershell
-$reparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/v1.0.0/Reparo.ps1'
+$bootstrapUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/v1.0.0/Reparo.ps1'
 ```
 
 The same bootstrapper is also included at `deploy/Ninja-GitHub.ps1`.
@@ -134,6 +144,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | Mode | Behavior |
 | --- | --- |
 | Default | Runs `Winget` only. |
+| `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` from GitHub, with parse validation and backup handling. |
 | `-Preview` | Logs what would run without executing package manager commands. |
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, and `WindowsUpdate`. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
@@ -170,7 +181,17 @@ Logs are written to:
 C:\ProgramData\Reparo\Logs
 ```
 
-Each run creates a timestamped log file that includes the computer name, process ID, selected mode, commands invoked, command output, skipped sections, and errors.
+Each run creates a timestamped log file that includes the computer name, process ID, selected mode, commands invoked, command output, skipped sections, errors, and the final run summary.
+
+At the end of the run, Reparo prints a `REPARO summary` with:
+
+- updated software, target version, and update method where package-level details are available
+- skipped sections with reasons
+- failed sections with reasons or exit codes
+- notes for completed sections that do not expose a clean package-level update list
+- the log path
+
+Package-level update details are currently collected for `Winget`, `Winget(msstore)`, `Choco`, and `Scoop`. Other ecosystems still report section-level completion and write their raw tool output to the log.
 
 You can override the log location:
 
