@@ -200,8 +200,46 @@ if ($New) {
     return
 }
 
+function Resolve-ReparoCommand {
+    param([Parameter(Mandatory)][string]$Name)
+
+    try {
+        return (Get-Command $Name -CommandType Application -ErrorAction Stop)
+    }
+    catch {
+        return $null
+    }
+}
+
 function Test-Cmd($Name) {
-    [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+    [bool](Resolve-ReparoCommand -Name $Name)
+}
+
+function Test-ReparoExecutable {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [string[]]$Arguments = @('--version')
+    )
+
+    $command = Resolve-ReparoCommand -Name $Name
+    if (-not $command) { return $false }
+
+    try {
+        $output = @(& $command.Source @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+        foreach ($item in $output) {
+            $line = [string]$item
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                Write-ReparoLog ("[CHECK] {0}: {1}" -f $Name, $line)
+            }
+        }
+
+        return ($exitCode -eq 0 -or $null -eq $exitCode)
+    }
+    catch {
+        Write-ReparoLog ("[CHECK] {0} is present but cannot run: {1}" -f $Name, $_.Exception.Message)
+        return $false
+    }
 }
 
 function Test-Admin {
@@ -225,11 +263,30 @@ function Test-ReparoSectionSelected($Section) {
 }
 
 function Resolve-ReparoShell {
-    if (Get-Command pwsh -ErrorAction SilentlyContinue) {
-        return 'pwsh'
+    foreach ($shellName in @('pwsh', 'powershell')) {
+        $command = Resolve-ReparoCommand -Name $shellName
+        if (-not $command) { continue }
+
+        try {
+            $output = @(& $command.Source -NoProfile -ExecutionPolicy Bypass -Command '$PSVersionTable.PSVersion.ToString()' 2>&1)
+            $exitCode = $LASTEXITCODE
+            foreach ($item in $output) {
+                $line = [string]$item
+                if (-not [string]::IsNullOrWhiteSpace($line)) {
+                    Write-ReparoLog ("[CHECK] {0}: {1}" -f $shellName, $line)
+                }
+            }
+
+            if ($exitCode -eq 0 -or $null -eq $exitCode) {
+                return $command.Source
+            }
+        }
+        catch {
+            Write-ReparoLog ("[CHECK] {0} is present but cannot run: {1}" -f $shellName, $_.Exception.Message)
+        }
     }
 
-    return 'powershell'
+    throw 'No runnable PowerShell host was found. Tried pwsh and powershell.'
 }
 
 function Test-ReparoBenignExit {
@@ -245,6 +302,35 @@ function Test-ReparoBenignExit {
 
     $text = ($Output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
     return ($text -match 'No installed package found matching input criteria|No applicable update found|No available upgrade found|No packages found')
+}
+
+function Test-ReparoSectionTool {
+    param(
+        [string]$Section,
+        [string]$PresenceCmd
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PresenceCmd)) {
+        return $true
+    }
+
+    switch ($PresenceCmd) {
+        'winget' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'choco' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'scoop' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'pipx' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'npm' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'pnpm' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'yarn' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'dotnet' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'rustup' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'cargo-install-update' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'conda' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'gem' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'composer' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'wsl' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--status')) }
+        default { return (Test-Cmd $PresenceCmd) }
+    }
 }
 
 $script:ReparoSummary = [ordered]@{
@@ -322,14 +408,17 @@ function Get-ReparoPendingUpdates {
     try {
         switch ($Section) {
             'Winget' {
+                if (-not (Test-ReparoExecutable -Name 'winget' -Arguments @('--version'))) { return @() }
                 $output = @(winget upgrade --include-unknown --accept-source-agreements 2>&1)
                 return @(ConvertFrom-ReparoWingetTable -Output $output -Method 'winget')
             }
             'Winget(msstore)' {
+                if (-not (Test-ReparoExecutable -Name 'winget' -Arguments @('--version'))) { return @() }
                 $output = @(winget upgrade --source msstore --include-unknown --accept-source-agreements 2>&1)
                 return @(ConvertFrom-ReparoWingetTable -Output $output -Method 'winget/msstore')
             }
             'Choco' {
+                if (-not (Test-ReparoExecutable -Name 'choco' -Arguments @('--version'))) { return @() }
                 $output = @(choco outdated --limit-output --no-color 2>&1)
                 $updates = New-Object System.Collections.Generic.List[object]
                 foreach ($item in $output) {
@@ -348,6 +437,7 @@ function Get-ReparoPendingUpdates {
                 return $updates.ToArray()
             }
             'Scoop' {
+                if (-not (Test-ReparoExecutable -Name 'scoop' -Arguments @('--version'))) { return @() }
                 $output = @(scoop status 2>&1)
                 $updates = New-Object System.Collections.Generic.List[object]
                 foreach ($item in $output) {
@@ -453,10 +543,10 @@ function Invoke-ReparoCommandStep {
 
     if (-not (Test-ReparoSectionSelected $Section)) { return }
 
-    if ($PresenceCmd -and -not (Test-Cmd $PresenceCmd)) {
-        Write-Skip "$Section not found; skipping"
-        Write-ReparoLog "[SKIP] $Section not found; skipping"
-        Add-ReparoSummaryRecord -Bucket Skipped -Software $Section -Version '-' -Method $Section -Reason "$PresenceCmd not found"
+    if ($PresenceCmd -and -not (Test-ReparoSectionTool -Section $Section -PresenceCmd $PresenceCmd)) {
+        Write-Skip "$Section not found or cannot run in this context; skipping"
+        Write-ReparoLog "[SKIP] $Section not found or cannot run in this context; skipping"
+        Add-ReparoSummaryRecord -Bucket Skipped -Software $Section -Version '-' -Method $Section -Reason "$PresenceCmd not found or cannot run"
         return
     }
 
