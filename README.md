@@ -18,6 +18,19 @@ Install or update the live ProgramData copy from GitHub:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Install
 ```
 
+`-Install` also creates a `reparo` command shim at:
+
+```text
+C:\ProgramData\Reparo\bin\reparo.cmd
+```
+
+Reparo tries to add that folder to machine `PATH`, falling back to user `PATH` if machine `PATH` cannot be changed. New PowerShell sessions can then run:
+
+```powershell
+reparo -Update
+reparo -Install
+```
+
 Preview the managed-client update pass:
 
 ```powershell
@@ -212,7 +225,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Update -Lo
 
 If a section reports that a tool is present but cannot run, the most common cause is an execution-context mismatch. This is especially common with `winget` and Microsoft Store/App Installer paths under RMM, ScreenConnect, or `SYSTEM`; Windows can resolve `winget.exe` but still refuse to execute it in that context.
 
-Reparo probes known package managers before running them and skips sections that cannot launch cleanly. If `Winget` is skipped or fails under a remote tool but works in an interactive admin shell, run Reparo from the same user/admin context where App Installer is available, or use a package manager that is installed machine-wide, such as Chocolatey.
+Reparo probes known package managers before running them and skips sections that cannot launch cleanly. For `Winget`, Reparo also attempts repair before skipping: it tries App Installer re-registration, `Repair-WinGetPackageManager` when present, and the latest Microsoft `winget-cli` App Installer MSIX bundle. If `Winget` is still skipped under a remote tool but works in an interactive admin shell, run Reparo from the same user/admin context where App Installer is available, or use a package manager that is installed machine-wide, such as Chocolatey.
 
 ## Safety notes
 

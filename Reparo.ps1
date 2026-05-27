@@ -86,6 +86,70 @@ function Get-ReparoFileHash {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
 }
 
+function Install-ReparoCommandShim {
+    param(
+        [Parameter(Mandatory)][string]$TargetRoot,
+        [switch]$WhatIfOnly
+    )
+
+    $binRoot = Join-Path $TargetRoot 'bin'
+    $shimPath = Join-Path $binRoot 'reparo.cmd'
+    $scriptPath = Join-Path $TargetRoot 'Reparo.ps1'
+    $shimContent = @"
+@echo off
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$scriptPath" %*
+exit /b %ERRORLEVEL%
+"@
+
+    if ($WhatIfOnly) {
+        Write-Info "Would create command shim: $shimPath"
+    }
+    else {
+        New-Item -ItemType Directory -Force -Path $binRoot | Out-Null
+        Set-Content -LiteralPath $shimPath -Value $shimContent -Encoding ASCII
+        Write-Info "Command shim installed: $shimPath"
+    }
+
+    $pathSeparator = [System.IO.Path]::PathSeparator
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $machineParts = @($machinePath -split [regex]::Escape([string]$pathSeparator) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $machineHasShim = $machineParts -contains $binRoot
+
+    if ($machineHasShim) {
+        Write-Info "Machine PATH already includes: $binRoot"
+    }
+    elseif ($WhatIfOnly) {
+        Write-Info "Would add to machine PATH: $binRoot"
+    }
+    else {
+        try {
+            $newMachinePath = (@($machineParts) + $binRoot) -join $pathSeparator
+            [Environment]::SetEnvironmentVariable('Path', $newMachinePath, 'Machine')
+            Write-Info "Added to machine PATH: $binRoot"
+        }
+        catch {
+            Write-Skip "Unable to update machine PATH: $($_.Exception.Message)"
+            try {
+                $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+                $userParts = @($userPath -split [regex]::Escape([string]$pathSeparator) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                if ($userParts -notcontains $binRoot) {
+                    $newUserPath = (@($userParts) + $binRoot) -join $pathSeparator
+                    [Environment]::SetEnvironmentVariable('Path', $newUserPath, 'User')
+                    Write-Info "Added to user PATH instead: $binRoot"
+                }
+            }
+            catch {
+                Write-Skip "Unable to update user PATH: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    $processParts = @($env:Path -split [regex]::Escape([string]$pathSeparator) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($processParts -notcontains $binRoot) {
+        $env:Path = (@($processParts) + $binRoot) -join $pathSeparator
+    }
+}
+
 function Invoke-ReparoNew {
     param(
         [Parameter(Mandatory)][string]$TargetRoot,
@@ -120,6 +184,7 @@ function Invoke-ReparoNew {
             $currentHash = Get-ReparoFileHash -Path $scriptPath
             if ($currentHash -eq $newHash) {
                 Write-Skip "Installed Reparo.ps1 is already current ($newHash)."
+                Install-ReparoCommandShim -TargetRoot $TargetRoot -WhatIfOnly:$WhatIfOnly
                 return
             }
         }
@@ -127,6 +192,7 @@ function Invoke-ReparoNew {
         if ($WhatIfOnly) {
             Write-Info "Would replace: $scriptPath"
             Write-Info "New SHA256: $newHash"
+            Install-ReparoCommandShim -TargetRoot $TargetRoot -WhatIfOnly
             return
         }
 
@@ -142,6 +208,7 @@ function Invoke-ReparoNew {
         Copy-Item -LiteralPath $tempScript -Destination $scriptPath -Force
         Write-Done "Installed Reparo.ps1 updated ($newHash)."
         Write-Info "Live script: $scriptPath"
+        Install-ReparoCommandShim -TargetRoot $TargetRoot
     }
     finally {
         if (Test-Path -LiteralPath $tempRoot) {
@@ -304,6 +371,88 @@ function Test-ReparoBenignExit {
     return ($text -match 'No installed package found matching input criteria|No applicable update found|No available upgrade found|No packages found')
 }
 
+function Invoke-ReparoWingetRepair {
+    if (Test-ReparoExecutable -Name 'winget' -Arguments @('--version')) {
+        return $true
+    }
+
+    if ($Preview) {
+        Write-ReparoLog '[CHECK] winget is not runnable; preview mode will not attempt repair'
+        return $false
+    }
+
+    Write-Step 'Winget repair'
+    Write-ReparoLog '[STEP] Winget repair'
+
+    try {
+        Write-ReparoLog '[CMD] Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe'
+        Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction Stop
+        if (Test-ReparoExecutable -Name 'winget' -Arguments @('--version')) {
+            Write-Done 'Winget registered successfully'
+            Write-ReparoLog '[DONE] Winget registered successfully'
+            return $true
+        }
+    }
+    catch {
+        Write-ReparoLog ("[WARN] Winget App Installer registration failed: {0}" -f $_.Exception.Message)
+    }
+
+    if (Get-Command Repair-WinGetPackageManager -ErrorAction SilentlyContinue) {
+        try {
+            Write-ReparoLog '[CMD] Repair-WinGetPackageManager -AllUsers'
+            Repair-WinGetPackageManager -AllUsers -ErrorAction Stop
+            if (Test-ReparoExecutable -Name 'winget' -Arguments @('--version')) {
+                Write-Done 'Winget repaired successfully'
+                Write-ReparoLog '[DONE] Winget repaired successfully'
+                return $true
+            }
+        }
+        catch {
+            Write-ReparoLog ("[WARN] Repair-WinGetPackageManager failed: {0}" -f $_.Exception.Message)
+        }
+    }
+
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ReparoWinget_{0}_{1}" -f $PID, (Get-Date -Format 'yyyyMMddHHmmss'))
+    $bundlePath = Join-Path $tempRoot 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle'
+
+    try {
+        New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+        Write-ReparoLog '[CMD] Invoke-RestMethod https://api.github.com/repos/microsoft/winget-cli/releases/latest'
+        $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/winget-cli/releases/latest' -Headers @{ 'User-Agent' = 'Reparo' } -UseBasicParsing
+        $asset = @($release.assets | Where-Object { $_.browser_download_url -like '*Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle' } | Select-Object -First 1)
+        if (-not $asset) {
+            throw 'Unable to locate the latest Microsoft.DesktopAppInstaller msixbundle asset.'
+        }
+
+        Write-ReparoLog ("[CMD] Invoke-WebRequest {0}" -f $asset.browser_download_url)
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $bundlePath -UseBasicParsing
+        Unblock-File -LiteralPath $bundlePath -ErrorAction SilentlyContinue
+
+        Write-ReparoLog ("[CMD] Add-AppxPackage -Path {0}" -f $bundlePath)
+        Add-AppxPackage -Path $bundlePath -ErrorAction Stop
+
+        if (Test-ReparoExecutable -Name 'winget' -Arguments @('--version')) {
+            Write-Done 'Winget installed successfully'
+            Write-ReparoLog '[DONE] Winget installed successfully'
+            return $true
+        }
+    }
+    catch {
+        Write-ReparoLog ("[WARN] Winget GitHub install failed: {0}" -f $_.Exception.Message)
+    }
+    finally {
+        if (Test-Path -LiteralPath $tempRoot) {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Write-Skip 'Winget is not available in this context after repair attempts'
+    Write-ReparoLog '[SKIP] Winget is not available in this context after repair attempts'
+    return $false
+}
+
 function Test-ReparoSectionTool {
     param(
         [string]$Section,
@@ -315,7 +464,7 @@ function Test-ReparoSectionTool {
     }
 
     switch ($PresenceCmd) {
-        'winget' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'winget' { return (Invoke-ReparoWingetRepair) }
         'choco' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
         'scoop' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
         'pipx' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
