@@ -14,6 +14,7 @@ sections.
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
+    [switch]$Help,
     [Alias('Install')]
     [switch]$New,
     [switch]$Preview,
@@ -35,6 +36,49 @@ $ErrorActionPreference = 'Stop'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
+}
+
+function Show-ReparoHelp {
+    $helpText = @'
+Reparo
+
+Usage:
+  reparo
+  reparo -Update
+  reparo -Install
+  reparo -Preview -Update
+  reparo -Include Winget Choco
+
+Modes:
+  Default              Run the Winget section only.
+  -Update              Run the managed-client pass: Winget, Winget(msstore), Choco, WindowsUpdate.
+  -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
+  -Force               Run all sections, including developer toolchains and WSL apt handling.
+  -Preview             Show what would run without executing update commands.
+  -Include <sections>  Run only selected sections, for example: -Include Winget Choco.
+  -Help                Show this help.
+
+Install/update:
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Install
+
+After install, new PowerShell sessions can usually run:
+  reparo -Update
+  reparo -Install
+
+Common sections:
+  Winget, Winget(msstore), Choco, WindowsUpdate, Scoop, Pip, Pipx, Npm,
+  Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer, Wsl, WslApt.
+
+Logs:
+  C:\ProgramData\Reparo\Logs
+'@
+
+    Write-Host $helpText
+}
+
+if ($Help) {
+    Show-ReparoHelp
+    return
 }
 
 $updateSections = @(

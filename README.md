@@ -29,6 +29,7 @@ Reparo tries to add that folder to machine `PATH`, falling back to user `PATH` i
 ```powershell
 reparo -Update
 reparo -Install
+reparo -Help
 ```
 
 Preview the managed-client update pass:
@@ -158,6 +159,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | --- | --- |
 | Default | Runs `Winget` only. |
 | `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` from GitHub, with parse validation and backup handling. |
+| `-Help` | Prints Reparo usage and exits without running updates. |
 | `-Preview` | Logs what would run without executing package manager commands. |
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, and `WindowsUpdate`. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
