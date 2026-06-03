@@ -504,7 +504,7 @@ function Get-ReparoRunningProcessInfo {
             PID         = [int]$process.ProcessId
             Name        = $process.Name
             CommandLine = [string]$process.CommandLine
-            LogPath     = (Get-ReparoLogPathForPid -Pid ([int]$process.ProcessId))
+            LogPath     = (Get-ReparoLogPathForPid -ProcessId ([int]$process.ProcessId))
             Running     = [bool](Get-Process -Id ([int]$process.ProcessId) -ErrorAction SilentlyContinue)
         }
     }
@@ -512,12 +512,12 @@ function Get-ReparoRunningProcessInfo {
 
 function Get-ReparoLogPathForPid {
     param(
-        [Parameter(Mandatory)][int]$Pid
+        [Parameter(Mandatory)][int]$ProcessId
     )
 
     $patterns = @(
-        "reparo_*_${Pid}_*_RUNNING.log"
-        "reparo_*_${Pid}_*.log"
+        "reparo_*_${ProcessId}_*_RUNNING.log"
+        "reparo_*_${ProcessId}_*.log"
     )
 
     foreach ($pattern in $patterns) {
