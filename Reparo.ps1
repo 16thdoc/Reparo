@@ -59,6 +59,7 @@ Usage:
 Modes:
   Default              Run Windows Update only.
   -Update              Run the managed-client pass: Winget, Winget(msstore), Choco, WindowsUpdate.
+                        Updated package rows show current version -> target version when available.
   -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
   -Force               Run all sections, including developer toolchains and WSL apt handling.
   -Kill                Stop running Reparo PowerShell processes.
@@ -647,21 +648,24 @@ function Add-ReparoSummaryRecord {
         [ValidateSet('Updated', 'Skipped', 'Failed')]
         [string]$Bucket,
         [string]$Software,
+        [string]$CurrentVersion,
         [string]$Version,
         [string]$Method,
         [string]$Reason
     )
 
     if ([string]::IsNullOrWhiteSpace($Software)) { $Software = 'Unknown' }
+    if ([string]::IsNullOrWhiteSpace($CurrentVersion)) { $CurrentVersion = '-' }
     if ([string]::IsNullOrWhiteSpace($Version)) { $Version = '-' }
     if ([string]::IsNullOrWhiteSpace($Method)) { $Method = '-' }
     if ([string]::IsNullOrWhiteSpace($Reason)) { $Reason = '-' }
 
     [void]$script:ReparoSummary[$Bucket].Add([pscustomobject]@{
-        Software = $Software
-        Version  = $Version
-        Method   = $Method
-        Reason   = $Reason
+        Software       = $Software
+        CurrentVersion = $CurrentVersion
+        Version        = $Version
+        Method         = $Method
+        Reason         = $Reason
     })
 }
 
@@ -695,9 +699,10 @@ function ConvertFrom-ReparoWingetTable {
         if ([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($available)) { continue }
 
         [void]$updates.Add([pscustomobject]@{
-            Software = $name
-            Version  = $available
-            Method   = $Method
+            Software       = $name
+            CurrentVersion = $match.Groups['version'].Value.Trim()
+            Version        = $available
+            Method         = $Method
         })
     }
 
@@ -731,9 +736,10 @@ function Get-ReparoPendingUpdates {
                     if ($parts.Count -lt 3) { continue }
 
                     [void]$updates.Add([pscustomobject]@{
-                        Software = $parts[0].Trim()
-                        Version  = $parts[2].Trim()
-                        Method   = 'choco'
+                        Software       = $parts[0].Trim()
+                        CurrentVersion = $parts[1].Trim()
+                        Version        = $parts[2].Trim()
+                        Method         = 'choco'
                     })
                 }
                 return $updates.ToArray()
@@ -751,9 +757,10 @@ function Get-ReparoPendingUpdates {
                     if (-not $match.Success) { continue }
 
                     [void]$updates.Add([pscustomobject]@{
-                        Software = $match.Groups['name'].Value.Trim()
-                        Version  = $match.Groups['available'].Value.Trim()
-                        Method   = 'scoop'
+                        Software       = $match.Groups['name'].Value.Trim()
+                        CurrentVersion = $match.Groups['installed'].Value.Trim()
+                        Version        = $match.Groups['available'].Value.Trim()
+                        Method         = 'scoop'
                     })
                 }
                 return $updates.ToArray()
@@ -775,7 +782,14 @@ function Add-ReparoSectionUpdates {
 
     if ($PendingUpdates -and $PendingUpdates.Count -gt 0) {
         foreach ($update in $PendingUpdates) {
-            Add-ReparoSummaryRecord -Bucket Updated -Software $update.Software -Version $update.Version -Method $update.Method -Reason 'updated'
+            if ($update.CurrentVersion -and $update.CurrentVersion -ne '-') {
+                Write-ReparoLog ("[UPDATED] {0}: {1} -> {2} via {3}" -f $update.Software, $update.CurrentVersion, $update.Version, $update.Method)
+            }
+            else {
+                Write-ReparoLog ("[UPDATED] {0}: -> {1} via {2}" -f $update.Software, $update.Version, $update.Method)
+            }
+
+            Add-ReparoSummaryRecord -Bucket Updated -Software $update.Software -CurrentVersion $update.CurrentVersion -Version $update.Version -Method $update.Method -Reason 'updated'
         }
         return
     }
@@ -800,10 +814,10 @@ function Write-ReparoSummaryTable {
     }
 
     if ($IncludeReason) {
-        $table = $Rows | Select-Object Software, Version, Method, Reason | Format-Table -AutoSize | Out-String
+        $table = $Rows | Select-Object Software, CurrentVersion, Version, Method, Reason | Format-Table -AutoSize | Out-String
     }
     else {
-        $table = $Rows | Select-Object Software, Version, Method | Format-Table -AutoSize | Out-String
+        $table = $Rows | Select-Object Software, CurrentVersion, Version, Method | Format-Table -AutoSize | Out-String
     }
 
     $table = $table.TrimEnd()

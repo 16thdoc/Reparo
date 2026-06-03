@@ -32,6 +32,7 @@ reparo -Install
 reparo -Help
 reparo -Version
 reparo -Kill
+reparo -Tail
 ```
 
 Preview the managed-client update pass:
@@ -76,6 +77,8 @@ Use one of these patterns depending on how you want to manage updates.
 | Paste `Reparo.ps1` into Ninja | Maximum simplicity and no external dependency | Updating Reparo means editing the Ninja script body |
 | Upload `Reparo.ps1` as a Ninja script/file | Controlled copy inside Ninja | Exact execution path depends on how the Ninja script/file is staged |
 | `Reparo.ps1 -New` from GitHub | Easy updates and version pinning | Requires endpoint access to GitHub raw content |
+
+When pasting PowerShell parameters into Ninja, use the actual switch token with the leading dash. For example, type `-Update`, not `Update`.
 
 ### Option 1: Paste Reparo into Ninja
 
@@ -216,9 +219,11 @@ C:\ProgramData\Reparo\Logs
 
 Each run creates a timestamped log file that includes the computer name, process ID, selected mode, commands invoked, command output, skipped sections, errors, and the final run summary.
 
+Use `-Tail` or its alias `-Log` to print the tail of the current run's log file at the end of execution.
+
 At the end of the run, Reparo prints a `REPARO summary` with:
 
-- updated software, target version, and update method where package-level details are available
+- updated software, current version, target version, and update method where package-level details are available
 - skipped sections with reasons
 - failed sections with reasons or exit codes
 - notes for completed sections that do not expose a clean package-level update list

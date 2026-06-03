@@ -15,6 +15,8 @@ param(
     [switch]$Preview,
     [switch]$Update = $true,
     [switch]$Force,
+    [Alias('Log')]
+    [switch]$Tail,
     [string[]]$Include,
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs"
 )
@@ -52,6 +54,10 @@ elseif ($Include -and $Include.Count -gt 0) {
 }
 elseif ($Update) {
     $arguments += '-Update'
+}
+
+if ($Tail) {
+    $arguments += '-Tail'
 }
 
 & powershell.exe @arguments
