@@ -183,6 +183,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Kill` | Stops running Reparo PowerShell processes, using a graceful window close when available and force-stopping anything still running. |
 | `-Preview` | Logs what would run without executing package manager commands. |
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, and `WindowsUpdate`. |
+| `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
 | `-Force` | Runs the full local-dev-tool pass and enables Windows Update and WSL apt handling. Use carefully. |
 
@@ -191,6 +192,8 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 Available section names:
 
 - `Winget`
+- `Winget(source list)`
+- `Winget(list upgrades)`
 - `Winget(msstore)`
 - `Scoop`
 - `Choco`
@@ -222,6 +225,7 @@ While Reparo is running, the log is named with a `_RUNNING.log` suffix. After co
 
 Use `-Tail` or its alias `-Log` to print the tail of the current run's log file at the end of execution.
 Use `-Debug` when you want extra trace lines in the log for mode selection, command launch details, and bootstrap behavior. In Ninja, the wrapper now forwards `-Debug` through to Reparo.
+Use `-WingetTimeoutSeconds`, `-WingetDiscoveryTimeoutSeconds`, and `-WindowsUpdateTimeoutSeconds` to override the live command timeouts when you need more runway for a big batch or a slow source.
 
 At the end of the run, Reparo prints a `REPARO summary` with:
 
@@ -257,6 +261,8 @@ Reparo probes known package managers before running them and skips sections that
 For the live `Winget` upgrade path, Reparo now uses `--disable-interactivity`, `--silent`, and `--force` so Ninja runs are treated like non-interactive automation instead of desktop sessions waiting for UI.
 
 For `WindowsUpdate`, Reparo will try to install `PSWindowsUpdate` from PSGallery first. If that bootstrap fails because the session cannot reach PSGallery or cannot install modules, the section is skipped with a logged reason instead of failing silently.
+
+For `Winget`, Reparo now tries a repair/registration path when `winget` is missing. It logs `winget source list` and `winget list --upgrade-available` when you run `-Winget` so you can see what the client can actually discover before the upgrade pass starts.
 
 ## Safety notes
 

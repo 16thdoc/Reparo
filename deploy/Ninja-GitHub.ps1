@@ -14,9 +14,13 @@ param(
     [string]$InstallRoot = "$env:ProgramData\Reparo",
     [switch]$Preview,
     [switch]$Update = $true,
+    [switch]$Winget,
     [switch]$Force,
     [Alias('Log')]
     [switch]$Tail,
+    [int]$WingetTimeoutSeconds,
+    [int]$WingetDiscoveryTimeoutSeconds,
+    [int]$WindowsUpdateTimeoutSeconds,
     [string[]]$Include,
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs"
 )
@@ -37,7 +41,8 @@ $includeText = ''
 if ($Include -and $Include.Count -gt 0) {
     $includeText = $Include -join ','
 }
-Write-Host ("Mode flags: Preview={0} Update={1} Force={2} Tail={3} Debug={4} Include={5}" -f $Preview, $Update, $Force, $Tail, $PSBoundParameters.ContainsKey('Debug'), $includeText)
+Write-Host ("Mode flags: Preview={0} Update={1} Winget={2} Force={3} Tail={4} Debug={5} Include={6}" -f $Preview, $Update, $Winget, $Force, $Tail, $PSBoundParameters.ContainsKey('Debug'), $includeText)
+Write-Host ("Timeouts: Winget={0} WingetDiscovery={1} WindowsUpdate={2}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds)
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 $scriptPath = Join-Path $InstallRoot 'Reparo.ps1'
@@ -61,6 +66,9 @@ if ($LASTEXITCODE -ne 0) {
 $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-LogRoot', $LogRoot)
 
 if ($Preview) { $arguments += '-Preview' }
+if ($Winget) {
+    $arguments += '-Winget'
+}
 if ($Force) {
     $arguments += '-Force'
 }
@@ -74,6 +82,18 @@ elseif ($Update) {
 
 if ($PSBoundParameters.ContainsKey('Debug')) {
     $arguments += '-Debug'
+}
+if ($PSBoundParameters.ContainsKey('WingetTimeoutSeconds')) {
+    $arguments += '-WingetTimeoutSeconds'
+    $arguments += $WingetTimeoutSeconds
+}
+if ($PSBoundParameters.ContainsKey('WingetDiscoveryTimeoutSeconds')) {
+    $arguments += '-WingetDiscoveryTimeoutSeconds'
+    $arguments += $WingetDiscoveryTimeoutSeconds
+}
+if ($PSBoundParameters.ContainsKey('WindowsUpdateTimeoutSeconds')) {
+    $arguments += '-WindowsUpdateTimeoutSeconds'
+    $arguments += $WindowsUpdateTimeoutSeconds
 }
 
 if ($Tail) {

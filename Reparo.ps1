@@ -23,8 +23,12 @@ param(
     [Alias('WSL')]
     [switch]$WslApt,
     [switch]$Update,
+    [switch]$Winget,
     [switch]$Force,
     [switch]$Kill,
+    [int]$WingetTimeoutSeconds = 1800,
+    [int]$WingetDiscoveryTimeoutSeconds = 300,
+    [int]$WindowsUpdateTimeoutSeconds = 1800,
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs",
     [string]$InstallRoot = "$env:ProgramData\Reparo",
     [string]$SourceUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1',
@@ -37,7 +41,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.5'
+$script:ReparoVersion = '0.2.6'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -54,12 +58,15 @@ Usage:
   reparo -Update
   reparo -Install
   reparo -Preview -Update
+  reparo -Winget
   reparo -Include Winget Choco
 
 Modes:
   Default              Run Windows Update only.
   -Update              Run the managed-client pass: Winget, Winget(msstore), Choco, WindowsUpdate.
                         Updated package rows show current version -> target version when available.
+  -Winget              Run a winget-focused pass. Reparo attempts to repair/register App Installer,
+                       logs discovery output, then runs the Winget sections.
   -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
   -Force               Run all sections, including developer toolchains and WSL apt handling.
   -Kill                Stop running Reparo PowerShell processes.
@@ -69,6 +76,11 @@ Modes:
   -Debug               Emit extra trace logging into the Reparo log file.
   -Version             Show the Reparo version.
   -Help                Show this help.
+
+Timeouts:
+  -WingetTimeoutSeconds          Override the live Winget upgrade timeout.
+  -WingetDiscoveryTimeoutSeconds Override the discovery timeout used by -Winget.
+  -WindowsUpdateTimeoutSeconds   Override the live Windows Update timeout.
 
 Windows Update:
   Reparo will try to install PSWindowsUpdate from PSGallery if the module is missing
@@ -109,6 +121,14 @@ $updateSections = @(
     'Choco'
 )
 
+if ($Winget) {
+    $Include = @(
+        'Winget'
+        'Winget(msstore)'
+        'Winget(source list)'
+        'Winget(list upgrades)'
+    )
+}
 if ($Force) {
     $Preview = $false
     $WindowsUpdate = $true
@@ -569,6 +589,68 @@ function Ensure-ReparoPSWindowsUpdate {
         Write-ReparoDebug ("PSWindowsUpdate bootstrap failed: {0}" -f $_.Exception.Message)
         return $false
     }
+}
+
+function Ensure-ReparoWinget {
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-ReparoDebug 'winget already available.'
+        return $true
+    }
+
+    Write-ReparoLog '[ACTION] winget not found; attempting repair/registration.'
+    Write-ReparoDebug 'Starting winget repair path.'
+
+    try {
+        if (-not (Get-Command Repair-WinGetPackageManager -ErrorAction SilentlyContinue)) {
+            if (Get-Command Install-Module -ErrorAction SilentlyContinue) {
+                Write-ReparoLog '[INFO] Microsoft.WinGet.Client not found; attempting install from PSGallery.'
+                if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
+                    Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
+                }
+
+                if (Get-Command Install-PackageProvider -ErrorAction SilentlyContinue) {
+                    Install-PackageProvider -Name NuGet -Force -Scope AllUsers -ErrorAction SilentlyContinue | Out-Null
+                }
+
+                Install-Module -Name 'Microsoft.WinGet.Client' -Force -AllowClobber -Scope AllUsers -Repository 'PSGallery' -ErrorAction Stop | Out-Null
+                Import-Module 'Microsoft.WinGet.Client' -Force -ErrorAction Stop
+            }
+        }
+
+        if (Get-Command Repair-WinGetPackageManager -ErrorAction SilentlyContinue) {
+            Write-ReparoLog '[ACTION] Repair-WinGetPackageManager -Force -Latest'
+            Repair-WinGetPackageManager -Force -Latest -ErrorAction Stop | Out-Null
+        }
+        elseif (Get-Command Add-AppxPackage -ErrorAction SilentlyContinue) {
+            Write-ReparoLog '[ACTION] Re-registering Microsoft.DesktopAppInstaller.'
+            Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction Stop | Out-Null
+        }
+        else {
+            throw 'Neither Repair-WinGetPackageManager nor Add-AppxPackage is available.'
+        }
+
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-ReparoLog '[DONE] winget repair/registration completed successfully.'
+            Write-ReparoDebug 'winget is now available after repair/registration.'
+            return $true
+        }
+
+        throw 'winget is still unavailable after repair/registration.'
+    }
+    catch {
+        Write-ReparoLog ("[WARN] winget repair/registration failed: {0}" -f $_.Exception.Message)
+        Write-ReparoDebug ("winget repair path failed: {0}" -f $_.Exception.Message)
+        return $false
+    }
+}
+
+function Invoke-ReparoWingetDiscovery {
+    if (-not (Test-ReparoSectionSelected 'Winget')) {
+        return
+    }
+
+    Invoke-ReparoCommandStep -Section 'Winget(source list)' -PresenceCmd 'winget' -Command 'winget source list' -TimeoutSeconds $WingetDiscoveryTimeoutSeconds
+    Invoke-ReparoCommandStep -Section 'Winget(list upgrades)' -PresenceCmd 'winget' -Command 'winget list --upgrade-available' -TimeoutSeconds $WingetDiscoveryTimeoutSeconds
 }
 
 function Resolve-ReparoShell {
@@ -1116,11 +1198,34 @@ if ($Include -and $Include.Count -gt 0) {
     $includeText = $Include -join ','
 }
 Write-ReparoLog ("[FLAGS] Update={0} Force={1} Preview={2} WindowsUpdate={3} WslApt={4} Tail={5} Debug={6} Include={7}" -f $Update, $Force, $Preview, $WindowsUpdate, $WslApt, $Tail, $script:ReparoDebug, $includeText)
+Write-ReparoDebug ("Timeouts: Winget={0}s WingetDiscovery={1}s WindowsUpdate={2}s" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds)
 Write-ReparoDebug ("Process identity: {0}" -f [Security.Principal.WindowsIdentity]::GetCurrent().Name)
 Write-ReparoDebug ("PowerShell version: {0}" -f $PSVersionTable.PSVersion)
 
-Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command 'winget upgrade --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force' -TimeoutSeconds 90
-Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command 'winget upgrade --source msstore --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force' -TimeoutSeconds 90
+$runWingetSections = (Test-ReparoSectionSelected 'Winget') -or (Test-ReparoSectionSelected 'Winget(msstore)') -or $Winget
+if ($runWingetSections) {
+    $hasWinget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
+    Write-ReparoLog ("[CHECK] winget present: {0}" -f $hasWinget)
+
+    if (-not $hasWinget) {
+        $hasWinget = Ensure-ReparoWinget
+    }
+
+    if ($hasWinget) {
+        if ($Winget) {
+            Invoke-ReparoWingetDiscovery
+        }
+
+        Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command 'winget upgrade --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force' -TimeoutSeconds $WingetTimeoutSeconds
+        Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command 'winget upgrade --source msstore --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force' -TimeoutSeconds $WingetTimeoutSeconds
+    }
+    else {
+        Write-Skip 'winget not found or could not be repaired; skipping Winget sections'
+        Write-ReparoLog '[SKIP] winget not found or could not be repaired; skipping Winget sections'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget' -Version '-' -Method 'Winget' -Reason 'winget not found or could not be repaired'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget(msstore)' -Version '-' -Method 'Winget(msstore)' -Reason 'winget not found or could not be repaired'
+    }
+}
 Invoke-ReparoCommandStep -Section 'Scoop' -PresenceCmd 'scoop' -Command 'scoop update; scoop update *'
 Invoke-ReparoCommandStep -Section 'Choco' -PresenceCmd 'choco' -Command 'choco upgrade all -y --no-progress'
 
@@ -1256,7 +1361,7 @@ if (Test-ReparoSectionSelected 'WindowsUpdate') {
         }
 
         if ($hasWindowsUpdate -or (Ensure-ReparoPSWindowsUpdate)) {
-        Invoke-ReparoCommandStep -Section 'WindowsUpdate' -PresenceCmd '' -Command 'Import-Module PSWindowsUpdate; Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot' -TimeoutSeconds 120
+            Invoke-ReparoCommandStep -Section 'WindowsUpdate' -PresenceCmd '' -Command 'Import-Module PSWindowsUpdate; Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot' -TimeoutSeconds $WindowsUpdateTimeoutSeconds
         }
         else {
             Write-Skip 'PSWindowsUpdate module not found and bootstrap failed; skipping Windows Update.'
