@@ -186,8 +186,9 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |
 | `-WingetDiscover` | Repairs/refreshes winget if needed and runs only winget discovery commands. |
 | `-Tail` | Follows the active Reparo log when used by itself. When combined with a run mode, it prints the tail of that run's log at the end. |
+| `-TailLines <count>` | Controls how many existing log lines `-Tail` prints before following. Default: `400`. |
 | `-Status` | Shows whether Reparo is currently running and points at the active log file. |
-| `-IgnoreTimeouts` | Runs command steps without timeout limits. `-Force` also enables this automatically. |
+| `-IgnoreTimeouts` | Disables timeout enforcement even when timeout parameters are supplied. |
 | `-AllowReboot` / `-Reboot` | Allows the Windows Update section to pass `-AutoReboot`. By default Reparo passes `-IgnoreReboot`. |
 | `-InstallNuGetProvider` | Bootstraps the NuGet provider before PSGallery installs when `true` (default). Set it to `false` only if you want to suppress that bootstrap attempt. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
@@ -230,15 +231,16 @@ C:\ProgramData\Reparo\Logs
 Each run creates a timestamped log file that includes the computer name, process ID, selected mode, commands invoked, command output, skipped sections, errors, and the final run summary.
 While Reparo is running, the log is named with a `_RUNNING.log` suffix. After completion, it is renamed to `_COMPLETE.log`, `_FAILED.log`, or `_PREVIEW.log` so the final artifact is obvious.
 The log also prints an exhaustive parameter block at startup so you can see every switch, timeout, path, and include list value that Reparo resolved for that run.
-Long-running child commands emit `[CMD-WAIT]` heartbeat lines while they are still alive. Captured stdout/stderr is logged with `[CMD-OUT]` and `[CMD-ERR]` prefixes so Ninja logs are easier to search.
+Long-running child commands emit `[CMD-WAIT]` heartbeat lines while they are still alive. Child command output is copied into the main log during execution with `[CMD-OUT]` prefixes, so `-Tail` can show winget progress while winget is still running.
 
 Use `-Tail` or its alias `-Log` to follow the active log when used by itself. When combined with a run mode, it prints the tail of the current run's log file at the end of execution.
+Use `-TailLines` to increase or reduce the initial tail window.
 Use `-Status` to see whether Reparo is currently running and which log file it is writing. The status probe excludes its own helper process so it does not report itself as the active run, and it will show stale `_RUNNING.log` files when a run ended before finalization.
 Use `-Debug` when you want extra trace lines in the log for mode selection, command launch details, and bootstrap behavior. In Ninja, the wrapper now forwards `-Debug` through to Reparo.
 Use `-WingetDiscover` when you want to refresh the winget discovery list without running live upgrades.
-Use `-IgnoreTimeouts` when you explicitly want command steps to wait indefinitely. `-Force` turns this on automatically.
+Use `-IgnoreTimeouts` when you explicitly want to suppress timeout enforcement even if timeout values are supplied.
 Use `-AllowReboot` or `-Reboot` only when you want Windows Update to be allowed to auto-reboot. Default runs still suppress reboot with `-IgnoreReboot`.
-Use `-WingetTimeoutSeconds`, `-WingetDiscoveryTimeoutSeconds`, and `-WindowsUpdateTimeoutSeconds` to override the live command timeouts when you need more runway for a big batch or a slow source.
+Timeouts are disabled by default. Use `-WingetTimeoutSeconds`, `-WingetDiscoveryTimeoutSeconds`, and `-WindowsUpdateTimeoutSeconds` only when you explicitly want Reparo to stop a command after a positive number of seconds.
 Use `-InstallNuGetProvider:$false` if a managed environment wants to block NuGet provider bootstrapping, or leave it at the default `true` so Reparo can install it before PSGallery module installs.
 
 At the end of the run, Reparo prints a `REPARO summary` with:

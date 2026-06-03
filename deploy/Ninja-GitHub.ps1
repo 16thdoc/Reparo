@@ -21,8 +21,13 @@ param(
     [switch]$IgnoreTimeouts,
     [Alias('Log')]
     [switch]$Tail,
+    [ValidateRange(1, 10000)]
+    [int]$TailLines,
+    [ValidateRange(0, [int]::MaxValue)]
     [int]$WingetTimeoutSeconds,
+    [ValidateRange(0, [int]::MaxValue)]
     [int]$WingetDiscoveryTimeoutSeconds,
+    [ValidateRange(0, [int]::MaxValue)]
     [int]$WindowsUpdateTimeoutSeconds,
     [bool]$InstallNuGetProvider = $true,
     [Alias('Reboot')]
@@ -73,6 +78,7 @@ function Write-NinjaParameterBlock {
         Status                       = $Status
         IgnoreTimeouts               = $IgnoreTimeouts
         Tail                         = $Tail
+        TailLines                    = $TailLines
         Debug                        = [bool]($PSBoundParameters.ContainsKey('Debug'))
         WingetTimeoutSeconds         = $WingetTimeoutSeconds
         WingetDiscoveryTimeoutSeconds = $WingetDiscoveryTimeoutSeconds
@@ -199,6 +205,10 @@ if ($IgnoreTimeouts) {
 
 if ($Tail) {
     $arguments += '-Tail'
+}
+if ($PSBoundParameters.ContainsKey('TailLines')) {
+    $arguments += '-TailLines'
+    $arguments += $TailLines
 }
 
 Write-Host ("Launching Reparo: powershell.exe {0}" -f ($arguments -join ' '))

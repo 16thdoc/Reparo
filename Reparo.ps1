@@ -28,9 +28,12 @@ param(
     [switch]$Force,
     [switch]$Kill,
     [switch]$IgnoreTimeouts,
-    [int]$WingetTimeoutSeconds = 1800,
-    [int]$WingetDiscoveryTimeoutSeconds = 300,
-    [int]$WindowsUpdateTimeoutSeconds = 1800,
+    [ValidateRange(0, [int]::MaxValue)]
+    [int]$WingetTimeoutSeconds = 0,
+    [ValidateRange(0, [int]::MaxValue)]
+    [int]$WingetDiscoveryTimeoutSeconds = 0,
+    [ValidateRange(0, [int]::MaxValue)]
+    [int]$WindowsUpdateTimeoutSeconds = 0,
     [bool]$InstallNuGetProvider = $true,
     [Alias('Reboot')]
     [switch]$AllowReboot,
@@ -41,13 +44,15 @@ param(
     [switch]$Status,
     [Alias('Log')]
     [switch]$Tail,
+    [ValidateRange(1, 10000)]
+    [int]$TailLines = 400,
     [string[]]$Include,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RemainingInclude
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.18'
+$script:ReparoVersion = '0.2.19'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -102,6 +107,7 @@ function Write-ReparoParameterBlock {
         NoBackup                     = $NoBackup
         Status                       = $Status
         Tail                         = $Tail
+        TailLines                    = $TailLines
         Include                      = $Include
         RemainingInclude             = $RemainingInclude
         Debug                        = [bool]($PSBoundParameters.ContainsKey('Debug'))
@@ -183,14 +189,15 @@ Modes:
                        discovery still runs so you can refresh the visible upgrade list.
   -WingetDiscover      Repair/register winget if needed, then run only winget discovery commands.
                        This refreshes the visible upgrade list without starting live installs.
-  -IgnoreTimeouts      Run command steps without timeout limits. Use only when you want the job to wait indefinitely.
+  -IgnoreTimeouts      Disable command-step timeout enforcement even when timeout parameters are supplied.
   -AllowReboot,-Reboot Allow Windows Update to auto-reboot if PSWindowsUpdate requires it.
                        Default behavior still uses -IgnoreReboot.
   -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
   -Force               Run all sections, including developer toolchains and WSL apt handling.
   -Kill                Stop running Reparo PowerShell processes.
   -Preview             Show what would run without executing update commands.
-  -Tail, -Log          Print the current run's log file at the end of execution.
+  -Tail, -Log          Follow the active log when used alone, or print this run's log tail at the end.
+  -TailLines           Number of log lines to show when tailing. Default: 400.
   -Status              Show whether Reparo is currently running and point at the active log.
   -Include <sections>  Run only selected sections, for example: -Include Winget Choco.
   -Debug               Emit extra trace logging into the Reparo log file.
@@ -198,9 +205,11 @@ Modes:
   -Help                Show this help.
 
 Timeouts:
-  -WingetTimeoutSeconds          Override the live Winget upgrade timeout.
-  -WingetDiscoveryTimeoutSeconds Override the discovery timeout used by -Winget.
-  -WindowsUpdateTimeoutSeconds   Override the live Windows Update timeout.
+  Timeouts are disabled by default. Pass a positive number of seconds only when
+  you want Reparo to stop a command that runs too long.
+  -WingetTimeoutSeconds          Optional live Winget upgrade timeout.
+  -WingetDiscoveryTimeoutSeconds Optional discovery timeout used by -Winget.
+  -WindowsUpdateTimeoutSeconds   Optional Windows Update timeout.
   -InstallNuGetProvider         When true (default), bootstrap the NuGet provider before PSGallery installs.
   -AllowReboot                  Let the Windows Update section pass -AutoReboot instead of -IgnoreReboot.
 
@@ -292,6 +301,60 @@ function Write-Skip($Message) { Write-Host "SKIP  $Message" -ForegroundColor Dar
 function Write-Done($Message) { Write-Host "DONE  $Message" -ForegroundColor Green }
 function Write-Fail($Message) { Write-Host "FAIL  $Message" -ForegroundColor Red }
 
+function ConvertTo-ReparoPowerShellLiteral {
+    param([AllowNull()][string]$Value)
+
+    if ($null -eq $Value) {
+        return '$null'
+    }
+
+    return ("'{0}'" -f ($Value -replace "'", "''"))
+}
+
+function ConvertTo-ReparoSafeFileName {
+    param([string]$Value)
+
+    $safe = ([string]$Value) -replace '[^A-Za-z0-9_.-]+', '_'
+    $safe = $safe.Trim('_')
+    if ([string]::IsNullOrWhiteSpace($safe)) {
+        return 'command'
+    }
+
+    return $safe
+}
+
+function Get-ReparoChildProcessIds {
+    param([Parameter(Mandatory)][int]$ParentProcessId)
+
+    $children = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object { [int]$_.ParentProcessId -eq $ParentProcessId }
+    )
+
+    foreach ($child in $children) {
+        Get-ReparoChildProcessIds -ParentProcessId ([int]$child.ProcessId)
+        [int]$child.ProcessId
+    }
+}
+
+function Stop-ReparoProcessTree {
+    param([Parameter(Mandatory)][int]$ProcessId)
+
+    $processIds = @(
+        Get-ReparoChildProcessIds -ParentProcessId $ProcessId
+        $ProcessId
+    ) | Select-Object -Unique
+
+    foreach ($processId in $processIds) {
+        try {
+            Stop-Process -Id ([int]$processId) -Force -ErrorAction Stop
+        }
+        catch {
+            Write-ReparoDebug ("Process-tree stop warning for PID {0}: {1}" -f $processId, $_.Exception.Message)
+        }
+    }
+}
+
 function Invoke-ReparoKill {
     [CmdletBinding()]
     param()
@@ -314,7 +377,8 @@ function Invoke-ReparoKill {
             Where-Object {
                 -not $excludedPids.Contains([int]$_.ProcessId) -and
                 $_.CommandLine -and
-                $_.CommandLine -match '(?i)(^|[\\/\s''"])Reparo\.ps1([\\/\s''"]|$)' -and
+                $_.CommandLine -notmatch '(?i)(^|\s)-Command(\s|$)' -and
+                $_.CommandLine -match '(?i)(^|\s)-File\s+["'']?[^"'']*Reparo\.ps1(["''\s]|$)' -and
                 $_.CommandLine -notmatch '(?i)(^|\s)-Kill(\s|$)'
             }
     )
@@ -341,7 +405,7 @@ function Invoke-ReparoKill {
 
             $stillRunning = Get-Process -Id ([int]$process.ProcessId) -ErrorAction SilentlyContinue
             if ($stillRunning) {
-                Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction Stop
+                Stop-ReparoProcessTree -ProcessId ([int]$process.ProcessId)
                 $status = if ($closedGracefully) { 'Forced after graceful timeout' } else { 'Forced' }
             }
             elseif ($closedGracefully) {
@@ -763,11 +827,20 @@ function Invoke-ReparoTailLog {
     $printedLines = 0
 
     try {
-        $initial = @(Get-Content -LiteralPath $LogPath -Tail $TailLines)
+        $allInitialLines = @(Get-Content -LiteralPath $LogPath)
+        if ($allInitialLines.Count -gt $TailLines) {
+            $initial = @($allInitialLines[($allInitialLines.Count - $TailLines)..($allInitialLines.Count - 1)])
+        }
+        else {
+            $initial = $allInitialLines
+        }
+
         $printedLines = $initial.Count
         foreach ($line in $initial) {
             Write-Host $line
         }
+
+        $printedLines = $allInitialLines.Count
     }
     catch {
         Write-Warning "Unable to read log file '$LogPath': $($_.Exception.Message)"
@@ -842,7 +915,7 @@ if ($Tail -and -not ($Update -or $Winget -or $Force -or $Preview -or $WindowsUpd
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
-        Invoke-ReparoTailLog -LogPath $tailTarget -Follow
+        Invoke-ReparoTailLog -LogPath $tailTarget -TailLines $TailLines -Follow
     }
     else {
         Write-Warning 'No active or completed Reparo log was found to tail.'
@@ -1447,17 +1520,48 @@ function Invoke-ReparoTimedCommand {
         [Parameter(Mandatory)][string]$ShellPath,
         [Parameter(Mandatory)][string]$Command,
         [Parameter(Mandatory)][string]$Section,
-        [int]$TimeoutSeconds = 1800,
+        [int]$TimeoutSeconds = 0,
         [switch]$IgnoreTimeouts
     )
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $escapedCommand = $Command.Replace('"', '""')
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"${escapedCommand}`""
     $heartbeatSeconds = 60
     $nextHeartbeat = [DateTime]::UtcNow.AddSeconds($heartbeatSeconds)
+    $timeoutEnabled = (-not $IgnoreTimeouts -and $TimeoutSeconds -gt 0)
+    $safeSection = ConvertTo-ReparoSafeFileName -Value $Section
+    $commandOutputPath = Join-Path $LogRoot ("{0}_{1}.out.log" -f $script:ReparoLogBaseName, $safeSection)
+    $commandScriptPath = Join-Path $LogRoot ("{0}_{1}.command.ps1" -f $script:ReparoLogBaseName, $safeSection)
 
-    if ($IgnoreTimeouts) {
+    Remove-Item -LiteralPath $commandOutputPath, $commandScriptPath -Force -ErrorAction SilentlyContinue
+
+    $commandScript = @(
+        '$ErrorActionPreference = ''Continue'''
+        ('$outputPath = {0}' -f (ConvertTo-ReparoPowerShellLiteral -Value $commandOutputPath))
+        'function Write-ReparoChildOutput {'
+        '    param([object]$Value)'
+        '    $line = [string]$Value'
+        '    Add-Content -LiteralPath $outputPath -Value $line -Encoding UTF8'
+        '}'
+        'try {'
+        '    & {'
+        $Command
+        '    } 2>&1 | ForEach-Object { Write-ReparoChildOutput -Value $_ }'
+        '    if ($null -ne $global:LASTEXITCODE) { exit $global:LASTEXITCODE }'
+        '    exit 0'
+        '}'
+        'catch {'
+        '    $message = ($_ | Out-String).Trim()'
+        '    if (-not [string]::IsNullOrWhiteSpace($message)) {'
+        '        Write-ReparoChildOutput -Value $message'
+        '    }'
+        '    exit 1'
+        '}'
+    )
+    Set-Content -LiteralPath $commandScriptPath -Value $commandScript -Encoding UTF8
+
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$commandScriptPath`""
+
+    if (-not $timeoutEnabled) {
         Write-ReparoLog ("[CMD-START] {0} | timeout=disabled" -f $Section)
     }
     else {
@@ -1469,8 +1573,8 @@ function Invoke-ReparoTimedCommand {
     $psi.FileName = $ShellPath
     $psi.Arguments = $arguments
     $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
+    $psi.RedirectStandardOutput = $false
+    $psi.RedirectStandardError = $false
     $psi.CreateNoWindow = $true
 
     $process = [System.Diagnostics.Process]::new()
@@ -1479,41 +1583,28 @@ function Invoke-ReparoTimedCommand {
     Write-ReparoDebug ("Started PID {0} for section {1}" -f $process.Id, $Section)
 
     $timedOut = $false
+    $output = New-Object System.Collections.Generic.List[string]
+    $loggedLineCount = 0
     while (-not $process.HasExited) {
         Start-Sleep -Milliseconds 500
+
+        Sync-ReparoCommandOutputLog -Path $commandOutputPath -LineCount ([ref]$loggedLineCount) -Output $output -Section $Section
 
         if ([DateTime]::UtcNow -ge $nextHeartbeat) {
             Write-ReparoLog ("[CMD-WAIT] {0} still running elapsed={1} pid={2}" -f $Section, $stopwatch.Elapsed, $process.Id)
             $nextHeartbeat = [DateTime]::UtcNow.AddSeconds($heartbeatSeconds)
         }
 
-        if (-not $IgnoreTimeouts -and $stopwatch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+        if ($timeoutEnabled -and $stopwatch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
             $timedOut = $true
-            try { $process.Kill() } catch { }
+            Stop-ReparoProcessTree -ProcessId $process.Id
             break
         }
     }
 
-    $stdout = $process.StandardOutput.ReadToEnd()
-    $stderr = $process.StandardError.ReadToEnd()
     $process.WaitForExit()
+    Sync-ReparoCommandOutputLog -Path $commandOutputPath -LineCount ([ref]$loggedLineCount) -Output $output -Section $Section
     $stopwatch.Stop()
-
-    $output = New-Object System.Collections.Generic.List[string]
-    foreach ($line in @($stdout -split "`r?`n")) {
-        if (-not [string]::IsNullOrWhiteSpace($line)) {
-            [void]$output.Add($line)
-            Write-Host $line
-            Write-ReparoLog ("[CMD-OUT] {0}: {1}" -f $Section, $line)
-        }
-    }
-    foreach ($line in @($stderr -split "`r?`n")) {
-        if (-not [string]::IsNullOrWhiteSpace($line)) {
-            [void]$output.Add($line)
-            Write-Host $line
-            Write-ReparoLog ("[CMD-ERR] {0}: {1}" -f $Section, $line)
-        }
-    }
 
     if ($timedOut) {
         Write-ReparoLog ("[CMD-TIMEOUT] {0} timed out after {1}s elapsed={2}" -f $Section, $TimeoutSeconds, $stopwatch.Elapsed)
@@ -1527,6 +1618,7 @@ function Invoke-ReparoTimedCommand {
 
     Write-ReparoLog ("[CMD-END] {0} exit={1} elapsed={2}" -f $Section, $process.ExitCode, $stopwatch.Elapsed)
     Write-ReparoDebug ("{0} completed with exit={1} elapsed={2} outputLines={3}" -f $Section, $process.ExitCode, $stopwatch.Elapsed, $output.Count)
+    Remove-Item -LiteralPath $commandOutputPath, $commandScriptPath -Force -ErrorAction SilentlyContinue
 
     [pscustomobject]@{
         TimedOut = $false
@@ -1536,12 +1628,53 @@ function Invoke-ReparoTimedCommand {
     }
 }
 
+function Sync-ReparoCommandOutputLog {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][ref]$LineCount,
+        [Parameter(Mandatory)]$Output,
+        [Parameter(Mandatory)][string]$Section
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    try {
+        $lines = @(Get-Content -LiteralPath $Path -ErrorAction Stop)
+    }
+    catch {
+        return
+    }
+
+    if ($lines.Count -le $LineCount.Value) {
+        return
+    }
+
+    if ($LineCount.Value -le 0) {
+        $newLines = $lines
+    }
+    else {
+        $newLines = $lines[$LineCount.Value..($lines.Count - 1)]
+    }
+
+    foreach ($line in $newLines) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+            [void]$Output.Add([string]$line)
+            Write-Host ([string]$line)
+            Write-ReparoLog ("[CMD-OUT] {0}: {1}" -f $Section, [string]$line)
+        }
+    }
+
+    $LineCount.Value = $lines.Count
+}
+
 function Invoke-ReparoCommandStep {
     param(
         [string]$Section,
         [string]$PresenceCmd,
         [string]$Command,
-        [int]$TimeoutSeconds = 1800
+        [int]$TimeoutSeconds = 0
     )
 
     if (-not (Test-ReparoSectionSelected $Section)) { return }
@@ -1880,7 +2013,7 @@ if ($Tail) {
 
     if (Test-Path -LiteralPath $script:ReparoLogPath) {
         try {
-            Get-Content -LiteralPath $script:ReparoLogPath -Tail 200
+            Get-Content -LiteralPath $script:ReparoLogPath -Tail $TailLines
         }
         catch {
             Write-Warning "Unable to tail log file '$script:ReparoLogPath': $($_.Exception.Message)"
