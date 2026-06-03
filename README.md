@@ -6,7 +6,7 @@ It updates common package managers and toolchains when they are already present 
 
 ## What it does
 
-By default, Reparo runs a conservative `winget` upgrade pass. Optional modes can also include Microsoft Store updates through `winget`, Chocolatey, Windows Update through `PSWindowsUpdate`, and developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, and WSL.
+By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, and developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, and WSL.
 
 Reparo does not install package managers from scratch. It only uses tools that are already present, then skips the sections that are not available.
 
@@ -30,6 +30,7 @@ Reparo tries to add that folder to machine `PATH`, falling back to user `PATH` i
 reparo -Update
 reparo -Install
 reparo -Help
+reparo -Kill
 ```
 
 Preview the managed-client update pass:
@@ -157,9 +158,10 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 
 | Mode | Behavior |
 | --- | --- |
-| Default | Runs `Winget` only. |
+| Default | Runs `WindowsUpdate` only. |
 | `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` from GitHub, with parse validation and backup handling. |
 | `-Help` | Prints Reparo usage and exits without running updates. |
+| `-Kill` | Stops running Reparo PowerShell processes, using a graceful window close when available and force-stopping anything still running. |
 | `-Preview` | Logs what would run without executing package manager commands. |
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, and `WindowsUpdate`. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |

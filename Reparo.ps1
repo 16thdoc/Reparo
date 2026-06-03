@@ -7,7 +7,7 @@ Reparo upgrades common package/tool ecosystems when they are present.
 It is intentionally standalone and does not depend on profile modules,
 cloud-synced helper paths, editor sync state, or local automation commands.
 
-Default mode runs Winget only. Use -Install or -New to install or update the
+Default mode runs Windows Update only. Use -Install or -New to install or update the
 ProgramData runtime copy from GitHub, -Update for a conservative managed-client
 maintenance pass, -Force for the full gauntlet, or -Include for specific
 sections.
@@ -23,6 +23,7 @@ param(
     [switch]$WslApt,
     [switch]$Update,
     [switch]$Force,
+    [switch]$Kill,
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs",
     [string]$InstallRoot = "$env:ProgramData\Reparo",
     [string]$SourceUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1',
@@ -44,16 +45,18 @@ Reparo
 
 Usage:
   reparo
+  reparo -Kill
   reparo -Update
   reparo -Install
   reparo -Preview -Update
   reparo -Include Winget Choco
 
 Modes:
-  Default              Run the Winget section only.
+  Default              Run Windows Update only.
   -Update              Run the managed-client pass: Winget, Winget(msstore), Choco, WindowsUpdate.
   -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
   -Force               Run all sections, including developer toolchains and WSL apt handling.
+  -Kill                Stop running Reparo PowerShell processes.
   -Preview             Show what would run without executing update commands.
   -Include <sections>  Run only selected sections, for example: -Include Winget Choco.
   -Help                Show this help.
@@ -82,10 +85,10 @@ if ($Help) {
 }
 
 $updateSections = @(
+    'WindowsUpdate'
     'Winget'
     'Winget(msstore)'
     'Choco'
-    'WindowsUpdate'
 )
 
 if ($Force) {
@@ -110,6 +113,78 @@ function Write-Step($Message) { Write-Host "STEP  $Message" -ForegroundColor Yel
 function Write-Skip($Message) { Write-Host "SKIP  $Message" -ForegroundColor DarkGray }
 function Write-Done($Message) { Write-Host "DONE  $Message" -ForegroundColor Green }
 function Write-Fail($Message) { Write-Host "FAIL  $Message" -ForegroundColor Red }
+
+function Invoke-ReparoKill {
+    [CmdletBinding()]
+    param()
+
+    $ownPid = $PID
+    $excludedPids = New-Object System.Collections.Generic.HashSet[int]
+    $null = $excludedPids.Add([int]$ownPid)
+
+    $ancestor = Get-CimInstance Win32_Process -Filter "ProcessId = $ownPid" -ErrorAction SilentlyContinue
+    while ($ancestor -and $ancestor.ParentProcessId) {
+        if (-not $excludedPids.Add([int]$ancestor.ParentProcessId)) {
+            break
+        }
+
+        $ancestor = Get-CimInstance Win32_Process -Filter "ProcessId = $($ancestor.ParentProcessId)" -ErrorAction SilentlyContinue
+    }
+
+    $processes = @(
+        Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" -ErrorAction SilentlyContinue |
+            Where-Object {
+                -not $excludedPids.Contains([int]$_.ProcessId) -and
+                $_.CommandLine -and
+                $_.CommandLine -match '(?i)(^|[\\/\s''"])Reparo\.ps1([\\/\s''"]|$)' -and
+                $_.CommandLine -notmatch '(?i)(^|\s)-Kill(\s|$)'
+            }
+    )
+
+    if (-not $processes -or $processes.Count -eq 0) {
+        Write-Info 'No running Reparo PowerShell processes found.'
+        return
+    }
+
+    $results = foreach ($process in $processes) {
+        $status = 'Stopped'
+        $errorText = $null
+
+        try {
+            $liveProcess = Get-Process -Id ([int]$process.ProcessId) -ErrorAction Stop
+            $closedGracefully = $false
+
+            if ($liveProcess.MainWindowHandle -ne 0) {
+                $closedGracefully = $liveProcess.CloseMainWindow()
+                if ($closedGracefully) {
+                    $liveProcess.WaitForExit(5000)
+                }
+            }
+
+            $stillRunning = Get-Process -Id ([int]$process.ProcessId) -ErrorAction SilentlyContinue
+            if ($stillRunning) {
+                Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction Stop
+                $status = if ($closedGracefully) { 'Forced after graceful timeout' } else { 'Forced' }
+            }
+            elseif ($closedGracefully) {
+                $status = 'Gracefully stopped'
+            }
+        }
+        catch {
+            $status = 'Failed'
+            $errorText = $_.Exception.Message
+        }
+
+        [pscustomobject]@{
+            PID     = [int]$process.ProcessId
+            Name    = $process.Name
+            Status  = $status
+            Error   = $errorText
+        }
+    }
+
+    $results | Format-Table -AutoSize
+}
 
 function Test-ReparoScriptParse {
     param([Parameter(Mandatory)][string]$Path)
@@ -311,6 +386,11 @@ if ($New) {
     return
 }
 
+if ($Kill) {
+    Invoke-ReparoKill
+    return
+}
+
 function Resolve-ReparoCommand {
     param([Parameter(Mandatory)][string]$Name)
 
@@ -370,7 +450,7 @@ function Test-ReparoSectionSelected($Section) {
         return ($Include -contains $Section)
     }
 
-    return ($Section -eq 'Winget')
+    return ($Section -eq 'WindowsUpdate')
 }
 
 function Resolve-ReparoShell {
@@ -809,7 +889,7 @@ elseif ($Include) {
     $mode = "INCLUDE: {0}" -f ($Include -join ',')
 }
 else {
-    $mode = 'WINGET'
+    $mode = 'WINDOWSUPDATE'
 }
 
 if ($Preview) { $mode = "$mode + PREVIEW" }
@@ -939,7 +1019,7 @@ if ($WslApt -and (Test-ReparoSectionSelected 'WslApt')) {
     }
 }
 
-if ($WindowsUpdate -and (Test-ReparoSectionSelected 'WindowsUpdate')) {
+if (Test-ReparoSectionSelected 'WindowsUpdate') {
     if (-not (Test-Admin)) {
         Write-Skip 'WindowsUpdate requested but shell is not elevated; skipping.'
         Write-ReparoLog '[SKIP] WindowsUpdate requested but shell is not elevated'
