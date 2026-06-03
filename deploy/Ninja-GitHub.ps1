@@ -16,6 +16,7 @@ param(
     [switch]$Update = $true,
     [switch]$Winget,
     [switch]$Force,
+    [switch]$Status,
     [Alias('Log')]
     [switch]$Tail,
     [int]$WingetTimeoutSeconds,
@@ -41,7 +42,7 @@ $includeText = ''
 if ($Include -and $Include.Count -gt 0) {
     $includeText = $Include -join ','
 }
-Write-Host ("Mode flags: Preview={0} Update={1} Winget={2} Force={3} Tail={4} Debug={5} Include={6}" -f $Preview, $Update, $Winget, $Force, $Tail, $PSBoundParameters.ContainsKey('Debug'), $includeText)
+Write-Host ("Mode flags: Preview={0} Update={1} Winget={2} Force={3} Status={4} Tail={5} Debug={6} Include={7}" -f $Preview, $Update, $Winget, $Force, $Status, $Tail, $PSBoundParameters.ContainsKey('Debug'), $includeText)
 Write-Host ("Timeouts: Winget={0} WingetDiscovery={1} WindowsUpdate={2}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds)
 Write-Host 'Preflight:'
 if ($Winget) {
@@ -92,6 +93,9 @@ if ($Winget) {
 }
 if ($Force) {
     $arguments += '-Force'
+}
+elseif ($Status) {
+    $arguments += '-Status'
 }
 elseif ($Include -and $Include.Count -gt 0) {
     $arguments += '-Include'

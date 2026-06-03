@@ -33,6 +33,7 @@ param(
     [string]$InstallRoot = "$env:ProgramData\Reparo",
     [string]$SourceUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1',
     [switch]$NoBackup,
+    [switch]$Status,
     [Alias('Log')]
     [switch]$Tail,
     [string[]]$Include,
@@ -41,7 +42,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.7'
+$script:ReparoVersion = '0.2.8'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -59,6 +60,8 @@ Usage:
   reparo -Install
   reparo -Preview -Update
   reparo -Winget
+  reparo -Tail
+  reparo -Status
   reparo -Include Winget Choco
 
 Modes:
@@ -73,6 +76,7 @@ Modes:
   -Kill                Stop running Reparo PowerShell processes.
   -Preview             Show what would run without executing update commands.
   -Tail, -Log          Print the current run's log file at the end of execution.
+  -Status              Show whether Reparo is currently running and point at the active log.
   -Include <sections>  Run only selected sections, for example: -Include Winget Choco.
   -Debug               Emit extra trace logging into the Reparo log file.
   -Version             Show the Reparo version.
@@ -473,6 +477,188 @@ function Finalize-ReparoLogFile {
     Write-ReparoLog ("[SUMMARY] Final log renamed to: {0}" -f $script:ReparoLogPath)
 }
 
+function Get-ReparoRunningProcessInfo {
+    $processes = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -in @('powershell.exe', 'pwsh.exe') -and
+                $_.CommandLine -and
+                $_.CommandLine -match '(?i)(^|[\\/\s''"])Reparo\.ps1([\\/\s''"]|$)' -and
+                $_.CommandLine -notmatch '(?i)(^|\s)-Kill(\s|$)'
+            }
+    )
+
+    foreach ($process in $processes) {
+        [pscustomobject]@{
+            PID         = [int]$process.ProcessId
+            Name        = $process.Name
+            CommandLine = [string]$process.CommandLine
+            LogPath     = (Get-ReparoLogPathForPid -Pid ([int]$process.ProcessId))
+            Running     = [bool](Get-Process -Id ([int]$process.ProcessId) -ErrorAction SilentlyContinue)
+        }
+    }
+}
+
+function Get-ReparoLogPathForPid {
+    param(
+        [Parameter(Mandatory)][int]$Pid
+    )
+
+    $patterns = @(
+        "reparo_*_${Pid}_*_RUNNING.log"
+        "reparo_*_${Pid}_*.log"
+    )
+
+    foreach ($pattern in $patterns) {
+        $match = Get-ChildItem -LiteralPath $LogRoot -File -Filter $pattern -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+        if ($match) { return $match.FullName }
+    }
+
+    return $null
+}
+
+function Get-ReparoLatestCompletedLog {
+    Get-ChildItem -LiteralPath $LogRoot -File -Filter 'reparo_*.log' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike '*_RUNNING.log' } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+}
+
+function Get-ReparoActiveLogPath {
+    $running = @(Get-ReparoRunningProcessInfo)
+    if ($running.Count -gt 0) {
+        $candidate = $running |
+            Sort-Object PID -Descending |
+            Select-Object -First 1
+        if ($candidate.LogPath) { return $candidate.LogPath }
+    }
+
+    $runningLog = Get-ChildItem -LiteralPath $LogRoot -File -Filter 'reparo_*_*_RUNNING.log' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($runningLog) { return $runningLog.FullName }
+
+    $latest = Get-ReparoLatestCompletedLog
+    if ($latest) { return $latest.FullName }
+
+    return $null
+}
+
+function Show-ReparoStatus {
+    $running = @(Get-ReparoRunningProcessInfo)
+    Write-Host 'REPARO status' -ForegroundColor Magenta
+
+    if ($running.Count -gt 0) {
+        Write-Host "Running: $($running.Count)"
+        $running |
+            Select-Object PID, Name, LogPath, CommandLine |
+            Format-Table -AutoSize
+    }
+    else {
+        Write-Host 'Running: none'
+    }
+
+    $activeLog = Get-ReparoActiveLogPath
+    if ($activeLog) {
+        Write-Host "Active log: $activeLog"
+    }
+    else {
+        Write-Host 'Active log: none'
+    }
+
+    $latest = Get-ReparoLatestCompletedLog
+    if ($latest) {
+        Write-Host "Latest completed log: $($latest.FullName)"
+    }
+    else {
+        Write-Host 'Latest completed log: none'
+    }
+}
+
+function Invoke-ReparoTailLog {
+    param(
+        [string]$LogPath,
+        [int]$TailLines = 200,
+        [switch]$Follow,
+        [int]$PollSeconds = 2,
+        [int]$QuietPollsAfterExit = 2
+    )
+
+    if (-not $LogPath) {
+        Write-Warning 'No Reparo log file was found to tail.'
+        return
+    }
+
+    $targetPid = $null
+    if ($LogPath -match '_(\d+)_\d{4}-\d{2}-\d{2}_\d{6}_(?:RUNNING|COMPLETE|FAILED|PREVIEW)\.log$') {
+        $targetPid = [int]$matches[1]
+    }
+
+    $printedLines = 0
+
+    try {
+        $initial = @(Get-Content -LiteralPath $LogPath -Tail $TailLines)
+        $printedLines = $initial.Count
+        foreach ($line in $initial) {
+            Write-Host $line
+        }
+    }
+    catch {
+        Write-Warning "Unable to read log file '$LogPath': $($_.Exception.Message)"
+        return
+    }
+
+    if (-not $Follow) {
+        return
+    }
+
+    $quietPolls = 0
+    while ($true) {
+        Start-Sleep -Seconds $PollSeconds
+
+        if ($targetPid) {
+            $currentLog = Get-ReparoLogPathForPid -Pid $targetPid
+            if ($currentLog) {
+                $LogPath = $currentLog
+            }
+        }
+
+        if (-not (Test-Path -LiteralPath $LogPath)) {
+            $quietPolls++
+        }
+        else {
+            try {
+                $allLines = @(Get-Content -LiteralPath $LogPath)
+                if ($allLines.Count -gt $printedLines) {
+                    foreach ($line in $allLines[$printedLines..($allLines.Count - 1)]) {
+                        Write-Host $line
+                    }
+                    $printedLines = $allLines.Count
+                    $quietPolls = 0
+                }
+                else {
+                    $quietPolls++
+                }
+            }
+            catch {
+                $quietPolls++
+            }
+        }
+
+        if ($targetPid) {
+            $stillRunning = [bool](Get-Process -Id $targetPid -ErrorAction SilentlyContinue)
+            if (-not $stillRunning -and $quietPolls -ge $QuietPollsAfterExit) {
+                break
+            }
+        }
+        elseif ($quietPolls -ge $QuietPollsAfterExit) {
+            break
+        }
+    }
+}
+
 if ($New) {
     Invoke-ReparoNew -TargetRoot $InstallRoot -Url $SourceUrl -SkipBackup:$NoBackup -WhatIfOnly:$Preview
     return
@@ -480,6 +666,23 @@ if ($New) {
 
 if ($Kill) {
     Invoke-ReparoKill
+    return
+}
+
+if ($Status) {
+    Show-ReparoStatus
+    return
+}
+
+if ($Tail -and -not ($Update -or $Winget -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill)) {
+    $tailTarget = Get-ReparoActiveLogPath
+    if ($tailTarget) {
+        Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
+        Invoke-ReparoTailLog -LogPath $tailTarget -Follow
+    }
+    else {
+        Write-Warning 'No active or completed Reparo log was found to tail.'
+    }
     return
 }
 
