@@ -188,6 +188,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Tail` | Follows the active Reparo log when used by itself. When combined with a run mode, it prints the tail of that run's log at the end. |
 | `-Status` | Shows whether Reparo is currently running and points at the active log file. |
 | `-IgnoreTimeouts` | Runs command steps without timeout limits. `-Force` also enables this automatically. |
+| `-AllowReboot` / `-Reboot` | Allows the Windows Update section to pass `-AutoReboot`. By default Reparo passes `-IgnoreReboot`. |
 | `-InstallNuGetProvider` | Bootstraps the NuGet provider before PSGallery installs when `true` (default). Set it to `false` only if you want to suppress that bootstrap attempt. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
 | `-Force` | Runs the full local-dev-tool pass and enables Windows Update and WSL apt handling. Use carefully. |
@@ -229,12 +230,14 @@ C:\ProgramData\Reparo\Logs
 Each run creates a timestamped log file that includes the computer name, process ID, selected mode, commands invoked, command output, skipped sections, errors, and the final run summary.
 While Reparo is running, the log is named with a `_RUNNING.log` suffix. After completion, it is renamed to `_COMPLETE.log`, `_FAILED.log`, or `_PREVIEW.log` so the final artifact is obvious.
 The log also prints an exhaustive parameter block at startup so you can see every switch, timeout, path, and include list value that Reparo resolved for that run.
+Long-running child commands emit `[CMD-WAIT]` heartbeat lines while they are still alive. Captured stdout/stderr is logged with `[CMD-OUT]` and `[CMD-ERR]` prefixes so Ninja logs are easier to search.
 
 Use `-Tail` or its alias `-Log` to follow the active log when used by itself. When combined with a run mode, it prints the tail of the current run's log file at the end of execution.
 Use `-Status` to see whether Reparo is currently running and which log file it is writing. The status probe excludes its own helper process so it does not report itself as the active run, and it will show stale `_RUNNING.log` files when a run ended before finalization.
 Use `-Debug` when you want extra trace lines in the log for mode selection, command launch details, and bootstrap behavior. In Ninja, the wrapper now forwards `-Debug` through to Reparo.
 Use `-WingetDiscover` when you want to refresh the winget discovery list without running live upgrades.
 Use `-IgnoreTimeouts` when you explicitly want command steps to wait indefinitely. `-Force` turns this on automatically.
+Use `-AllowReboot` or `-Reboot` only when you want Windows Update to be allowed to auto-reboot. Default runs still suppress reboot with `-IgnoreReboot`.
 Use `-WingetTimeoutSeconds`, `-WingetDiscoveryTimeoutSeconds`, and `-WindowsUpdateTimeoutSeconds` to override the live command timeouts when you need more runway for a big batch or a slow source.
 Use `-InstallNuGetProvider:$false` if a managed environment wants to block NuGet provider bootstrapping, or leave it at the default `true` so Reparo can install it before PSGallery module installs.
 

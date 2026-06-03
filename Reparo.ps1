@@ -32,6 +32,8 @@ param(
     [int]$WingetDiscoveryTimeoutSeconds = 300,
     [int]$WindowsUpdateTimeoutSeconds = 1800,
     [bool]$InstallNuGetProvider = $true,
+    [Alias('Reboot')]
+    [switch]$AllowReboot,
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs",
     [string]$InstallRoot = "$env:ProgramData\Reparo",
     [string]$SourceUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1',
@@ -45,7 +47,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.17'
+$script:ReparoVersion = '0.2.18'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -93,6 +95,7 @@ function Write-ReparoParameterBlock {
         WingetDiscoveryTimeoutSeconds = $WingetDiscoveryTimeoutSeconds
         WindowsUpdateTimeoutSeconds   = $WindowsUpdateTimeoutSeconds
         InstallNuGetProvider         = $InstallNuGetProvider
+        AllowReboot                  = $AllowReboot
         LogRoot                      = $LogRoot
         InstallRoot                  = $InstallRoot
         SourceUrl                    = $SourceUrl
@@ -181,6 +184,8 @@ Modes:
   -WingetDiscover      Repair/register winget if needed, then run only winget discovery commands.
                        This refreshes the visible upgrade list without starting live installs.
   -IgnoreTimeouts      Run command steps without timeout limits. Use only when you want the job to wait indefinitely.
+  -AllowReboot,-Reboot Allow Windows Update to auto-reboot if PSWindowsUpdate requires it.
+                       Default behavior still uses -IgnoreReboot.
   -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
   -Force               Run all sections, including developer toolchains and WSL apt handling.
   -Kill                Stop running Reparo PowerShell processes.
@@ -197,6 +202,7 @@ Timeouts:
   -WingetDiscoveryTimeoutSeconds Override the discovery timeout used by -Winget.
   -WindowsUpdateTimeoutSeconds   Override the live Windows Update timeout.
   -InstallNuGetProvider         When true (default), bootstrap the NuGet provider before PSGallery installs.
+  -AllowReboot                  Let the Windows Update section pass -AutoReboot instead of -IgnoreReboot.
 
 Windows Update:
   Reparo will try to install PSWindowsUpdate from PSGallery if the module is missing
@@ -612,7 +618,8 @@ function Get-ReparoRunningProcessInfo {
                 $_.Name -in @('powershell.exe', 'pwsh.exe') -and
                 -not $excludeSet.Contains([int]$_.ProcessId) -and
                 $_.CommandLine -and
-                $_.CommandLine -match '(?i)(^|[\\/\s''"])Reparo\.ps1([\\/\s''"]|$)' -and
+                $_.CommandLine -notmatch '(?i)(^|\s)-Command(\s|$)' -and
+                $_.CommandLine -match '(?i)(^|\s)-File\s+["'']?[^"'']*Reparo\.ps1(["''\s]|$)' -and
                 $_.CommandLine -notmatch '(?i)(^|\s)-Kill(\s|$)'
             }
     )
@@ -656,9 +663,14 @@ function Get-ReparoLatestCompletedLog {
 }
 
 function Get-ReparoActiveLogPath {
-    $running = @(Get-ReparoRunningProcessInfo)
+    param(
+        [int[]]$ExcludeProcessIds = @()
+    )
+
+    $running = @(Get-ReparoRunningProcessInfo -ExcludeProcessIds $ExcludeProcessIds)
     if ($running.Count -gt 0) {
         $candidate = $running |
+            Where-Object { $_.LogPath } |
             Sort-Object PID -Descending |
             Select-Object -First 1
         if ($candidate.LogPath) { return $candidate.LogPath }
@@ -684,7 +696,7 @@ function Show-ReparoStatus {
         Write-Host 'Running: none'
     }
 
-    $activeLog = Get-ReparoActiveLogPath
+    $activeLog = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($activeLog) {
         Write-Host "Active log: $activeLog"
     }
@@ -692,7 +704,24 @@ function Show-ReparoStatus {
         Write-Host 'Active log: none'
     }
 
-    $staleRunningLogs = @(Get-ChildItem -LiteralPath $LogRoot -File -Filter 'reparo_*_*_RUNNING.log' -ErrorAction SilentlyContinue)
+    $runningLogPaths = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($process in $running) {
+        if ($process.LogPath) {
+            $null = $runningLogPaths.Add($process.LogPath)
+        }
+    }
+
+    $staleRunningLogs = @(
+        Get-ChildItem -LiteralPath $LogRoot -File -Filter 'reparo_*_*_RUNNING.log' -ErrorAction SilentlyContinue |
+            Where-Object {
+                if ($runningLogPaths.Contains($_.FullName)) { return $false }
+                if ($_.Name -match '_(\d+)_\d{4}-\d{2}-\d{2}_\d{6}_RUNNING\.log$') {
+                    return -not [bool](Get-Process -Id ([int]$matches[1]) -ErrorAction SilentlyContinue)
+                }
+
+                return $true
+            }
+    )
     if ($staleRunningLogs.Count -gt 0) {
         Write-Host 'Stale running logs:'
         $staleRunningLogs |
@@ -810,7 +839,7 @@ if ($Status) {
 }
 
 if ($Tail -and -not ($Update -or $Winget -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill)) {
-    $tailTarget = Get-ReparoActiveLogPath
+    $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
         Invoke-ReparoTailLog -LogPath $tailTarget -Follow
@@ -988,7 +1017,7 @@ function Invoke-ReparoWingetDiscovery {
         [switch]$PreviewOnly
     )
 
-    if (-not (Test-ReparoSectionSelected 'Winget') -and -not $Winget) {
+    if (-not (Test-ReparoSectionSelected 'Winget') -and -not $Winget -and -not $WingetDiscover) {
         return
     }
 
@@ -1010,11 +1039,6 @@ function Invoke-ReparoWingetDiscovery {
         try {
             $shell = Resolve-ReparoShell
             $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command $step.Command -Section $step.Section -TimeoutSeconds $WingetDiscoveryTimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
-            foreach ($item in @($result.Output)) {
-                $line = [string]$item
-                Write-Host $line
-                Write-ReparoLog $line
-            }
 
             if ($result.TimedOut) {
                 Write-ReparoLog ("[WARN] {0} discovery timed out after {1}" -f $step.Section, $result.Elapsed)
@@ -1430,6 +1454,8 @@ function Invoke-ReparoTimedCommand {
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $escapedCommand = $Command.Replace('"', '""')
     $arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"${escapedCommand}`""
+    $heartbeatSeconds = 60
+    $nextHeartbeat = [DateTime]::UtcNow.AddSeconds($heartbeatSeconds)
 
     if ($IgnoreTimeouts) {
         Write-ReparoLog ("[CMD-START] {0} | timeout=disabled" -f $Section)
@@ -1452,21 +1478,20 @@ function Invoke-ReparoTimedCommand {
     $null = $process.Start()
     Write-ReparoDebug ("Started PID {0} for section {1}" -f $process.Id, $Section)
 
-    if (-not $IgnoreTimeouts) {
-        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            try { $process.Kill() } catch { }
-            $stopwatch.Stop()
-            Write-ReparoLog ("[CMD-TIMEOUT] {0} timed out after {1}s" -f $Section, $TimeoutSeconds)
-            return [pscustomobject]@{
-                TimedOut = $true
-                ExitCode = 124
-                Output   = @("[TIMEOUT] $Section exceeded ${TimeoutSeconds}s")
-                Elapsed  = $stopwatch.Elapsed
-            }
+    $timedOut = $false
+    while (-not $process.HasExited) {
+        Start-Sleep -Milliseconds 500
+
+        if ([DateTime]::UtcNow -ge $nextHeartbeat) {
+            Write-ReparoLog ("[CMD-WAIT] {0} still running elapsed={1} pid={2}" -f $Section, $stopwatch.Elapsed, $process.Id)
+            $nextHeartbeat = [DateTime]::UtcNow.AddSeconds($heartbeatSeconds)
         }
-    }
-    else {
-        $null = $process.WaitForExit()
+
+        if (-not $IgnoreTimeouts -and $stopwatch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+            $timedOut = $true
+            try { $process.Kill() } catch { }
+            break
+        }
     }
 
     $stdout = $process.StandardOutput.ReadToEnd()
@@ -1474,22 +1499,34 @@ function Invoke-ReparoTimedCommand {
     $process.WaitForExit()
     $stopwatch.Stop()
 
-    Write-ReparoDebug ("{0} captured stdout bytes={1} stderr bytes={2}" -f $Section, $stdout.Length, $stderr.Length)
-
     $output = New-Object System.Collections.Generic.List[string]
     foreach ($line in @($stdout -split "`r?`n")) {
         if (-not [string]::IsNullOrWhiteSpace($line)) {
             [void]$output.Add($line)
+            Write-Host $line
+            Write-ReparoLog ("[CMD-OUT] {0}: {1}" -f $Section, $line)
         }
     }
     foreach ($line in @($stderr -split "`r?`n")) {
         if (-not [string]::IsNullOrWhiteSpace($line)) {
             [void]$output.Add($line)
+            Write-Host $line
+            Write-ReparoLog ("[CMD-ERR] {0}: {1}" -f $Section, $line)
+        }
+    }
+
+    if ($timedOut) {
+        Write-ReparoLog ("[CMD-TIMEOUT] {0} timed out after {1}s elapsed={2}" -f $Section, $TimeoutSeconds, $stopwatch.Elapsed)
+        return [pscustomobject]@{
+            TimedOut = $true
+            ExitCode = 124
+            Output   = @($output.ToArray()) + @("[TIMEOUT] $Section exceeded ${TimeoutSeconds}s")
+            Elapsed  = $stopwatch.Elapsed
         }
     }
 
     Write-ReparoLog ("[CMD-END] {0} exit={1} elapsed={2}" -f $Section, $process.ExitCode, $stopwatch.Elapsed)
-    Write-ReparoDebug ("{0} completed with exit={1} elapsed={2}" -f $Section, $process.ExitCode, $stopwatch.Elapsed)
+    Write-ReparoDebug ("{0} completed with exit={1} elapsed={2} outputLines={3}" -f $Section, $process.ExitCode, $stopwatch.Elapsed, $output.Count)
 
     [pscustomobject]@{
         TimedOut = $false
@@ -1535,12 +1572,6 @@ function Invoke-ReparoCommandStep {
         $output = @($result.Output)
         $exitCode = $result.ExitCode
         Write-ReparoDebug ("{0} output lines captured: {1}" -f $Section, $output.Count)
-
-        foreach ($item in $output) {
-            $line = [string]$item
-            Write-Host $line
-            Write-ReparoLog $line
-        }
 
         $manualWingetReason = Get-ReparoWingetManualInterventionReason -Output $output
         if ($manualWingetReason) {
@@ -1719,16 +1750,44 @@ Invoke-ReparoCommandStep -Section 'Wsl' -PresenceCmd 'wsl' -Command 'wsl --updat
 if ($WslApt -and (Test-ReparoSectionSelected 'WslApt')) {
     if (Test-Cmd 'wsl') {
         try {
-            $rawDistros = & wsl -l -q 2>$null
+            $rawDistros = @(& wsl -l -q 2>&1)
+            $wslListExit = $LASTEXITCODE
+            foreach ($line in $rawDistros) {
+                $text = (([string]$line) -replace "`0", '').Trim()
+                if (-not [string]::IsNullOrWhiteSpace($text)) {
+                    Write-ReparoLog ("[CHECK] wsl -l -q: {0}" -f $text)
+                }
+            }
+
+            if ($wslListExit -ne 0) {
+                Write-Skip "WSL distro enumeration failed with exit code $wslListExit; skipping WSL apt"
+                Write-ReparoLog "[SKIP] WSL distro enumeration failed with exit code $wslListExit; skipping WSL apt"
+                Add-ReparoSummaryRecord -Bucket Skipped -Software 'WslApt' -Version '-' -Method 'wsl/apt' -Reason "wsl -l -q exit code $wslListExit"
+                $rawDistros = @()
+            }
+
             $distros = @(
                 foreach ($raw in $rawDistros) {
                     $name = ([string]$raw) -replace "`0", ''
                     $name = $name.Trim()
-                    if (-not [string]::IsNullOrWhiteSpace($name)) {
+                    $looksLikeWslHelp = (
+                        $name -match '(?i)^(Copyright|Usage:|Arguments:|Options:|Examples:)' -or
+                        $name -match '(?i)(Windows Subsystem for Linux|wsl\.exe|--install|--help|--list|--status)' -or
+                        $name -match '\s{2,}' -or
+                        $name -match '^\s*-\s*$'
+                    )
+
+                    if (-not [string]::IsNullOrWhiteSpace($name) -and -not $looksLikeWslHelp) {
                         $name
                     }
                 }
             ) | Select-Object -Unique
+
+            if ($distros.Count -eq 0) {
+                Write-Skip 'No usable WSL distros found; skipping WSL apt'
+                Write-ReparoLog '[SKIP] No usable WSL distros found; skipping WSL apt'
+                Add-ReparoSummaryRecord -Bucket Skipped -Software 'WslApt' -Version '-' -Method 'wsl/apt' -Reason 'no usable WSL distros found'
+            }
 
             foreach ($distro in $distros) {
                 $testOutput = @(& wsl -d "$distro" -- bash -lc 'command -v apt >/dev/null 2>&1' 2>&1)
@@ -1778,7 +1837,16 @@ if (Test-ReparoSectionSelected 'WindowsUpdate') {
         }
 
         if ($hasWindowsUpdate -or (Ensure-ReparoPSWindowsUpdate)) {
-            Invoke-ReparoCommandStep -Section 'WindowsUpdate' -PresenceCmd '' -Command 'Import-Module PSWindowsUpdate; Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot' -TimeoutSeconds $WindowsUpdateTimeoutSeconds
+            if ($AllowReboot) {
+                Write-ReparoLog '[INFO] WindowsUpdate reboot handling: AllowReboot requested; passing -AutoReboot.'
+                $windowsUpdateCommand = 'Import-Module PSWindowsUpdate; Get-WindowsUpdate -AcceptAll -Install -AutoReboot'
+            }
+            else {
+                Write-ReparoLog '[INFO] WindowsUpdate reboot handling: defaulting to -IgnoreReboot.'
+                $windowsUpdateCommand = 'Import-Module PSWindowsUpdate; Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot'
+            }
+
+            Invoke-ReparoCommandStep -Section 'WindowsUpdate' -PresenceCmd '' -Command $windowsUpdateCommand -TimeoutSeconds $WindowsUpdateTimeoutSeconds
         }
         else {
             Write-Skip 'PSWindowsUpdate module not found and bootstrap failed; skipping Windows Update.'

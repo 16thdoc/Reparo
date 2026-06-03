@@ -25,6 +25,8 @@ param(
     [int]$WingetDiscoveryTimeoutSeconds,
     [int]$WindowsUpdateTimeoutSeconds,
     [bool]$InstallNuGetProvider = $true,
+    [Alias('Reboot')]
+    [switch]$AllowReboot,
     [string[]]$Include,
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs"
 )
@@ -37,7 +39,6 @@ if ([Net.ServicePointManager]::SecurityProtocol -notmatch 'Tls12') {
 
 function Format-NinjaLogValue {
     param(
-        [Parameter(Mandatory)]
         [object]$Value
     )
 
@@ -77,6 +78,7 @@ function Write-NinjaParameterBlock {
         WingetDiscoveryTimeoutSeconds = $WingetDiscoveryTimeoutSeconds
         WindowsUpdateTimeoutSeconds   = $WindowsUpdateTimeoutSeconds
         InstallNuGetProvider         = $InstallNuGetProvider
+        AllowReboot                  = $AllowReboot
         Include                      = $Include
         LogRoot                      = $LogRoot
     }
@@ -96,6 +98,7 @@ Write-Host "ReparoUrl: $ReparoUrl"
 Write-NinjaParameterBlock
 Write-Host ("Timeouts: Winget={0} WingetDiscovery={1} WindowsUpdate={2}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds)
 Write-Host ("NuGet provider bootstrap: {0}" -f $InstallNuGetProvider)
+Write-Host ("Windows Update reboot opt-in: {0}" -f $AllowReboot)
 Write-Host 'Preflight:'
 if ($Winget) {
     if ($Preview) {
@@ -122,6 +125,9 @@ else {
 }
 if ($IgnoreTimeouts) {
     Write-Host '  - Timeouts are disabled for the run.'
+}
+if ($AllowReboot) {
+    Write-Host '  - Windows Update is allowed to auto-reboot if PSWindowsUpdate requires it.'
 }
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
@@ -183,6 +189,9 @@ if ($PSBoundParameters.ContainsKey('WindowsUpdateTimeoutSeconds')) {
 }
 if ($PSBoundParameters.ContainsKey('InstallNuGetProvider')) {
     $arguments += "-InstallNuGetProvider:$InstallNuGetProvider"
+}
+if ($AllowReboot) {
+    $arguments += '-AllowReboot'
 }
 if ($IgnoreTimeouts) {
     $arguments += '-IgnoreTimeouts'
