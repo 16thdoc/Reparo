@@ -44,7 +44,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.14'
+$script:ReparoVersion = '0.2.15'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -618,11 +618,6 @@ function Get-ReparoActiveLogPath {
         if ($candidate.LogPath) { return $candidate.LogPath }
     }
 
-    $runningLog = Get-ChildItem -LiteralPath $LogRoot -File -Filter 'reparo_*_*_RUNNING.log' -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
-    if ($runningLog) { return $runningLog.FullName }
-
     $latest = Get-ReparoLatestCompletedLog
     if ($latest) { return $latest.FullName }
 
@@ -649,6 +644,17 @@ function Show-ReparoStatus {
     }
     else {
         Write-Host 'Active log: none'
+    }
+
+    $staleRunningLogs = @(Get-ChildItem -LiteralPath $LogRoot -File -Filter 'reparo_*_*_RUNNING.log' -ErrorAction SilentlyContinue)
+    if ($staleRunningLogs.Count -gt 0) {
+        Write-Host 'Stale running logs:'
+        $staleRunningLogs |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 5 |
+            ForEach-Object {
+                Write-Host "  $($_.FullName)"
+            }
     }
 
     $latest = Get-ReparoLatestCompletedLog
