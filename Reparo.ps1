@@ -44,7 +44,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.16'
+$script:ReparoVersion = '0.2.17'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -851,7 +851,10 @@ function Ensure-ReparoPSWindowsUpdate {
     try {
         Write-ReparoLog '[INFO] PSWindowsUpdate not found; attempting install from PSGallery.'
         Write-ReparoDebug 'Starting PSWindowsUpdate bootstrap path.'
-
+        if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
+            Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
+        }
+        
         if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
             Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
         }
