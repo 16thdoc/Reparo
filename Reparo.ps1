@@ -37,7 +37,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.4'
+$script:ReparoVersion = '0.2.5'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -66,6 +66,7 @@ Modes:
   -Preview             Show what would run without executing update commands.
   -Tail, -Log          Print the current run's log file at the end of execution.
   -Include <sections>  Run only selected sections, for example: -Include Winget Choco.
+  -Debug               Emit extra trace logging into the Reparo log file.
   -Version             Show the Reparo version.
   -Help                Show this help.
 
@@ -123,7 +124,17 @@ if (-not (Test-Path -LiteralPath $LogRoot)) {
     New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
 }
 
-$logFile = Join-Path $LogRoot ("reparo_{0}_{1}_{2}.log" -f $env:COMPUTERNAME, $PID, (Get-Date -Format 'yyyy-MM-dd_HHmmss'))
+$script:ReparoLogBaseName = "reparo_{0}_{1}_{2}" -f $env:COMPUTERNAME, $PID, (Get-Date -Format 'yyyy-MM-dd_HHmmss')
+$script:ReparoLogPath = Join-Path $LogRoot ($script:ReparoLogBaseName + '_RUNNING.log')
+$script:ReparoDebug = $PSBoundParameters.ContainsKey('Debug') -or ($DebugPreference -ne 'SilentlyContinue' -and $DebugPreference -ne 'Ignore')
+
+function Write-ReparoDebug {
+    param([string]$Message)
+
+    if ($script:ReparoDebug -and -not [string]::IsNullOrWhiteSpace($Message)) {
+        Write-ReparoLog ("[DEBUG] {0}" -f $Message)
+    }
+}
 
 function Write-Info($Message) { Write-Host "INFO  $Message" -ForegroundColor Cyan }
 function Write-Step($Message) { Write-Host "STEP  $Message" -ForegroundColor Yellow }
@@ -386,7 +397,7 @@ function Write-ReparoLog {
     for ($i = 1; $i -le $Retries; $i++) {
         try {
             $fs = [System.IO.File]::Open(
-                $logFile,
+                $script:ReparoLogPath,
                 [System.IO.FileMode]::Append,
                 [System.IO.FileAccess]::Write,
                 [System.IO.FileShare]::ReadWrite
@@ -410,9 +421,35 @@ function Write-ReparoLog {
                 continue
             }
 
-            Write-Warning "Failed to write to log file '$logFile': $($_.Exception.Message)"
+            Write-Warning "Failed to write to log file '$script:ReparoLogPath': $($_.Exception.Message)"
         }
     }
+}
+
+function Finalize-ReparoLogFile {
+    param(
+        [Parameter(Mandatory)][string]$Status
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Status)) {
+        $Status = 'COMPLETE'
+    }
+
+    $finalPath = Join-Path $LogRoot ($script:ReparoLogBaseName + "_{0}.log" -f $Status)
+
+    try {
+        if ((Test-Path -LiteralPath $script:ReparoLogPath) -and ($script:ReparoLogPath -ne $finalPath)) {
+            Move-Item -LiteralPath $script:ReparoLogPath -Destination $finalPath -Force
+            $script:ReparoLogPath = $finalPath
+        }
+    }
+    catch {
+        Write-Warning "Failed to finalize log file name: $($_.Exception.Message)"
+        return
+    }
+
+    Write-Host ("Final log: {0}" -f $script:ReparoLogPath) -ForegroundColor Cyan
+    Write-ReparoLog ("[SUMMARY] Final log renamed to: {0}" -f $script:ReparoLogPath)
 }
 
 if ($New) {
@@ -479,6 +516,12 @@ function Test-Admin {
 }
 
 function Test-ReparoSectionSelected($Section) {
+    $includeText = ''
+    if ($Include -and $Include.Count -gt 0) {
+        $includeText = $Include -join ','
+    }
+
+    Write-ReparoDebug ("Test-ReparoSectionSelected({0}) Force={1} Update={2} WindowsUpdate={3} Include={4}" -f $Section, $Force, $Update, $WindowsUpdate, $includeText)
     if ($Force) { return $true }
     if ($Include -and $Include.Count -gt 0) {
         return ($Include -contains $Section)
@@ -489,11 +532,13 @@ function Test-ReparoSectionSelected($Section) {
 
 function Ensure-ReparoPSWindowsUpdate {
     if (Get-Command Get-WindowsUpdate -ErrorAction SilentlyContinue) {
+        Write-ReparoDebug 'Get-WindowsUpdate already available.'
         return $true
     }
 
     try {
         Write-ReparoLog '[INFO] PSWindowsUpdate not found; attempting install from PSGallery.'
+        Write-ReparoDebug 'Starting PSWindowsUpdate bootstrap path.'
 
         if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
             Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
@@ -513,6 +558,7 @@ function Ensure-ReparoPSWindowsUpdate {
 
         if (Get-Command Get-WindowsUpdate -ErrorAction SilentlyContinue) {
             Write-ReparoLog '[DONE] PSWindowsUpdate installed successfully.'
+            Write-ReparoDebug 'PSWindowsUpdate bootstrap completed and Get-WindowsUpdate is now available.'
             return $true
         }
 
@@ -520,11 +566,13 @@ function Ensure-ReparoPSWindowsUpdate {
     }
     catch {
         Write-ReparoLog ("[WARN] PSWindowsUpdate install failed: {0}" -f $_.Exception.Message)
+        Write-ReparoDebug ("PSWindowsUpdate bootstrap failed: {0}" -f $_.Exception.Message)
         return $false
     }
 }
 
 function Resolve-ReparoShell {
+    Write-ReparoDebug 'Resolving runnable PowerShell host.'
     foreach ($shellName in @('pwsh', 'powershell')) {
         $command = Resolve-ReparoCommand -Name $shellName
         if (-not $command) { continue }
@@ -532,6 +580,7 @@ function Resolve-ReparoShell {
         try {
             $output = @(& $command.Source -NoProfile -ExecutionPolicy Bypass -Command '$PSVersionTable.PSVersion.ToString()' 2>&1)
             $exitCode = $LASTEXITCODE
+            Write-ReparoDebug ("Shell probe {0} returned exit code {1}" -f $shellName, $exitCode)
             foreach ($item in $output) {
                 $line = [string]$item
                 if (-not [string]::IsNullOrWhiteSpace($line)) {
@@ -887,8 +936,8 @@ function Write-ReparoSummary {
     }
 
     Write-Host ''
-    Write-Host ("Log: {0}" -f $logFile) -ForegroundColor Cyan
-    Write-ReparoLog ("[SUMMARY] Log: {0}" -f $logFile)
+    Write-Host ("Working log: {0}" -f $script:ReparoLogPath) -ForegroundColor Cyan
+    Write-ReparoLog ("[SUMMARY] Working log: {0}" -f $script:ReparoLogPath)
 }
 
 function Invoke-ReparoTimedCommand {
@@ -904,6 +953,7 @@ function Invoke-ReparoTimedCommand {
     $arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"${escapedCommand}`""
 
     Write-ReparoLog ("[CMD-START] {0} | timeout={1}s" -f $Section, $TimeoutSeconds)
+    Write-ReparoDebug ("Launching {0} via {1} with arguments: {2}" -f $Section, $ShellPath, $arguments)
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $ShellPath
@@ -916,6 +966,7 @@ function Invoke-ReparoTimedCommand {
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $psi
     $null = $process.Start()
+    Write-ReparoDebug ("Started PID {0} for section {1}" -f $process.Id, $Section)
 
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
         try { $process.Kill() } catch { }
@@ -934,6 +985,8 @@ function Invoke-ReparoTimedCommand {
     $process.WaitForExit()
     $stopwatch.Stop()
 
+    Write-ReparoDebug ("{0} captured stdout bytes={1} stderr bytes={2}" -f $Section, $stdout.Length, $stderr.Length)
+
     $output = New-Object System.Collections.Generic.List[string]
     foreach ($line in @($stdout -split "`r?`n")) {
         if (-not [string]::IsNullOrWhiteSpace($line)) {
@@ -947,6 +1000,7 @@ function Invoke-ReparoTimedCommand {
     }
 
     Write-ReparoLog ("[CMD-END] {0} exit={1} elapsed={2}" -f $Section, $process.ExitCode, $stopwatch.Elapsed)
+    Write-ReparoDebug ("{0} completed with exit={1} elapsed={2}" -f $Section, $process.ExitCode, $stopwatch.Elapsed)
 
     [pscustomobject]@{
         TimedOut = $false
@@ -965,6 +1019,7 @@ function Invoke-ReparoCommandStep {
     )
 
     if (-not (Test-ReparoSectionSelected $Section)) { return }
+    Write-ReparoDebug ("Invoke-ReparoCommandStep: {0} timeout={1} preview={2} debug={3}" -f $Section, $TimeoutSeconds, $Preview, $script:ReparoDebug)
 
     if ($PresenceCmd -and -not (Test-ReparoSectionTool -Section $Section -PresenceCmd $PresenceCmd)) {
         Write-Skip "$Section not found or cannot run in this context; skipping"
@@ -990,6 +1045,7 @@ function Invoke-ReparoCommandStep {
         $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command $Command -Section $Section -TimeoutSeconds $TimeoutSeconds
         $output = @($result.Output)
         $exitCode = $result.ExitCode
+        Write-ReparoDebug ("{0} output lines captured: {1}" -f $Section, $output.Count)
 
         foreach ($item in $output) {
             $line = [string]$item
@@ -1054,6 +1110,14 @@ if ($Preview) { $mode = "$mode + PREVIEW" }
 
 Write-Host ("REPARO starting on {0} [{1}]" -f $env:COMPUTERNAME, $mode) -ForegroundColor Magenta
 Write-ReparoLog ("=== reparo start: {0} on {1} (PID {2}) ===" -f (Get-Date), $env:COMPUTERNAME, $PID)
+Write-ReparoLog ("[FLAGS] Bound parameters: {0}" -f ((($PSBoundParameters.Keys | Sort-Object) -join ', ')))
+$includeText = ''
+if ($Include -and $Include.Count -gt 0) {
+    $includeText = $Include -join ','
+}
+Write-ReparoLog ("[FLAGS] Update={0} Force={1} Preview={2} WindowsUpdate={3} WslApt={4} Tail={5} Debug={6} Include={7}" -f $Update, $Force, $Preview, $WindowsUpdate, $WslApt, $Tail, $script:ReparoDebug, $includeText)
+Write-ReparoDebug ("Process identity: {0}" -f [Security.Principal.WindowsIdentity]::GetCurrent().Name)
+Write-ReparoDebug ("PowerShell version: {0}" -f $PSVersionTable.PSVersion)
 
 Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command 'winget upgrade --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force' -TimeoutSeconds 90
 Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command 'winget upgrade --source msstore --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force' -TimeoutSeconds 90
@@ -1204,24 +1268,35 @@ if (Test-ReparoSectionSelected 'WindowsUpdate') {
 
 Write-ReparoSummary
 Write-ReparoLog ("=== reparo end: {0} ===" -f (Get-Date))
+if ($script:ReparoSummary['Failed'].Count -gt 0) {
+    $script:ReparoFinalStatus = 'FAILED'
+}
+elseif ($Preview) {
+    $script:ReparoFinalStatus = 'PREVIEW'
+}
+else {
+    $script:ReparoFinalStatus = 'COMPLETE'
+}
 
 if ($Preview) {
     Write-Info 'Preview only. Run without -Preview to execute.'
 }
 
+Finalize-ReparoLogFile -Status $script:ReparoFinalStatus
+
 if ($Tail) {
     Write-Host ''
     Write-Host 'Log tail' -ForegroundColor Magenta
 
-    if (Test-Path -LiteralPath $logFile) {
+    if (Test-Path -LiteralPath $script:ReparoLogPath) {
         try {
-            Get-Content -LiteralPath $logFile -Tail 200
+            Get-Content -LiteralPath $script:ReparoLogPath -Tail 200
         }
         catch {
-            Write-Warning "Unable to tail log file '$logFile': $($_.Exception.Message)"
+            Write-Warning "Unable to tail log file '$script:ReparoLogPath': $($_.Exception.Message)"
         }
     }
     else {
-        Write-Warning "Log file not found: $logFile"
+        Write-Warning "Log file not found: $script:ReparoLogPath"
     }
 }

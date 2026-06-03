@@ -218,8 +218,10 @@ C:\ProgramData\Reparo\Logs
 ```
 
 Each run creates a timestamped log file that includes the computer name, process ID, selected mode, commands invoked, command output, skipped sections, errors, and the final run summary.
+While Reparo is running, the log is named with a `_RUNNING.log` suffix. After completion, it is renamed to `_COMPLETE.log`, `_FAILED.log`, or `_PREVIEW.log` so the final artifact is obvious.
 
 Use `-Tail` or its alias `-Log` to print the tail of the current run's log file at the end of execution.
+Use `-Debug` when you want extra trace lines in the log for mode selection, command launch details, and bootstrap behavior. In Ninja, the wrapper now forwards `-Debug` through to Reparo.
 
 At the end of the run, Reparo prints a `REPARO summary` with:
 

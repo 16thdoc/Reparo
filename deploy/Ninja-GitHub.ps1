@@ -27,18 +27,34 @@ if ([Net.ServicePointManager]::SecurityProtocol -notmatch 'Tls12') {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 }
 
+Write-Host '=== Ninja Reparo Bootstrap ==='
+Write-Host "Computer: $env:COMPUTERNAME"
+Write-Host "User: $([Security.Principal.WindowsIdentity]::GetCurrent().Name)"
+Write-Host "InstallRoot: $InstallRoot"
+Write-Host "LogRoot: $LogRoot"
+Write-Host "ReparoUrl: $ReparoUrl"
+$includeText = ''
+if ($Include -and $Include.Count -gt 0) {
+    $includeText = $Include -join ','
+}
+Write-Host ("Mode flags: Preview={0} Update={1} Force={2} Tail={3} Debug={4} Include={5}" -f $Preview, $Update, $Force, $Tail, $PSBoundParameters.ContainsKey('Debug'), $includeText)
+
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 $scriptPath = Join-Path $InstallRoot 'Reparo.ps1'
 $bootstrapPath = Join-Path $InstallRoot 'Reparo.bootstrap.ps1'
 
+Write-Host "Downloading bootstrap to: $bootstrapPath"
 Invoke-WebRequest -Uri $ReparoUrl -OutFile $bootstrapPath -UseBasicParsing
 
 if (Get-Command Unblock-File -ErrorAction SilentlyContinue) {
     Unblock-File -Path $bootstrapPath
+    Write-Host 'Bootstrap unblocked'
 }
 
+Write-Host "Installing runtime copy: $scriptPath"
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrapPath -New -InstallRoot $InstallRoot -SourceUrl $ReparoUrl
 if ($LASTEXITCODE -ne 0) {
+    Write-Host "Bootstrap install failed with code: $LASTEXITCODE"
     exit $LASTEXITCODE
 }
 
@@ -56,9 +72,19 @@ elseif ($Update) {
     $arguments += '-Update'
 }
 
+if ($PSBoundParameters.ContainsKey('Debug')) {
+    $arguments += '-Debug'
+}
+
 if ($Tail) {
     $arguments += '-Tail'
 }
 
+Write-Host ("Launching Reparo: powershell.exe {0}" -f ($arguments -join ' '))
+if ($PSBoundParameters.ContainsKey('Debug')) {
+    Write-Host 'Ninja debug: passing -Debug through to Reparo'
+}
+
 & powershell.exe @arguments
+Write-Host "Reparo exit code: $LASTEXITCODE"
 exit $LASTEXITCODE
