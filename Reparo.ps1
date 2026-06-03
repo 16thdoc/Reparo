@@ -44,7 +44,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.15'
+$script:ReparoVersion = '0.2.16'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -52,7 +52,6 @@ if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
 
 function Format-ReparoLogValue {
     param(
-        [Parameter(Mandatory)]
         [object]$Value
     )
 
