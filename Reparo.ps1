@@ -56,7 +56,36 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.21'
+$script:ReparoVersion = '0.2.22'
+
+function Get-ReparoVersionQuote {
+    param([string]$Version = $script:ReparoVersion)
+
+    $quotes = @(
+        'Hold on to your butts.',
+        'Hack the planet!',
+        'Shall we play a game?',
+        'The only winning move is not to play.',
+        'There is no spoon.',
+        'Open the pod bay doors.',
+        'Never tell me the odds.',
+        'Would you like to know more?',
+        'Access granted.',
+        'I''m in.',
+        'Enhance.',
+        'All systems nominal.',
+        'Recalculating the mainframe.',
+        'Initiating the uplink.',
+        'You''re gonna need a bigger firewall.'
+    )
+
+    $hash = [long]5381
+    foreach ($char in ([string]$Version).ToCharArray()) {
+        $hash = (($hash * 33) + [int][char]$char) % 2147483647
+    }
+
+    $quotes[[int]($hash % $quotes.Count)]
+}
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -172,8 +201,10 @@ function Ensure-ReparoNuGetProvider {
 }
 
 function Show-ReparoHelp {
+    $versionQuote = Get-ReparoVersionQuote
     $helpText = @"
 Reparo $script:ReparoVersion
+$versionQuote
 
 Usage:
   reparo
@@ -264,6 +295,7 @@ if ($Help) {
 
 if ($Version) {
     Write-Host "Reparo $script:ReparoVersion"
+    Write-Host (Get-ReparoVersionQuote)
     return
 }
 
