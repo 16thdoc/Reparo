@@ -184,6 +184,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Preview` | Logs what would run without executing package manager commands. |
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, and `WindowsUpdate`. |
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |
+| `-WingetDiscover` | Repairs/refreshes winget if needed and runs only winget discovery commands. |
 | `-Tail` | Follows the active Reparo log when used by itself. When combined with a run mode, it prints the tail of that run's log at the end. |
 | `-Status` | Shows whether Reparo is currently running and points at the active log file. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
@@ -196,6 +197,7 @@ Available section names:
 - `Winget`
 - `Winget(source list)`
 - `Winget(list upgrades)`
+- `Winget(upgrade list)`
 - `Winget(msstore)`
 - `Scoop`
 - `Choco`
@@ -228,6 +230,7 @@ While Reparo is running, the log is named with a `_RUNNING.log` suffix. After co
 Use `-Tail` or its alias `-Log` to follow the active log when used by itself. When combined with a run mode, it prints the tail of the current run's log file at the end of execution.
 Use `-Status` to see whether Reparo is currently running and which log file it is writing.
 Use `-Debug` when you want extra trace lines in the log for mode selection, command launch details, and bootstrap behavior. In Ninja, the wrapper now forwards `-Debug` through to Reparo.
+Use `-WingetDiscover` when you want to refresh the winget discovery list without running live upgrades.
 Use `-WingetTimeoutSeconds`, `-WingetDiscoveryTimeoutSeconds`, and `-WindowsUpdateTimeoutSeconds` to override the live command timeouts when you need more runway for a big batch or a slow source.
 
 At the end of the run, Reparo prints a `REPARO summary` with:

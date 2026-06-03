@@ -15,6 +15,7 @@ param(
     [switch]$Preview,
     [switch]$Update = $true,
     [switch]$Winget,
+    [switch]$WingetDiscover,
     [switch]$Force,
     [switch]$Status,
     [Alias('Log')]
@@ -42,7 +43,7 @@ $includeText = ''
 if ($Include -and $Include.Count -gt 0) {
     $includeText = $Include -join ','
 }
-Write-Host ("Mode flags: Preview={0} Update={1} Winget={2} Force={3} Status={4} Tail={5} Debug={6} Include={7}" -f $Preview, $Update, $Winget, $Force, $Status, $Tail, $PSBoundParameters.ContainsKey('Debug'), $includeText)
+Write-Host ("Mode flags: Preview={0} Update={1} Winget={2} WingetDiscover={3} Force={4} Status={5} Tail={6} Debug={7} Include={8}" -f $Preview, $Update, $Winget, $WingetDiscover, $Force, $Status, $Tail, $PSBoundParameters.ContainsKey('Debug'), $includeText)
 Write-Host ("Timeouts: Winget={0} WingetDiscovery={1} WindowsUpdate={2}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds)
 Write-Host 'Preflight:'
 if ($Winget) {
@@ -52,6 +53,9 @@ if ($Winget) {
     else {
         Write-Host '  - Winget discovery will run, then live winget upgrades will execute.'
     }
+}
+elseif ($WingetDiscover) {
+    Write-Host '  - Winget discovery only; live winget upgrades will be skipped.'
 }
 elseif ($Preview) {
     Write-Host '  - Preview only; Reparo will log commands without running live package installs.'
@@ -90,6 +94,9 @@ $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath,
 if ($Preview) { $arguments += '-Preview' }
 if ($Winget) {
     $arguments += '-Winget'
+}
+if ($WingetDiscover) {
+    $arguments += '-WingetDiscover'
 }
 if ($Force) {
     $arguments += '-Force'

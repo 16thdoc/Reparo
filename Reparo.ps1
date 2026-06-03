@@ -24,6 +24,7 @@ param(
     [switch]$WslApt,
     [switch]$Update,
     [switch]$Winget,
+    [switch]$WingetDiscover,
     [switch]$Force,
     [switch]$Kill,
     [int]$WingetTimeoutSeconds = 1800,
@@ -42,7 +43,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.8'
+$script:ReparoVersion = '0.2.9'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -60,6 +61,7 @@ Usage:
   reparo -Install
   reparo -Preview -Update
   reparo -Winget
+  reparo -WingetDiscover
   reparo -Tail
   reparo -Status
   reparo -Include Winget Choco
@@ -71,6 +73,8 @@ Modes:
   -Winget              Run a winget-focused pass. Reparo attempts to repair/register App Installer,
                        logs discovery output, then runs the Winget sections. In preview mode,
                        discovery still runs so you can refresh the visible upgrade list.
+  -WingetDiscover      Repair/register winget if needed, then run only winget discovery commands.
+                       This refreshes the visible upgrade list without starting live installs.
   -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
   -Force               Run all sections, including developer toolchains and WSL apt handling.
   -Kill                Stop running Reparo PowerShell processes.
@@ -132,6 +136,13 @@ if ($Winget) {
         'Winget(msstore)'
         'Winget(source list)'
         'Winget(list upgrades)'
+    )
+}
+elseif ($WingetDiscover) {
+    $Include = @(
+        'Winget(source list)'
+        'Winget(list upgrades)'
+        'Winget(upgrade list)'
     )
 }
 if ($Force) {
@@ -1446,7 +1457,7 @@ Write-ReparoDebug ("Timeouts: Winget={0}s WingetDiscovery={1}s WindowsUpdate={2}
 Write-ReparoDebug ("Process identity: {0}" -f [Security.Principal.WindowsIdentity]::GetCurrent().Name)
 Write-ReparoDebug ("PowerShell version: {0}" -f $PSVersionTable.PSVersion)
 
-$runWingetSections = (Test-ReparoSectionSelected 'Winget') -or (Test-ReparoSectionSelected 'Winget(msstore)') -or $Winget
+$runWingetSections = (Test-ReparoSectionSelected 'Winget') -or (Test-ReparoSectionSelected 'Winget(msstore)') -or $Winget -or $WingetDiscover
 if ($runWingetSections) {
     $hasWinget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
     Write-ReparoLog ("[CHECK] winget present: {0}" -f $hasWinget)
@@ -1456,12 +1467,19 @@ if ($runWingetSections) {
     }
 
     if ($hasWinget) {
-        if ($Winget) {
+        if ($Winget -or $WingetDiscover) {
             Invoke-ReparoWingetDiscovery -PreviewOnly:$Preview
         }
 
-        Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command 'winget upgrade --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force' -TimeoutSeconds $WingetTimeoutSeconds
-        Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command 'winget upgrade --source msstore --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force' -TimeoutSeconds $WingetTimeoutSeconds
+        if (-not $WingetDiscover) {
+            Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command 'winget upgrade --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force' -TimeoutSeconds $WingetTimeoutSeconds
+            Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command 'winget upgrade --source msstore --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force' -TimeoutSeconds $WingetTimeoutSeconds
+        }
+        else {
+            Write-Skip 'WingetDiscover requested; skipping live winget upgrade commands.'
+            Write-ReparoLog '[SKIP] WingetDiscover requested; skipping live winget upgrade commands'
+            Add-ReparoSummaryNote 'WingetDiscover completed discovery only; live winget upgrades were skipped.'
+        }
     }
     else {
         Write-Skip 'winget not found or could not be repaired; skipping Winget sections'
