@@ -150,6 +150,20 @@ $bootstrapUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/v1.0.0/Reparo.
 
 The same bootstrapper is also included at `deploy/Ninja-GitHub.ps1`.
 
+### Option 4: Install/update over SSH
+
+For personal Windows machines that are reachable over OpenSSH, use the remote helper:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy\Install-ReparoRemote.ps1 -ComputerName marajade
+```
+
+Pass multiple SSH aliases or hosts to install the same ProgramData runtime on several machines:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy\Install-ReparoRemote.ps1 -ComputerName marajade,laptop
+```
+
 ### Private repo note
 
 For client endpoints, a public repo or Ninja-hosted script copy is usually cleaner than embedding GitHub credentials. If the repo is private, avoid hard-coding a personal access token in the Ninja script body. Use Ninja-managed secure variables only if you truly need private GitHub delivery.
