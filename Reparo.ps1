@@ -37,7 +37,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.2'
+$script:ReparoVersion = '0.2.3'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -960,7 +960,8 @@ function Invoke-ReparoCommandStep {
     param(
         [string]$Section,
         [string]$PresenceCmd,
-        [string]$Command
+        [string]$Command,
+        [int]$TimeoutSeconds = 1800
     )
 
     if (-not (Test-ReparoSectionSelected $Section)) { return }
@@ -986,7 +987,7 @@ function Invoke-ReparoCommandStep {
 
     try {
         $shell = Resolve-ReparoShell
-        $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command $Command -Section $Section
+        $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command $Command -Section $Section -TimeoutSeconds $TimeoutSeconds
         $output = @($result.Output)
         $exitCode = $result.ExitCode
 
@@ -1054,8 +1055,8 @@ if ($Preview) { $mode = "$mode + PREVIEW" }
 Write-Host ("REPARO starting on {0} [{1}]" -f $env:COMPUTERNAME, $mode) -ForegroundColor Magenta
 Write-ReparoLog ("=== reparo start: {0} on {1} (PID {2}) ===" -f (Get-Date), $env:COMPUTERNAME, $PID)
 
-Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command 'winget upgrade --all --include-unknown --accept-source-agreements --accept-package-agreements'
-Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command 'winget upgrade --source msstore --all --include-unknown --accept-source-agreements --accept-package-agreements'
+Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command 'winget upgrade --all --include-unknown --accept-source-agreements --accept-package-agreements' -TimeoutSeconds 90
+Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command 'winget upgrade --source msstore --all --include-unknown --accept-source-agreements --accept-package-agreements' -TimeoutSeconds 90
 Invoke-ReparoCommandStep -Section 'Scoop' -PresenceCmd 'scoop' -Command 'scoop update; scoop update *'
 Invoke-ReparoCommandStep -Section 'Choco' -PresenceCmd 'choco' -Command 'choco upgrade all -y --no-progress'
 
@@ -1191,7 +1192,7 @@ if (Test-ReparoSectionSelected 'WindowsUpdate') {
         }
 
         if ($hasWindowsUpdate -or (Ensure-ReparoPSWindowsUpdate)) {
-        Invoke-ReparoCommandStep -Section 'WindowsUpdate' -PresenceCmd '' -Command 'Import-Module PSWindowsUpdate; Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot'
+        Invoke-ReparoCommandStep -Section 'WindowsUpdate' -PresenceCmd '' -Command 'Import-Module PSWindowsUpdate; Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot' -TimeoutSeconds 120
         }
         else {
             Write-Skip 'PSWindowsUpdate module not found and bootstrap failed; skipping Windows Update.'
