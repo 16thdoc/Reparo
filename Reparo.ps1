@@ -37,7 +37,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.0'
+$script:ReparoVersion = '0.2.2'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -68,6 +68,10 @@ Modes:
   -Include <sections>  Run only selected sections, for example: -Include Winget Choco.
   -Version             Show the Reparo version.
   -Help                Show this help.
+
+Windows Update:
+  Reparo will try to install PSWindowsUpdate from PSGallery if the module is missing
+  and the session has the rights and network access to do so.
 
 Install/update:
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Install
@@ -483,6 +487,43 @@ function Test-ReparoSectionSelected($Section) {
     return ($Section -eq 'WindowsUpdate')
 }
 
+function Ensure-ReparoPSWindowsUpdate {
+    if (Get-Command Get-WindowsUpdate -ErrorAction SilentlyContinue) {
+        return $true
+    }
+
+    try {
+        Write-ReparoLog '[INFO] PSWindowsUpdate not found; attempting install from PSGallery.'
+
+        if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
+            Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
+        }
+
+        if (-not (Get-Module -ListAvailable -Name 'NuGet')) {
+            try {
+                Install-PackageProvider -Name NuGet -Force -Scope AllUsers -ErrorAction Stop | Out-Null
+            }
+            catch {
+                Write-ReparoLog ("[WARN] NuGet provider install failed: {0}" -f $_.Exception.Message)
+            }
+        }
+
+        Install-Module -Name 'PSWindowsUpdate' -Force -AllowClobber -Scope AllUsers -Repository 'PSGallery' -ErrorAction Stop | Out-Null
+        Import-Module PSWindowsUpdate -Force -ErrorAction Stop
+
+        if (Get-Command Get-WindowsUpdate -ErrorAction SilentlyContinue) {
+            Write-ReparoLog '[DONE] PSWindowsUpdate installed successfully.'
+            return $true
+        }
+
+        throw 'PSWindowsUpdate installed, but Get-WindowsUpdate is still unavailable.'
+    }
+    catch {
+        Write-ReparoLog ("[WARN] PSWindowsUpdate install failed: {0}" -f $_.Exception.Message)
+        return $false
+    }
+}
+
 function Resolve-ReparoShell {
     foreach ($shellName in @('pwsh', 'powershell')) {
         $command = Resolve-ReparoCommand -Name $shellName
@@ -850,6 +891,71 @@ function Write-ReparoSummary {
     Write-ReparoLog ("[SUMMARY] Log: {0}" -f $logFile)
 }
 
+function Invoke-ReparoTimedCommand {
+    param(
+        [Parameter(Mandatory)][string]$ShellPath,
+        [Parameter(Mandatory)][string]$Command,
+        [Parameter(Mandatory)][string]$Section,
+        [int]$TimeoutSeconds = 1800
+    )
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $escapedCommand = $Command.Replace('"', '""')
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"${escapedCommand}`""
+
+    Write-ReparoLog ("[CMD-START] {0} | timeout={1}s" -f $Section, $TimeoutSeconds)
+
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $ShellPath
+    $psi.Arguments = $arguments
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $psi
+    $null = $process.Start()
+
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        try { $process.Kill() } catch { }
+        $stopwatch.Stop()
+        Write-ReparoLog ("[CMD-TIMEOUT] {0} timed out after {1}s" -f $Section, $TimeoutSeconds)
+        return [pscustomobject]@{
+            TimedOut = $true
+            ExitCode = 124
+            Output   = @("[TIMEOUT] $Section exceeded ${TimeoutSeconds}s")
+            Elapsed  = $stopwatch.Elapsed
+        }
+    }
+
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    $stopwatch.Stop()
+
+    $output = New-Object System.Collections.Generic.List[string]
+    foreach ($line in @($stdout -split "`r?`n")) {
+        if (-not [string]::IsNullOrWhiteSpace($line)) {
+            [void]$output.Add($line)
+        }
+    }
+    foreach ($line in @($stderr -split "`r?`n")) {
+        if (-not [string]::IsNullOrWhiteSpace($line)) {
+            [void]$output.Add($line)
+        }
+    }
+
+    Write-ReparoLog ("[CMD-END] {0} exit={1} elapsed={2}" -f $Section, $process.ExitCode, $stopwatch.Elapsed)
+
+    [pscustomobject]@{
+        TimedOut = $false
+        ExitCode = $process.ExitCode
+        Output   = $output.ToArray()
+        Elapsed  = $stopwatch.Elapsed
+    }
+}
+
 function Invoke-ReparoCommandStep {
     param(
         [string]$Section,
@@ -880,13 +986,21 @@ function Invoke-ReparoCommandStep {
 
     try {
         $shell = Resolve-ReparoShell
-        $output = @(& $shell -NoProfile -ExecutionPolicy Bypass -Command $Command 2>&1)
-        $exitCode = $LASTEXITCODE
+        $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command $Command -Section $Section
+        $output = @($result.Output)
+        $exitCode = $result.ExitCode
 
         foreach ($item in $output) {
             $line = [string]$item
             Write-Host $line
             Write-ReparoLog $line
+        }
+
+        if ($result.TimedOut) {
+            Write-Fail "$Section timed out after $($result.Elapsed)"
+            Write-ReparoLog ("[ERROR] {0} timed out after {1}" -f $Section, $result.Elapsed)
+            Add-ReparoSummaryRecord -Bucket Failed -Software $Section -Version '-' -Method $Section -Reason "timeout after $($result.Elapsed)"
+            return
         }
 
         if ($exitCode -ne 0) {
@@ -1068,13 +1182,22 @@ if (Test-ReparoSectionSelected 'WindowsUpdate') {
         Write-ReparoLog '[SKIP] WindowsUpdate requested but shell is not elevated'
         Add-ReparoSummaryRecord -Bucket Skipped -Software 'WindowsUpdate' -Version '-' -Method 'PSWindowsUpdate' -Reason 'shell is not elevated'
     }
-    elseif (Get-Command Get-WindowsUpdate -ErrorAction SilentlyContinue) {
-        Invoke-ReparoCommandStep -Section 'WindowsUpdate' -PresenceCmd '' -Command 'Import-Module PSWindowsUpdate; Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot'
-    }
     else {
-        Write-Skip 'PSWindowsUpdate module not found; skipping Windows Update.'
-        Write-ReparoLog '[SKIP] PSWindowsUpdate module not found'
-        Add-ReparoSummaryRecord -Bucket Skipped -Software 'WindowsUpdate' -Version '-' -Method 'PSWindowsUpdate' -Reason 'module not found'
+        $hasWindowsUpdate = [bool](Get-Command Get-WindowsUpdate -ErrorAction SilentlyContinue)
+        Write-ReparoLog ("[CHECK] Get-WindowsUpdate present: {0}" -f $hasWindowsUpdate)
+
+        if (-not $hasWindowsUpdate) {
+            Write-ReparoLog '[ACTION] Attempting PSWindowsUpdate bootstrap from PSGallery.'
+        }
+
+        if ($hasWindowsUpdate -or (Ensure-ReparoPSWindowsUpdate)) {
+        Invoke-ReparoCommandStep -Section 'WindowsUpdate' -PresenceCmd '' -Command 'Import-Module PSWindowsUpdate; Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot'
+        }
+        else {
+            Write-Skip 'PSWindowsUpdate module not found and bootstrap failed; skipping Windows Update.'
+            Write-ReparoLog '[SKIP] PSWindowsUpdate module not found and bootstrap failed'
+            Add-ReparoSummaryRecord -Bucket Skipped -Software 'WindowsUpdate' -Version '-' -Method 'PSWindowsUpdate' -Reason 'module not found and bootstrap failed'
+        }
     }
 }
 
