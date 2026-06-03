@@ -180,7 +180,8 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` from GitHub, with parse validation and backup handling. |
 | `-Help` | Prints Reparo usage and exits without running updates. |
 | `-Version` | Prints the Reparo version and exits without running updates. |
-| `-Kill` | Stops running Reparo PowerShell processes, using a graceful window close when available and force-stopping anything still running. |
+| `-Kill` | Stops running Reparo PowerShell processes, then sweeps known updater front-end processes such as `winget`, `choco`, `npm`, `pip`, and related package managers. |
+| `-KillUpdaterNames <names>` | Adds extra process base names to the `-Kill` updater sweep, for example `-Kill -KillUpdaterNames msiexec`. |
 | `-Preview` | Logs what would run without executing package manager commands. |
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, and `WindowsUpdate`. |
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |
@@ -238,6 +239,7 @@ Use `-TailLines` to increase or reduce the initial tail window.
 Use `-Status` to see whether Reparo is currently running and which log file it is writing. The status probe excludes its own helper process so it does not report itself as the active run, and it will show stale `_RUNNING.log` files when a run ended before finalization.
 Use `-Debug` when you want extra trace lines in the log for mode selection, command launch details, and bootstrap behavior. In Ninja, the wrapper now forwards `-Debug` through to Reparo.
 Use `-WingetDiscover` when you want to refresh the winget discovery list without running live upgrades.
+Use `-Kill` when a run is stuck; it stops matched Reparo process trees and then sweeps known updater front ends so orphaned `winget.exe` or similar package-manager processes are not left running. Reparo does not kill generic shells or installer engines by default; add extra process base names with `-KillUpdaterNames` when you intentionally want that broader cleanup.
 Use `-IgnoreTimeouts` when you explicitly want to suppress timeout enforcement even if timeout values are supplied.
 Use `-AllowReboot` or `-Reboot` only when you want Windows Update to be allowed to auto-reboot. Default runs still suppress reboot with `-IgnoreReboot`.
 Timeouts are disabled by default. Use `-WingetTimeoutSeconds`, `-WingetDiscoveryTimeoutSeconds`, and `-WindowsUpdateTimeoutSeconds` only when you explicitly want Reparo to stop a command after a positive number of seconds.

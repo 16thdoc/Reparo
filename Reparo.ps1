@@ -27,6 +27,7 @@ param(
     [switch]$WingetDiscover,
     [switch]$Force,
     [switch]$Kill,
+    [string[]]$KillUpdaterNames,
     [switch]$IgnoreTimeouts,
     [ValidateRange(0, [int]::MaxValue)]
     [int]$WingetTimeoutSeconds = 0,
@@ -52,7 +53,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.19'
+$script:ReparoVersion = '0.2.20'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -95,6 +96,7 @@ function Write-ReparoParameterBlock {
         WingetDiscover               = $WingetDiscover
         Force                        = $Force
         Kill                         = $Kill
+        KillUpdaterNames             = $KillUpdaterNames
         IgnoreTimeouts               = $IgnoreTimeouts
         WingetTimeoutSeconds         = $WingetTimeoutSeconds
         WingetDiscoveryTimeoutSeconds = $WingetDiscoveryTimeoutSeconds
@@ -171,6 +173,7 @@ Usage:
   reparo
   reparo -Version
   reparo -Kill
+  reparo -Kill -KillUpdaterNames winget msiexec
   reparo -Update
   reparo -Install
   reparo -Preview -Update
@@ -194,7 +197,10 @@ Modes:
                        Default behavior still uses -IgnoreReboot.
   -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
   -Force               Run all sections, including developer toolchains and WSL apt handling.
-  -Kill                Stop running Reparo PowerShell processes.
+  -Kill                Stop running Reparo PowerShell processes and known updater front ends.
+  -KillUpdaterNames    Additional process base names swept by -Kill after Reparo process trees stop.
+                       Default: winget, choco, chocolatey, scoop, pip, pipx, npm, pnpm,
+                       yarn, dotnet, rustup, cargo, conda, mamba, gem, composer.
   -Preview             Show what would run without executing update commands.
   -Tail, -Log          Follow the active log when used alone, or print this run's log tail at the end.
   -TailLines           Number of log lines to show when tailing. Default: 400.
@@ -355,27 +361,138 @@ function Stop-ReparoProcessTree {
     }
 }
 
+function Get-ReparoProtectedProcessIds {
+    param([int]$ProcessId = $PID)
+
+    $ids = New-Object System.Collections.Generic.List[int]
+    [void]$ids.Add([int]$ProcessId)
+
+    $ancestor = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+    while ($ancestor -and $ancestor.ParentProcessId) {
+        $ancestorId = [int]$ancestor.ParentProcessId
+        if ($ids.Contains($ancestorId)) {
+            break
+        }
+
+        [void]$ids.Add($ancestorId)
+        $ancestor = Get-CimInstance Win32_Process -Filter "ProcessId = $ancestorId" -ErrorAction SilentlyContinue
+    }
+
+    $ids.ToArray()
+}
+
+function ConvertTo-ReparoProcessBaseName {
+    param([AllowNull()][string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return $null
+    }
+
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($Name.Trim())
+    if ([string]::IsNullOrWhiteSpace($baseName)) {
+        return $null
+    }
+
+    $baseName.ToLowerInvariant()
+}
+
+function Get-ReparoDefaultKillUpdaterNames {
+    @(
+        'winget',
+        'choco',
+        'chocolatey',
+        'scoop',
+        'pip',
+        'pipx',
+        'npm',
+        'pnpm',
+        'yarn',
+        'dotnet',
+        'rustup',
+        'cargo',
+        'conda',
+        'mamba',
+        'gem',
+        'composer'
+    )
+}
+
+function Invoke-ReparoKillUpdaterProcesses {
+    [CmdletBinding()]
+    param([string[]]$ProcessNames = $KillUpdaterNames)
+
+    $allProcessNames = @(Get-ReparoDefaultKillUpdaterNames) + @($ProcessNames)
+    $targetNames = @(
+        foreach ($name in $allProcessNames) {
+            $baseName = ConvertTo-ReparoProcessBaseName -Name $name
+            if ($baseName) { $baseName }
+        }
+    ) | Sort-Object -Unique
+
+    if (-not $targetNames -or $targetNames.Count -eq 0) {
+        Write-Warning 'No updater process names were provided for the -Kill sweep.'
+        return
+    }
+
+    Write-Info ("Sweeping updater processes: {0}" -f ($targetNames -join ', '))
+    $protectedPids = @(Get-ReparoProtectedProcessIds -ProcessId $PID)
+
+    $processes = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                -not ($protectedPids -contains [int]$_.ProcessId) -and
+                $targetNames -contains (ConvertTo-ReparoProcessBaseName -Name $_.Name)
+            }
+    )
+
+    if (-not $processes -or $processes.Count -eq 0) {
+        Write-Info 'No updater processes found.'
+        return
+    }
+
+    $results = foreach ($process in $processes) {
+        $status = 'Forced'
+        $errorText = $null
+
+        try {
+            Stop-ReparoProcessTree -ProcessId ([int]$process.ProcessId)
+            $waitUntil = [DateTime]::UtcNow.AddSeconds(3)
+            do {
+                Start-Sleep -Milliseconds 100
+                $stillRunning = Get-Process -Id ([int]$process.ProcessId) -ErrorAction SilentlyContinue
+            } while ($stillRunning -and [DateTime]::UtcNow -lt $waitUntil)
+
+            if ($stillRunning) {
+                $status = 'Still running'
+            }
+        }
+        catch {
+            $status = 'Failed'
+            $errorText = $_.Exception.Message
+        }
+
+        [pscustomobject]@{
+            PID       = [int]$process.ProcessId
+            Name      = $process.Name
+            ParentPID = [int]$process.ParentProcessId
+            Status    = $status
+            Error     = $errorText
+        }
+    }
+
+    $results | Format-Table -AutoSize
+}
+
 function Invoke-ReparoKill {
     [CmdletBinding()]
     param()
 
-    $ownPid = $PID
-    $excludedPids = New-Object System.Collections.Generic.HashSet[int]
-    $null = $excludedPids.Add([int]$ownPid)
-
-    $ancestor = Get-CimInstance Win32_Process -Filter "ProcessId = $ownPid" -ErrorAction SilentlyContinue
-    while ($ancestor -and $ancestor.ParentProcessId) {
-        if (-not $excludedPids.Add([int]$ancestor.ParentProcessId)) {
-            break
-        }
-
-        $ancestor = Get-CimInstance Win32_Process -Filter "ProcessId = $($ancestor.ParentProcessId)" -ErrorAction SilentlyContinue
-    }
+    $excludedPids = @(Get-ReparoProtectedProcessIds -ProcessId $PID)
 
     $processes = @(
         Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" -ErrorAction SilentlyContinue |
             Where-Object {
-                -not $excludedPids.Contains([int]$_.ProcessId) -and
+                -not ($excludedPids -contains [int]$_.ProcessId) -and
                 $_.CommandLine -and
                 $_.CommandLine -notmatch '(?i)(^|\s)-Command(\s|$)' -and
                 $_.CommandLine -match '(?i)(^|\s)-File\s+["'']?[^"'']*Reparo\.ps1(["''\s]|$)' -and
@@ -385,47 +502,49 @@ function Invoke-ReparoKill {
 
     if (-not $processes -or $processes.Count -eq 0) {
         Write-Info 'No running Reparo PowerShell processes found.'
-        return
     }
+    else {
+        $results = foreach ($process in $processes) {
+            $status = 'Stopped'
+            $errorText = $null
 
-    $results = foreach ($process in $processes) {
-        $status = 'Stopped'
-        $errorText = $null
+            try {
+                $liveProcess = Get-Process -Id ([int]$process.ProcessId) -ErrorAction Stop
+                $closedGracefully = $false
 
-        try {
-            $liveProcess = Get-Process -Id ([int]$process.ProcessId) -ErrorAction Stop
-            $closedGracefully = $false
+                if ($liveProcess.MainWindowHandle -ne 0) {
+                    $closedGracefully = $liveProcess.CloseMainWindow()
+                    if ($closedGracefully) {
+                        $liveProcess.WaitForExit(5000)
+                    }
+                }
 
-            if ($liveProcess.MainWindowHandle -ne 0) {
-                $closedGracefully = $liveProcess.CloseMainWindow()
-                if ($closedGracefully) {
-                    $liveProcess.WaitForExit(5000)
+                $stillRunning = Get-Process -Id ([int]$process.ProcessId) -ErrorAction SilentlyContinue
+                if ($stillRunning) {
+                    Stop-ReparoProcessTree -ProcessId ([int]$process.ProcessId)
+                    $status = if ($closedGracefully) { 'Forced after graceful timeout' } else { 'Forced' }
+                }
+                elseif ($closedGracefully) {
+                    $status = 'Gracefully stopped'
                 }
             }
+            catch {
+                $status = 'Failed'
+                $errorText = $_.Exception.Message
+            }
 
-            $stillRunning = Get-Process -Id ([int]$process.ProcessId) -ErrorAction SilentlyContinue
-            if ($stillRunning) {
-                Stop-ReparoProcessTree -ProcessId ([int]$process.ProcessId)
-                $status = if ($closedGracefully) { 'Forced after graceful timeout' } else { 'Forced' }
+            [pscustomobject]@{
+                PID    = [int]$process.ProcessId
+                Name   = $process.Name
+                Status = $status
+                Error  = $errorText
             }
-            elseif ($closedGracefully) {
-                $status = 'Gracefully stopped'
-            }
-        }
-        catch {
-            $status = 'Failed'
-            $errorText = $_.Exception.Message
         }
 
-        [pscustomobject]@{
-            PID     = [int]$process.ProcessId
-            Name    = $process.Name
-            Status  = $status
-            Error   = $errorText
-        }
+        $results | Format-Table -AutoSize
     }
 
-    $results | Format-Table -AutoSize
+    Invoke-ReparoKillUpdaterProcesses -ProcessNames $KillUpdaterNames
 }
 
 function Test-ReparoScriptParse {

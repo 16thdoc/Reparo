@@ -17,8 +17,10 @@ param(
     [switch]$Winget,
     [switch]$WingetDiscover,
     [switch]$Force,
+    [switch]$Kill,
     [switch]$Status,
     [switch]$IgnoreTimeouts,
+    [string[]]$KillUpdaterNames,
     [Alias('Log')]
     [switch]$Tail,
     [ValidateRange(1, 10000)]
@@ -75,8 +77,10 @@ function Write-NinjaParameterBlock {
         Winget                       = $Winget
         WingetDiscover               = $WingetDiscover
         Force                        = $Force
+        Kill                         = $Kill
         Status                       = $Status
         IgnoreTimeouts               = $IgnoreTimeouts
+        KillUpdaterNames             = $KillUpdaterNames
         Tail                         = $Tail
         TailLines                    = $TailLines
         Debug                        = [bool]($PSBoundParameters.ContainsKey('Debug'))
@@ -116,6 +120,9 @@ if ($Winget) {
 }
 elseif ($WingetDiscover) {
     Write-Host '  - Winget discovery only; live winget upgrades will be skipped.'
+}
+elseif ($Kill) {
+    Write-Host '  - Kill pass; Reparo processes and known updater front ends will be stopped.'
 }
 elseif ($Preview) {
     Write-Host '  - Preview only; Reparo will log commands without running live package installs.'
@@ -167,6 +174,9 @@ if ($WingetDiscover) {
 if ($Force) {
     $arguments += '-Force'
 }
+elseif ($Kill) {
+    $arguments += '-Kill'
+}
 elseif ($Status) {
     $arguments += '-Status'
 }
@@ -201,6 +211,10 @@ if ($AllowReboot) {
 }
 if ($IgnoreTimeouts) {
     $arguments += '-IgnoreTimeouts'
+}
+if ($PSBoundParameters.ContainsKey('KillUpdaterNames')) {
+    $arguments += '-KillUpdaterNames'
+    $arguments += $KillUpdaterNames
 }
 
 if ($Tail) {
