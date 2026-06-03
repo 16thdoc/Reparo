@@ -29,6 +29,8 @@ param(
     [string]$InstallRoot = "$env:ProgramData\Reparo",
     [string]$SourceUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1',
     [switch]$NoBackup,
+    [Alias('Log')]
+    [switch]$Tail,
     [string[]]$Include,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RemainingInclude
@@ -61,6 +63,7 @@ Modes:
   -Force               Run all sections, including developer toolchains and WSL apt handling.
   -Kill                Stop running Reparo PowerShell processes.
   -Preview             Show what would run without executing update commands.
+  -Tail, -Log          Print the current run's log file at the end of execution.
   -Include <sections>  Run only selected sections, for example: -Include Winget Choco.
   -Version             Show the Reparo version.
   -Help                Show this help.
@@ -1066,4 +1069,21 @@ Write-ReparoLog ("=== reparo end: {0} ===" -f (Get-Date))
 
 if ($Preview) {
     Write-Info 'Preview only. Run without -Preview to execute.'
+}
+
+if ($Tail) {
+    Write-Host ''
+    Write-Host 'Log tail' -ForegroundColor Magenta
+
+    if (Test-Path -LiteralPath $logFile) {
+        try {
+            Get-Content -LiteralPath $logFile -Tail 200
+        }
+        catch {
+            Write-Warning "Unable to tail log file '$logFile': $($_.Exception.Message)"
+        }
+    }
+    else {
+        Write-Warning "Log file not found: $logFile"
+    }
 }
