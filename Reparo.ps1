@@ -44,10 +44,69 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.11'
+$script:ReparoVersion = '0.2.13'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
+}
+
+function Format-ReparoLogValue {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Value
+    )
+
+    if ($null -eq $Value) {
+        return '<null>'
+    }
+
+    if ($Value -is [bool]) {
+        return $Value.ToString()
+    }
+
+    if ($Value -is [System.Array]) {
+        if ($Value.Count -eq 0) {
+            return '[]'
+        }
+
+        return ('[{0}]' -f ($Value -join ', '))
+    }
+
+    return [string]$Value
+}
+
+function Write-ReparoParameterBlock {
+    $effectiveParameters = [ordered]@{
+        Help                         = $Help
+        Version                      = $Version
+        New                          = $New
+        Preview                      = $Preview
+        WindowsUpdate                = $WindowsUpdate
+        WslApt                       = $WslApt
+        Update                       = $Update
+        Winget                       = $Winget
+        WingetDiscover               = $WingetDiscover
+        Force                        = $Force
+        Kill                         = $Kill
+        IgnoreTimeouts               = $IgnoreTimeouts
+        WingetTimeoutSeconds         = $WingetTimeoutSeconds
+        WingetDiscoveryTimeoutSeconds = $WingetDiscoveryTimeoutSeconds
+        WindowsUpdateTimeoutSeconds   = $WindowsUpdateTimeoutSeconds
+        LogRoot                      = $LogRoot
+        InstallRoot                  = $InstallRoot
+        SourceUrl                    = $SourceUrl
+        NoBackup                     = $NoBackup
+        Status                       = $Status
+        Tail                         = $Tail
+        Include                      = $Include
+        RemainingInclude             = $RemainingInclude
+        Debug                        = [bool]($PSBoundParameters.ContainsKey('Debug'))
+    }
+
+    Write-ReparoLog '[FLAGS] Effective parameters:'
+    foreach ($entry in $effectiveParameters.GetEnumerator()) {
+        Write-ReparoLog ("[FLAGS]   {0}={1}" -f $entry.Key, (Format-ReparoLogValue -Value $entry.Value))
+    }
 }
 
 function Show-ReparoHelp {
@@ -633,7 +692,7 @@ function Invoke-ReparoTailLog {
         Start-Sleep -Seconds $PollSeconds
 
         if ($targetPid) {
-            $currentLog = Get-ReparoLogPathForPid -Pid $targetPid
+            $currentLog = Get-ReparoLogPathForPid -ProcessId $targetPid
             if ($currentLog) {
                 $LogPath = $currentLog
             }
@@ -1486,11 +1545,7 @@ if ($Preview) { $mode = "$mode + PREVIEW" }
 Write-Host ("REPARO starting on {0} [{1}]" -f $env:COMPUTERNAME, $mode) -ForegroundColor Magenta
 Write-ReparoLog ("=== reparo start: {0} on {1} (PID {2}) ===" -f (Get-Date), $env:COMPUTERNAME, $PID)
 Write-ReparoLog ("[FLAGS] Bound parameters: {0}" -f ((($PSBoundParameters.Keys | Sort-Object) -join ', ')))
-$includeText = ''
-if ($Include -and $Include.Count -gt 0) {
-    $includeText = $Include -join ','
-}
-Write-ReparoLog ("[FLAGS] Update={0} Force={1} Preview={2} WindowsUpdate={3} WslApt={4} Tail={5} Status={6} IgnoreTimeouts={7} Debug={8} Include={9}" -f $Update, $Force, $Preview, $WindowsUpdate, $WslApt, $Tail, $Status, $IgnoreTimeouts, $script:ReparoDebug, $includeText)
+Write-ReparoParameterBlock
 Write-ReparoDebug ("Timeouts: Winget={0}s WingetDiscovery={1}s WindowsUpdate={2}s IgnoreTimeouts={3}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds, $IgnoreTimeouts)
 Write-ReparoDebug ("Process identity: {0}" -f [Security.Principal.WindowsIdentity]::GetCurrent().Name)
 Write-ReparoDebug ("PowerShell version: {0}" -f $PSVersionTable.PSVersion)

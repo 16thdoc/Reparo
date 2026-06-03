@@ -34,17 +34,64 @@ if ([Net.ServicePointManager]::SecurityProtocol -notmatch 'Tls12') {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 }
 
+function Format-NinjaLogValue {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Value
+    )
+
+    if ($null -eq $Value) {
+        return '<null>'
+    }
+
+    if ($Value -is [bool]) {
+        return $Value.ToString()
+    }
+
+    if ($Value -is [System.Array]) {
+        if ($Value.Count -eq 0) {
+            return '[]'
+        }
+
+        return ('[{0}]' -f ($Value -join ', '))
+    }
+
+    return [string]$Value
+}
+
+function Write-NinjaParameterBlock {
+    $effectiveParameters = [ordered]@{
+        ReparoUrl                    = $ReparoUrl
+        InstallRoot                  = $InstallRoot
+        Preview                      = $Preview
+        Update                       = $Update
+        Winget                       = $Winget
+        WingetDiscover               = $WingetDiscover
+        Force                        = $Force
+        Status                       = $Status
+        IgnoreTimeouts               = $IgnoreTimeouts
+        Tail                         = $Tail
+        Debug                        = [bool]($PSBoundParameters.ContainsKey('Debug'))
+        WingetTimeoutSeconds         = $WingetTimeoutSeconds
+        WingetDiscoveryTimeoutSeconds = $WingetDiscoveryTimeoutSeconds
+        WindowsUpdateTimeoutSeconds   = $WindowsUpdateTimeoutSeconds
+        Include                      = $Include
+        LogRoot                      = $LogRoot
+    }
+
+    Write-Host 'Parameter state:'
+    foreach ($entry in $effectiveParameters.GetEnumerator()) {
+        Write-Host ("  {0}={1}" -f $entry.Key, (Format-NinjaLogValue -Value $entry.Value))
+    }
+}
+
 Write-Host '=== Ninja Reparo Bootstrap ==='
 Write-Host "Computer: $env:COMPUTERNAME"
 Write-Host "User: $([Security.Principal.WindowsIdentity]::GetCurrent().Name)"
 Write-Host "InstallRoot: $InstallRoot"
 Write-Host "LogRoot: $LogRoot"
 Write-Host "ReparoUrl: $ReparoUrl"
-$includeText = ''
-if ($Include -and $Include.Count -gt 0) {
-    $includeText = $Include -join ','
-}
-Write-Host ("Mode flags: Preview={0} Update={1} Winget={2} WingetDiscover={3} Force={4} Status={5} IgnoreTimeouts={6} Tail={7} Debug={8} Include={9}" -f $Preview, $Update, $Winget, $WingetDiscover, $Force, $Status, $IgnoreTimeouts, $Tail, $PSBoundParameters.ContainsKey('Debug'), $includeText)
+Write-NinjaParameterBlock
 Write-Host ("Timeouts: Winget={0} WingetDiscovery={1} WindowsUpdate={2}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds)
 Write-Host 'Preflight:'
 if ($Winget) {
@@ -143,6 +190,10 @@ Write-Host ("Launching Reparo: powershell.exe {0}" -f ($arguments -join ' '))
 Write-Host ("Forwarded to Reparo: {0}" -f ($arguments -join ' '))
 if ($PSBoundParameters.ContainsKey('Debug')) {
     Write-Host 'Ninja debug: passing -Debug through to Reparo'
+}
+Write-Host 'Forwarded argument list:'
+foreach ($argument in $arguments) {
+    Write-Host "  $argument"
 }
 
 & powershell.exe @arguments
