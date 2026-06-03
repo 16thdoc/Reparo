@@ -30,6 +30,7 @@ Reparo tries to add that folder to machine `PATH`, falling back to user `PATH` i
 reparo -Update
 reparo -Install
 reparo -Help
+reparo -Version
 reparo -Kill
 ```
 
@@ -175,6 +176,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | Default | Runs `WindowsUpdate` only. |
 | `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` from GitHub, with parse validation and backup handling. |
 | `-Help` | Prints Reparo usage and exits without running updates. |
+| `-Version` | Prints the Reparo version and exits without running updates. |
 | `-Kill` | Stops running Reparo PowerShell processes, using a graceful window close when available and force-stopping anything still running. |
 | `-Preview` | Logs what would run without executing package manager commands. |
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, and `WindowsUpdate`. |

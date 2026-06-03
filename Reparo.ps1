@@ -15,6 +15,7 @@ sections.
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Help,
+    [switch]$Version,
     [Alias('Install')]
     [switch]$New,
     [switch]$Preview,
@@ -34,17 +35,19 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$script:ReparoVersion = '0.2.0'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
 }
 
 function Show-ReparoHelp {
-    $helpText = @'
-Reparo
+    $helpText = @"
+Reparo $script:ReparoVersion
 
 Usage:
   reparo
+  reparo -Version
   reparo -Kill
   reparo -Update
   reparo -Install
@@ -59,6 +62,7 @@ Modes:
   -Kill                Stop running Reparo PowerShell processes.
   -Preview             Show what would run without executing update commands.
   -Include <sections>  Run only selected sections, for example: -Include Winget Choco.
+  -Version             Show the Reparo version.
   -Help                Show this help.
 
 Install/update:
@@ -74,13 +78,18 @@ Common sections:
 
 Logs:
   C:\ProgramData\Reparo\Logs
-'@
+"@
 
     Write-Host $helpText
 }
 
 if ($Help) {
     Show-ReparoHelp
+    return
+}
+
+if ($Version) {
+    Write-Host "Reparo $script:ReparoVersion"
     return
 }
 
