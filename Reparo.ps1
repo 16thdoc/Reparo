@@ -44,7 +44,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.13'
+$script:ReparoVersion = '0.2.14'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -551,10 +551,20 @@ function Finalize-ReparoLogFile {
 }
 
 function Get-ReparoRunningProcessInfo {
+    param(
+        [int[]]$ExcludeProcessIds = @()
+    )
+
+    $excludeSet = New-Object System.Collections.Generic.HashSet[int]
+    foreach ($processId in $ExcludeProcessIds) {
+        $null = $excludeSet.Add([int]$processId)
+    }
+
     $processes = @(
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object {
                 $_.Name -in @('powershell.exe', 'pwsh.exe') -and
+                -not $excludeSet.Contains([int]$_.ProcessId) -and
                 $_.CommandLine -and
                 $_.CommandLine -match '(?i)(^|[\\/\s''"])Reparo\.ps1([\\/\s''"]|$)' -and
                 $_.CommandLine -notmatch '(?i)(^|\s)-Kill(\s|$)'
@@ -620,7 +630,7 @@ function Get-ReparoActiveLogPath {
 }
 
 function Show-ReparoStatus {
-    $running = @(Get-ReparoRunningProcessInfo)
+    $running = @(Get-ReparoRunningProcessInfo -ExcludeProcessIds @($PID))
     Write-Host 'REPARO status' -ForegroundColor Magenta
 
     if ($running.Count -gt 0) {

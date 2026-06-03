@@ -230,7 +230,7 @@ While Reparo is running, the log is named with a `_RUNNING.log` suffix. After co
 The log also prints an exhaustive parameter block at startup so you can see every switch, timeout, path, and include list value that Reparo resolved for that run.
 
 Use `-Tail` or its alias `-Log` to follow the active log when used by itself. When combined with a run mode, it prints the tail of the current run's log file at the end of execution.
-Use `-Status` to see whether Reparo is currently running and which log file it is writing.
+Use `-Status` to see whether Reparo is currently running and which log file it is writing. The status probe excludes its own helper process so it does not report itself as the active run.
 Use `-Debug` when you want extra trace lines in the log for mode selection, command launch details, and bootstrap behavior. In Ninja, the wrapper now forwards `-Debug` through to Reparo.
 Use `-WingetDiscover` when you want to refresh the winget discovery list without running live upgrades.
 Use `-IgnoreTimeouts` when you explicitly want command steps to wait indefinitely. `-Force` turns this on automatically.
