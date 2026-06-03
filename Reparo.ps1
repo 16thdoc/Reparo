@@ -27,6 +27,7 @@ param(
     [switch]$WingetDiscover,
     [switch]$Force,
     [switch]$Kill,
+    [switch]$IgnoreTimeouts,
     [int]$WingetTimeoutSeconds = 1800,
     [int]$WingetDiscoveryTimeoutSeconds = 300,
     [int]$WindowsUpdateTimeoutSeconds = 1800,
@@ -43,7 +44,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.9'
+$script:ReparoVersion = '0.2.11'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -75,6 +76,7 @@ Modes:
                        discovery still runs so you can refresh the visible upgrade list.
   -WingetDiscover      Repair/register winget if needed, then run only winget discovery commands.
                        This refreshes the visible upgrade list without starting live installs.
+  -IgnoreTimeouts      Run command steps without timeout limits. Use only when you want the job to wait indefinitely.
   -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
   -Force               Run all sections, including developer toolchains and WSL apt handling.
   -Kill                Stop running Reparo PowerShell processes.
@@ -149,6 +151,7 @@ if ($Force) {
     $Preview = $false
     $WindowsUpdate = $true
     $WslApt = $true
+    $IgnoreTimeouts = $true
     $Include = $null
 }
 elseif ($Update) {
@@ -885,7 +888,7 @@ function Invoke-ReparoWingetDiscovery {
 
         try {
             $shell = Resolve-ReparoShell
-            $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command $step.Command -Section $step.Section -TimeoutSeconds $WingetDiscoveryTimeoutSeconds
+            $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command $step.Command -Section $step.Section -TimeoutSeconds $WingetDiscoveryTimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
             foreach ($item in @($result.Output)) {
                 $line = [string]$item
                 Write-Host $line
@@ -950,6 +953,23 @@ function Test-ReparoBenignExit {
 
     $text = ($Output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
     return ($text -match 'No installed package found matching input criteria|No applicable update found|No available upgrade found|No packages found')
+}
+
+function Get-ReparoWingetManualInterventionReason {
+    param(
+        [object[]]$Output
+    )
+
+    $text = ($Output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $null
+    }
+
+    if ($text -match 'install technology is different from the current version installed') {
+        return 'Winget found a newer version, but that package requires uninstall/reinstall because the installer technology changed.'
+    }
+
+    return $null
 }
 
 function Invoke-ReparoWingetRepair {
@@ -1282,14 +1302,20 @@ function Invoke-ReparoTimedCommand {
         [Parameter(Mandatory)][string]$ShellPath,
         [Parameter(Mandatory)][string]$Command,
         [Parameter(Mandatory)][string]$Section,
-        [int]$TimeoutSeconds = 1800
+        [int]$TimeoutSeconds = 1800,
+        [switch]$IgnoreTimeouts
     )
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $escapedCommand = $Command.Replace('"', '""')
     $arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"${escapedCommand}`""
 
-    Write-ReparoLog ("[CMD-START] {0} | timeout={1}s" -f $Section, $TimeoutSeconds)
+    if ($IgnoreTimeouts) {
+        Write-ReparoLog ("[CMD-START] {0} | timeout=disabled" -f $Section)
+    }
+    else {
+        Write-ReparoLog ("[CMD-START] {0} | timeout={1}s" -f $Section, $TimeoutSeconds)
+    }
     Write-ReparoDebug ("Launching {0} via {1} with arguments: {2}" -f $Section, $ShellPath, $arguments)
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
@@ -1305,16 +1331,21 @@ function Invoke-ReparoTimedCommand {
     $null = $process.Start()
     Write-ReparoDebug ("Started PID {0} for section {1}" -f $process.Id, $Section)
 
-    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-        try { $process.Kill() } catch { }
-        $stopwatch.Stop()
-        Write-ReparoLog ("[CMD-TIMEOUT] {0} timed out after {1}s" -f $Section, $TimeoutSeconds)
-        return [pscustomobject]@{
-            TimedOut = $true
-            ExitCode = 124
-            Output   = @("[TIMEOUT] $Section exceeded ${TimeoutSeconds}s")
-            Elapsed  = $stopwatch.Elapsed
+    if (-not $IgnoreTimeouts) {
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill() } catch { }
+            $stopwatch.Stop()
+            Write-ReparoLog ("[CMD-TIMEOUT] {0} timed out after {1}s" -f $Section, $TimeoutSeconds)
+            return [pscustomobject]@{
+                TimedOut = $true
+                ExitCode = 124
+                Output   = @("[TIMEOUT] $Section exceeded ${TimeoutSeconds}s")
+                Elapsed  = $stopwatch.Elapsed
+            }
         }
+    }
+    else {
+        $null = $process.WaitForExit()
     }
 
     $stdout = $process.StandardOutput.ReadToEnd()
@@ -1379,7 +1410,7 @@ function Invoke-ReparoCommandStep {
 
     try {
         $shell = Resolve-ReparoShell
-        $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command $Command -Section $Section -TimeoutSeconds $TimeoutSeconds
+        $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command $Command -Section $Section -TimeoutSeconds $TimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
         $output = @($result.Output)
         $exitCode = $result.ExitCode
         Write-ReparoDebug ("{0} output lines captured: {1}" -f $Section, $output.Count)
@@ -1388,6 +1419,13 @@ function Invoke-ReparoCommandStep {
             $line = [string]$item
             Write-Host $line
             Write-ReparoLog $line
+        }
+
+        $manualWingetReason = Get-ReparoWingetManualInterventionReason -Output $output
+        if ($manualWingetReason) {
+            Write-Warning $manualWingetReason
+            Write-ReparoLog ("[WARN] {0}" -f $manualWingetReason)
+            Add-ReparoSummaryNote $manualWingetReason
         }
 
         if ($result.TimedOut) {
@@ -1452,8 +1490,8 @@ $includeText = ''
 if ($Include -and $Include.Count -gt 0) {
     $includeText = $Include -join ','
 }
-Write-ReparoLog ("[FLAGS] Update={0} Force={1} Preview={2} WindowsUpdate={3} WslApt={4} Tail={5} Debug={6} Include={7}" -f $Update, $Force, $Preview, $WindowsUpdate, $WslApt, $Tail, $script:ReparoDebug, $includeText)
-Write-ReparoDebug ("Timeouts: Winget={0}s WingetDiscovery={1}s WindowsUpdate={2}s" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds)
+Write-ReparoLog ("[FLAGS] Update={0} Force={1} Preview={2} WindowsUpdate={3} WslApt={4} Tail={5} Status={6} IgnoreTimeouts={7} Debug={8} Include={9}" -f $Update, $Force, $Preview, $WindowsUpdate, $WslApt, $Tail, $Status, $IgnoreTimeouts, $script:ReparoDebug, $includeText)
+Write-ReparoDebug ("Timeouts: Winget={0}s WingetDiscovery={1}s WindowsUpdate={2}s IgnoreTimeouts={3}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds, $IgnoreTimeouts)
 Write-ReparoDebug ("Process identity: {0}" -f [Security.Principal.WindowsIdentity]::GetCurrent().Name)
 Write-ReparoDebug ("PowerShell version: {0}" -f $PSVersionTable.PSVersion)
 

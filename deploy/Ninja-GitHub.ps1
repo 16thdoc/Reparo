@@ -18,6 +18,7 @@ param(
     [switch]$WingetDiscover,
     [switch]$Force,
     [switch]$Status,
+    [switch]$IgnoreTimeouts,
     [Alias('Log')]
     [switch]$Tail,
     [int]$WingetTimeoutSeconds,
@@ -43,7 +44,7 @@ $includeText = ''
 if ($Include -and $Include.Count -gt 0) {
     $includeText = $Include -join ','
 }
-Write-Host ("Mode flags: Preview={0} Update={1} Winget={2} WingetDiscover={3} Force={4} Status={5} Tail={6} Debug={7} Include={8}" -f $Preview, $Update, $Winget, $WingetDiscover, $Force, $Status, $Tail, $PSBoundParameters.ContainsKey('Debug'), $includeText)
+Write-Host ("Mode flags: Preview={0} Update={1} Winget={2} WingetDiscover={3} Force={4} Status={5} IgnoreTimeouts={6} Tail={7} Debug={8} Include={9}" -f $Preview, $Update, $Winget, $WingetDiscover, $Force, $Status, $IgnoreTimeouts, $Tail, $PSBoundParameters.ContainsKey('Debug'), $includeText)
 Write-Host ("Timeouts: Winget={0} WingetDiscovery={1} WindowsUpdate={2}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds)
 Write-Host 'Preflight:'
 if ($Winget) {
@@ -68,6 +69,9 @@ elseif ($Force) {
 }
 else {
     Write-Host '  - Default Windows Update only.'
+}
+if ($IgnoreTimeouts) {
+    Write-Host '  - Timeouts are disabled for the run.'
 }
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
@@ -126,6 +130,9 @@ if ($PSBoundParameters.ContainsKey('WingetDiscoveryTimeoutSeconds')) {
 if ($PSBoundParameters.ContainsKey('WindowsUpdateTimeoutSeconds')) {
     $arguments += '-WindowsUpdateTimeoutSeconds'
     $arguments += $WindowsUpdateTimeoutSeconds
+}
+if ($IgnoreTimeouts) {
+    $arguments += '-IgnoreTimeouts'
 }
 
 if ($Tail) {

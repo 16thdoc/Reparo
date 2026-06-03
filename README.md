@@ -187,6 +187,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-WingetDiscover` | Repairs/refreshes winget if needed and runs only winget discovery commands. |
 | `-Tail` | Follows the active Reparo log when used by itself. When combined with a run mode, it prints the tail of that run's log at the end. |
 | `-Status` | Shows whether Reparo is currently running and points at the active log file. |
+| `-IgnoreTimeouts` | Runs command steps without timeout limits. `-Force` also enables this automatically. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
 | `-Force` | Runs the full local-dev-tool pass and enables Windows Update and WSL apt handling. Use carefully. |
 
@@ -231,6 +232,7 @@ Use `-Tail` or its alias `-Log` to follow the active log when used by itself. Wh
 Use `-Status` to see whether Reparo is currently running and which log file it is writing.
 Use `-Debug` when you want extra trace lines in the log for mode selection, command launch details, and bootstrap behavior. In Ninja, the wrapper now forwards `-Debug` through to Reparo.
 Use `-WingetDiscover` when you want to refresh the winget discovery list without running live upgrades.
+Use `-IgnoreTimeouts` when you explicitly want command steps to wait indefinitely. `-Force` turns this on automatically.
 Use `-WingetTimeoutSeconds`, `-WingetDiscoveryTimeoutSeconds`, and `-WindowsUpdateTimeoutSeconds` to override the live command timeouts when you need more runway for a big batch or a slow source.
 
 At the end of the run, Reparo prints a `REPARO summary` with:
@@ -269,6 +271,8 @@ For the live `Winget` upgrade path, Reparo now uses `--disable-interactivity`, `
 For `WindowsUpdate`, Reparo will try to install `PSWindowsUpdate` from PSGallery first. If that bootstrap fails because the session cannot reach PSGallery or cannot install modules, the section is skipped with a logged reason instead of failing silently.
 
 For `Winget`, Reparo now tries a repair/registration path when `winget` is missing. It logs `winget source list` and `winget list --upgrade-available` when you run `-Winget` so you can see what the client can actually discover before the upgrade pass starts.
+
+Some winget upgrades, including `Microsoft.PowerShell`, may require an uninstall/reinstall instead of an in-place upgrade when the installer technology changes. Reparo logs that message explicitly and leaves the package for manual handling rather than pretending the upgrade succeeded.
 
 ## Safety notes
 
