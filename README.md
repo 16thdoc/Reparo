@@ -188,6 +188,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Tail` | Follows the active Reparo log when used by itself. When combined with a run mode, it prints the tail of that run's log at the end. |
 | `-Status` | Shows whether Reparo is currently running and points at the active log file. |
 | `-IgnoreTimeouts` | Runs command steps without timeout limits. `-Force` also enables this automatically. |
+| `-InstallNuGetProvider` | Bootstraps the NuGet provider before PSGallery installs when `true` (default). Set it to `false` only if you want to suppress that bootstrap attempt. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
 | `-Force` | Runs the full local-dev-tool pass and enables Windows Update and WSL apt handling. Use carefully. |
 
@@ -235,6 +236,7 @@ Use `-Debug` when you want extra trace lines in the log for mode selection, comm
 Use `-WingetDiscover` when you want to refresh the winget discovery list without running live upgrades.
 Use `-IgnoreTimeouts` when you explicitly want command steps to wait indefinitely. `-Force` turns this on automatically.
 Use `-WingetTimeoutSeconds`, `-WingetDiscoveryTimeoutSeconds`, and `-WindowsUpdateTimeoutSeconds` to override the live command timeouts when you need more runway for a big batch or a slow source.
+Use `-InstallNuGetProvider:$false` if a managed environment wants to block NuGet provider bootstrapping, or leave it at the default `true` so Reparo can install it before PSGallery module installs.
 
 At the end of the run, Reparo prints a `REPARO summary` with:
 

@@ -24,6 +24,7 @@ param(
     [int]$WingetTimeoutSeconds,
     [int]$WingetDiscoveryTimeoutSeconds,
     [int]$WindowsUpdateTimeoutSeconds,
+    [bool]$InstallNuGetProvider = $true,
     [string[]]$Include,
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs"
 )
@@ -75,6 +76,7 @@ function Write-NinjaParameterBlock {
         WingetTimeoutSeconds         = $WingetTimeoutSeconds
         WingetDiscoveryTimeoutSeconds = $WingetDiscoveryTimeoutSeconds
         WindowsUpdateTimeoutSeconds   = $WindowsUpdateTimeoutSeconds
+        InstallNuGetProvider         = $InstallNuGetProvider
         Include                      = $Include
         LogRoot                      = $LogRoot
     }
@@ -93,6 +95,7 @@ Write-Host "LogRoot: $LogRoot"
 Write-Host "ReparoUrl: $ReparoUrl"
 Write-NinjaParameterBlock
 Write-Host ("Timeouts: Winget={0} WingetDiscovery={1} WindowsUpdate={2}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds)
+Write-Host ("NuGet provider bootstrap: {0}" -f $InstallNuGetProvider)
 Write-Host 'Preflight:'
 if ($Winget) {
     if ($Preview) {
@@ -177,6 +180,9 @@ if ($PSBoundParameters.ContainsKey('WingetDiscoveryTimeoutSeconds')) {
 if ($PSBoundParameters.ContainsKey('WindowsUpdateTimeoutSeconds')) {
     $arguments += '-WindowsUpdateTimeoutSeconds'
     $arguments += $WindowsUpdateTimeoutSeconds
+}
+if ($PSBoundParameters.ContainsKey('InstallNuGetProvider')) {
+    $arguments += "-InstallNuGetProvider:$InstallNuGetProvider"
 }
 if ($IgnoreTimeouts) {
     $arguments += '-IgnoreTimeouts'

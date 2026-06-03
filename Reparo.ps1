@@ -31,6 +31,7 @@ param(
     [int]$WingetTimeoutSeconds = 1800,
     [int]$WingetDiscoveryTimeoutSeconds = 300,
     [int]$WindowsUpdateTimeoutSeconds = 1800,
+    [bool]$InstallNuGetProvider = $true,
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs",
     [string]$InstallRoot = "$env:ProgramData\Reparo",
     [string]$SourceUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1',
@@ -91,6 +92,7 @@ function Write-ReparoParameterBlock {
         WingetTimeoutSeconds         = $WingetTimeoutSeconds
         WingetDiscoveryTimeoutSeconds = $WingetDiscoveryTimeoutSeconds
         WindowsUpdateTimeoutSeconds   = $WindowsUpdateTimeoutSeconds
+        InstallNuGetProvider         = $InstallNuGetProvider
         LogRoot                      = $LogRoot
         InstallRoot                  = $InstallRoot
         SourceUrl                    = $SourceUrl
@@ -105,6 +107,50 @@ function Write-ReparoParameterBlock {
     Write-ReparoLog '[FLAGS] Effective parameters:'
     foreach ($entry in $effectiveParameters.GetEnumerator()) {
         Write-ReparoLog ("[FLAGS]   {0}={1}" -f $entry.Key, (Format-ReparoLogValue -Value $entry.Value))
+    }
+}
+
+function Ensure-ReparoNuGetProvider {
+    if (-not $InstallNuGetProvider) {
+        Write-ReparoDebug 'NuGet provider bootstrap disabled by configuration.'
+        return $false
+    }
+
+    $minimumVersion = [Version]'2.8.5.201'
+
+    try {
+        $provider = Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue
+        if ($provider -and $provider.Version -and ([Version]$provider.Version -ge $minimumVersion)) {
+            Write-ReparoDebug ("NuGet provider already available: {0}" -f $provider.Version)
+
+            try {
+                Import-PackageProvider -Name NuGet -MinimumVersion $minimumVersion -Force -ErrorAction SilentlyContinue | Out-Null
+            }
+            catch {
+                Write-ReparoDebug ("NuGet provider import warning: {0}" -f $_.Exception.Message)
+            }
+
+            return $true
+        }
+
+        Write-ReparoLog '[INFO] NuGet provider missing or outdated; attempting bootstrap from PSGallery.'
+        Write-ReparoDebug 'Starting NuGet provider bootstrap path.'
+
+        if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
+            Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
+        }
+
+        Install-PackageProvider -Name NuGet -MinimumVersion $minimumVersion -Force -ForceBootstrap -Scope AllUsers -Confirm:$false -ErrorAction Stop | Out-Null
+        Import-PackageProvider -Name NuGet -MinimumVersion $minimumVersion -Force -ErrorAction Stop | Out-Null
+
+        Write-ReparoLog '[DONE] NuGet provider installed successfully.'
+        Write-ReparoDebug 'NuGet provider bootstrap completed successfully.'
+        return $true
+    }
+    catch {
+        Write-ReparoLog ("[WARN] NuGet provider install failed: {0}" -f $_.Exception.Message)
+        Write-ReparoDebug ("NuGet provider bootstrap failed: {0}" -f $_.Exception.Message)
+        return $false
     }
 }
 
@@ -150,6 +196,7 @@ Timeouts:
   -WingetTimeoutSeconds          Override the live Winget upgrade timeout.
   -WingetDiscoveryTimeoutSeconds Override the discovery timeout used by -Winget.
   -WindowsUpdateTimeoutSeconds   Override the live Windows Update timeout.
+  -InstallNuGetProvider         When true (default), bootstrap the NuGet provider before PSGallery installs.
 
 Windows Update:
   Reparo will try to install PSWindowsUpdate from PSGallery if the module is missing
@@ -859,13 +906,9 @@ function Ensure-ReparoPSWindowsUpdate {
             Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
         }
 
-        if (-not (Get-Module -ListAvailable -Name 'NuGet')) {
-            try {
-                Install-PackageProvider -Name NuGet -Force -Scope AllUsers -ErrorAction Stop | Out-Null
-            }
-            catch {
-                Write-ReparoLog ("[WARN] NuGet provider install failed: {0}" -f $_.Exception.Message)
-            }
+        if (-not (Ensure-ReparoNuGetProvider)) {
+            Write-ReparoLog '[WARN] NuGet provider unavailable; skipping PSWindowsUpdate bootstrap.'
+            return $false
         }
 
         Install-Module -Name 'PSWindowsUpdate' -Force -AllowClobber -Scope AllUsers -Repository 'PSGallery' -ErrorAction Stop | Out-Null
@@ -903,8 +946,9 @@ function Ensure-ReparoWinget {
                     Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
                 }
 
-                if (Get-Command Install-PackageProvider -ErrorAction SilentlyContinue) {
-                    Install-PackageProvider -Name NuGet -Force -Scope AllUsers -ErrorAction SilentlyContinue | Out-Null
+                if (-not (Ensure-ReparoNuGetProvider)) {
+                    Write-ReparoLog '[WARN] NuGet provider unavailable; skipping Microsoft.WinGet.Client bootstrap.'
+                    return $false
                 }
 
                 Install-Module -Name 'Microsoft.WinGet.Client' -Force -AllowClobber -Scope AllUsers -Repository 'PSGallery' -ErrorAction Stop | Out-Null
