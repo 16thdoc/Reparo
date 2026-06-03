@@ -25,6 +25,9 @@ param(
     [switch]$Update,
     [switch]$Winget,
     [switch]$WingetDiscover,
+    [switch]$MigrateChocoToWinget,
+    [string]$ChocoWingetMapPath,
+    [string[]]$MigrateChocoExclude,
     [switch]$Force,
     [switch]$Kill,
     [string[]]$KillUpdaterNames,
@@ -53,7 +56,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.20'
+$script:ReparoVersion = '0.2.21'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -94,6 +97,9 @@ function Write-ReparoParameterBlock {
         Update                       = $Update
         Winget                       = $Winget
         WingetDiscover               = $WingetDiscover
+        MigrateChocoToWinget         = $MigrateChocoToWinget
+        ChocoWingetMapPath           = $ChocoWingetMapPath
+        MigrateChocoExclude          = $MigrateChocoExclude
         Force                        = $Force
         Kill                         = $Kill
         KillUpdaterNames             = $KillUpdaterNames
@@ -179,6 +185,8 @@ Usage:
   reparo -Preview -Update
   reparo -Winget
   reparo -WingetDiscover
+  reparo -Preview -MigrateChocoToWinget
+  reparo -MigrateChocoToWinget
   reparo -Tail
   reparo -Status
   reparo -Include Winget Choco
@@ -192,6 +200,14 @@ Modes:
                        discovery still runs so you can refresh the visible upgrade list.
   -WingetDiscover      Repair/register winget if needed, then run only winget discovery commands.
                        This refreshes the visible upgrade list without starting live installs.
+  -MigrateChocoToWinget
+                       Inventory Chocolatey packages, match known/exact winget packages,
+                       install with winget, then uninstall the Chocolatey package after success.
+                       Use -Preview first to report what would migrate.
+  -ChocoWingetMapPath  Optional JSON or CSV map for site-specific package IDs.
+                       JSON can be an object like {"git":"Git.Git"} or an array with
+                       ChocoId/WingetId/Source fields. CSV uses ChocoId,WingetId,Source.
+  -MigrateChocoExclude Extra Chocolatey package IDs to skip during migration.
   -IgnoreTimeouts      Disable command-step timeout enforcement even when timeout parameters are supplied.
   -AllowReboot,-Reboot Allow Windows Update to auto-reboot if PSWindowsUpdate requires it.
                        Default behavior still uses -IgnoreReboot.
@@ -1030,7 +1046,7 @@ if ($Status) {
     return
 }
 
-if ($Tail -and -not ($Update -or $Winget -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill)) {
+if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $MigrateChocoToWinget -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill)) {
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
@@ -1101,10 +1117,13 @@ function Test-ReparoSectionSelected($Section) {
         $includeText = $Include -join ','
     }
 
-    Write-ReparoDebug ("Test-ReparoSectionSelected({0}) Force={1} Update={2} WindowsUpdate={3} Include={4}" -f $Section, $Force, $Update, $WindowsUpdate, $includeText)
+    Write-ReparoDebug ("Test-ReparoSectionSelected({0}) Force={1} Update={2} WindowsUpdate={3} MigrateChocoToWinget={4} Include={5}" -f $Section, $Force, $Update, $WindowsUpdate, $MigrateChocoToWinget, $includeText)
     if ($Force) { return $true }
     if ($Include -and $Include.Count -gt 0) {
         return ($Include -contains $Section)
+    }
+    if ($MigrateChocoToWinget -and -not ($Update -or $WindowsUpdate -or $Winget -or $WingetDiscover -or $WslApt)) {
+        return $false
     }
 
     return ($Section -eq 'WindowsUpdate')
@@ -1581,6 +1600,345 @@ function Add-ReparoSectionUpdates {
     Add-ReparoSummaryNote ("{0} completed, but no package-level update list was available." -f $Section)
 }
 
+function Get-ReparoChocoWingetBuiltinMap {
+    $map = [ordered]@{
+        '7zip'                         = '7zip.7zip'
+        '7zip.install'                 = '7zip.7zip'
+        'adobereader'                  = 'Adobe.Acrobat.Reader.64-bit'
+        'audacity'                     = 'Audacity.Audacity'
+        'autohotkey'                   = 'AutoHotkey.AutoHotkey'
+        'awscli'                       = 'Amazon.AWSCLI'
+        'azure-cli'                    = 'Microsoft.AzureCLI'
+        'bitwarden'                    = 'Bitwarden.Bitwarden'
+        'brave'                        = 'Brave.Brave'
+        'calibre'                      = 'calibre.calibre'
+        'discord'                      = 'Discord.Discord'
+        'docker-desktop'               = 'Docker.DockerDesktop'
+        'dotnet'                       = 'Microsoft.DotNet.SDK.8'
+        'dotnet-8.0-sdk'               = 'Microsoft.DotNet.SDK.8'
+        'dotnet-9.0-sdk'               = 'Microsoft.DotNet.SDK.9'
+        'dropbox'                      = 'Dropbox.Dropbox'
+        'everything'                   = 'voidtools.Everything'
+        'firefox'                      = 'Mozilla.Firefox'
+        'ffmpeg'                       = 'Gyan.FFmpeg'
+        'git'                          = 'Git.Git'
+        'git.install'                  = 'Git.Git'
+        'github-desktop'               = 'GitHub.GitHubDesktop'
+        'googlechrome'                 = 'Google.Chrome'
+        'googledrive'                  = 'Google.GoogleDrive'
+        'greenshot'                    = 'Greenshot.Greenshot'
+        'handbrake'                    = 'HandBrake.HandBrake'
+        'handbrake.install'            = 'HandBrake.HandBrake'
+        'itunes'                       = 'Apple.iTunes'
+        'javaruntime'                  = 'Oracle.JavaRuntimeEnvironment'
+        'jdk8'                         = 'EclipseAdoptium.Temurin.8.JDK'
+        'jdk11'                        = 'EclipseAdoptium.Temurin.11.JDK'
+        'jdk17'                        = 'EclipseAdoptium.Temurin.17.JDK'
+        'jdk21'                        = 'EclipseAdoptium.Temurin.21.JDK'
+        'jq'                           = 'jqlang.jq'
+        'keepassxc'                    = 'KeePassXCTeam.KeePassXC'
+        'krita'                        = 'KDE.Krita'
+        'libreoffice-fresh'            = 'TheDocumentFoundation.LibreOffice'
+        'microsoft-teams'              = 'Microsoft.Teams'
+        'microsoft-windows-terminal'   = 'Microsoft.WindowsTerminal'
+        'microsoftazurestorageexplorer' = 'Microsoft.Azure.StorageExplorer'
+        'nodejs'                       = 'OpenJS.NodeJS'
+        'nodejs.install'               = 'OpenJS.NodeJS'
+        'notepadplusplus'              = 'Notepad++.Notepad++'
+        'notepadplusplus.install'      = 'Notepad++.Notepad++'
+        'obs-studio'                   = 'OBSProject.OBSStudio'
+        'paint.net'                    = 'dotPDN.PaintDotNet'
+        'plex'                         = 'Plex.Plex'
+        'plexamp'                      = 'Plex.Plexamp'
+        'postman'                      = 'Postman.Postman'
+        'powertoys'                    = 'Microsoft.PowerToys'
+        'python'                       = 'Python.Python.3.14'
+        'python3'                      = 'Python.Python.3.14'
+        'python313'                    = 'Python.Python.3.13'
+        'python314'                    = 'Python.Python.3.14'
+        'putty'                        = 'PuTTY.PuTTY'
+        'rufus'                        = 'Rufus.Rufus'
+        'signal'                       = 'OpenWhisperSystems.Signal'
+        'slack'                        = 'SlackTechnologies.Slack'
+        'spotify'                      = 'Spotify.Spotify'
+        'steam'                        = 'Valve.Steam'
+        'sysinternals'                 = 'Microsoft.Sysinternals'
+        'teamviewer'                   = 'TeamViewer.TeamViewer'
+        'terraform'                    = 'Hashicorp.Terraform'
+        'thunderbird'                  = 'Mozilla.Thunderbird'
+        'vivaldi'                      = 'Vivaldi.Vivaldi'
+        'vlc'                          = 'VideoLAN.VLC'
+        'vlc.install'                  = 'VideoLAN.VLC'
+        'vscode'                       = 'Microsoft.VisualStudioCode'
+        'vscode.install'               = 'Microsoft.VisualStudioCode'
+        'winscp'                       = 'WinSCP.WinSCP'
+        'wireshark'                    = 'WiresharkFoundation.Wireshark'
+        'zoom'                         = 'Zoom.Zoom'
+    }
+
+    return $map
+}
+
+function Add-ReparoChocoWingetMapEntry {
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Map,
+        [Parameter(Mandatory)][string]$ChocoId,
+        [Parameter(Mandatory)][string]$WingetId,
+        [string]$Source
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ChocoId) -or [string]::IsNullOrWhiteSpace($WingetId)) {
+        return
+    }
+
+    $key = $ChocoId.Trim().ToLowerInvariant()
+    $Map[$key] = [pscustomobject]@{
+        WingetId = $WingetId.Trim()
+        Source   = if ([string]::IsNullOrWhiteSpace($Source)) { 'winget' } else { $Source.Trim() }
+    }
+}
+
+function Get-ReparoChocoWingetMap {
+    $map = @{}
+
+    foreach ($entry in (Get-ReparoChocoWingetBuiltinMap).GetEnumerator()) {
+        Add-ReparoChocoWingetMapEntry -Map $map -ChocoId $entry.Key -WingetId $entry.Value -Source 'winget'
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ChocoWingetMapPath)) {
+        return $map
+    }
+
+    if (-not (Test-Path -LiteralPath $ChocoWingetMapPath)) {
+        throw "Choco winget map path not found: $ChocoWingetMapPath"
+    }
+
+    $extension = [System.IO.Path]::GetExtension($ChocoWingetMapPath)
+    if ($extension -eq '.json') {
+        $json = Get-Content -LiteralPath $ChocoWingetMapPath -Raw | ConvertFrom-Json
+        if ($json -is [System.Array]) {
+            foreach ($row in $json) {
+                Add-ReparoChocoWingetMapEntry -Map $map -ChocoId $row.ChocoId -WingetId $row.WingetId -Source $row.Source
+            }
+        }
+        else {
+            foreach ($property in $json.PSObject.Properties) {
+                if ($property.Value -is [string]) {
+                    Add-ReparoChocoWingetMapEntry -Map $map -ChocoId $property.Name -WingetId $property.Value -Source 'winget'
+                }
+                else {
+                    Add-ReparoChocoWingetMapEntry -Map $map -ChocoId $property.Name -WingetId $property.Value.WingetId -Source $property.Value.Source
+                }
+            }
+        }
+
+        return $map
+    }
+
+    $rows = Import-Csv -LiteralPath $ChocoWingetMapPath
+    foreach ($row in $rows) {
+        Add-ReparoChocoWingetMapEntry -Map $map -ChocoId $row.ChocoId -WingetId $row.WingetId -Source $row.Source
+    }
+
+    return $map
+}
+
+function Get-ReparoChocoPackages {
+    if (-not (Test-ReparoExecutable -Name 'choco' -Arguments @('--version'))) {
+        throw 'Chocolatey is not available in this context.'
+    }
+
+    $output = @(choco list --local-only --limit-output --no-color 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "choco list failed with exit code $LASTEXITCODE"
+    }
+
+    $packages = New-Object System.Collections.Generic.List[object]
+    foreach ($item in $output) {
+        $line = ([string]$item).Trim()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line -notmatch '\|') { continue }
+
+        $parts = $line -split '\|'
+        if ($parts.Count -lt 2) { continue }
+
+        [void]$packages.Add([pscustomobject]@{
+            ChocoId = $parts[0].Trim()
+            Version = $parts[1].Trim()
+        })
+    }
+
+    return $packages.ToArray()
+}
+
+function Test-ReparoWingetPackageAvailable {
+    param(
+        [Parameter(Mandatory)][string]$WingetId,
+        [string]$Source = 'winget'
+    )
+
+    $arguments = @('search', '--id', $WingetId, '--exact', '--accept-source-agreements', '--disable-interactivity')
+    if (-not [string]::IsNullOrWhiteSpace($Source)) {
+        $arguments += @('--source', $Source)
+    }
+
+    $output = @(& winget @arguments 2>&1)
+    foreach ($line in $output) {
+        Write-ReparoLog ("[MIGRATE] winget search: {0}" -f ([string]$line))
+    }
+
+    return ($LASTEXITCODE -eq 0 -and (($output -join "`n") -match [regex]::Escape($WingetId)))
+}
+
+function Invoke-ReparoLoggedNativeCommand {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    Write-ReparoLog ("[CMD] {0} {1}" -f $FilePath, ($Arguments -join ' '))
+    $output = @(& $FilePath @Arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+
+    foreach ($line in $output) {
+        Write-ReparoLog ("[{0}] {1}" -f $Label, ([string]$line))
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output   = $output
+    }
+}
+
+function Invoke-ReparoChocoToWingetMigration {
+    Write-Step 'Chocolatey to winget migration'
+    Write-ReparoLog '[STEP] Chocolatey to winget migration'
+
+    $hasWinget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
+    if (-not $hasWinget) {
+        $hasWinget = Ensure-ReparoWinget
+    }
+
+    if (-not $hasWinget) {
+        Write-Skip 'winget not found or could not be repaired; skipping migration'
+        Write-ReparoLog '[SKIP] winget not found or could not be repaired; skipping migration'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'ChocoToWinget' -Version '-' -Method 'choco->winget' -Reason 'winget not found or could not be repaired'
+        return
+    }
+
+    try {
+        $packages = @(Get-ReparoChocoPackages)
+    }
+    catch {
+        Write-Fail $_.Exception.Message
+        Write-ReparoLog ("[ERROR] {0}" -f $_.Exception.Message)
+        Add-ReparoSummaryRecord -Bucket Failed -Software 'ChocoToWinget' -Version '-' -Method 'choco->winget' -Reason $_.Exception.Message
+        return
+    }
+
+    if (-not $packages -or $packages.Count -eq 0) {
+        Write-Skip 'No Chocolatey packages found.'
+        Write-ReparoLog '[SKIP] No Chocolatey packages found'
+        Add-ReparoSummaryNote 'Chocolatey migration found no local Chocolatey packages.'
+        return
+    }
+
+    try {
+        $map = Get-ReparoChocoWingetMap
+    }
+    catch {
+        Write-Fail $_.Exception.Message
+        Write-ReparoLog ("[ERROR] {0}" -f $_.Exception.Message)
+        Add-ReparoSummaryRecord -Bucket Failed -Software 'ChocoToWinget' -Version '-' -Method 'choco->winget' -Reason $_.Exception.Message
+        return
+    }
+
+    $defaultExclude = @(
+        'chocolatey',
+        'chocolatey-agent',
+        'chocolatey-compatibility.extension',
+        'chocolatey-core.extension',
+        'chocolatey-dotnetfx.extension',
+        'chocolatey-fastanswers.extension',
+        'chocolatey-font-helpers.extension',
+        'chocolatey-misc-helpers.extension',
+        'chocolatey-windowsupdate.extension'
+    )
+    $excludeSet = @{}
+    foreach ($exclude in (@($defaultExclude) + @($MigrateChocoExclude))) {
+        if (-not [string]::IsNullOrWhiteSpace($exclude)) {
+            $excludeSet[$exclude.Trim().ToLowerInvariant()] = $true
+        }
+    }
+
+    foreach ($package in ($packages | Sort-Object ChocoId)) {
+        $chocoId = [string]$package.ChocoId
+        $chocoKey = $chocoId.ToLowerInvariant()
+
+        if ($excludeSet.ContainsKey($chocoKey)) {
+            Write-Skip "Skipping Chocolatey infrastructure package: $chocoId"
+            Write-ReparoLog ("[SKIP] {0}: excluded from migration" -f $chocoId)
+            Add-ReparoSummaryRecord -Bucket Skipped -Software $chocoId -CurrentVersion $package.Version -Version '-' -Method 'choco->winget' -Reason 'excluded'
+            continue
+        }
+
+        if (-not $map.ContainsKey($chocoKey)) {
+            Write-Skip "No winget map for Chocolatey package: $chocoId"
+            Write-ReparoLog ("[SKIP] {0}: no winget map" -f $chocoId)
+            Add-ReparoSummaryRecord -Bucket Skipped -Software $chocoId -CurrentVersion $package.Version -Version '-' -Method 'choco->winget' -Reason 'no winget map'
+            continue
+        }
+
+        $target = $map[$chocoKey]
+        Write-ReparoLog ("[MIGRATE] {0} {1} -> {2} ({3})" -f $chocoId, $package.Version, $target.WingetId, $target.Source)
+
+        if (-not (Test-ReparoWingetPackageAvailable -WingetId $target.WingetId -Source $target.Source)) {
+            Write-Skip "winget package not found for $chocoId -> $($target.WingetId)"
+            Add-ReparoSummaryRecord -Bucket Skipped -Software $chocoId -CurrentVersion $package.Version -Version $target.WingetId -Method 'choco->winget' -Reason 'winget package not found'
+            continue
+        }
+
+        if ($Preview) {
+            Write-Info "Preview: would install winget $($target.WingetId), then uninstall Chocolatey package $chocoId"
+            Write-ReparoLog ("[PREVIEW] Would migrate {0} -> {1}" -f $chocoId, $target.WingetId)
+            Add-ReparoSummaryRecord -Bucket Updated -Software $chocoId -CurrentVersion $package.Version -Version $target.WingetId -Method 'choco->winget' -Reason 'preview'
+            continue
+        }
+
+        $wingetArgs = @(
+            'install',
+            '--id', $target.WingetId,
+            '--exact',
+            '--source', $target.Source,
+            '--accept-source-agreements',
+            '--accept-package-agreements',
+            '--disable-interactivity',
+            '--silent',
+            '--force'
+        )
+        $wingetResult = Invoke-ReparoLoggedNativeCommand -FilePath 'winget' -Arguments $wingetArgs -Label 'WINGET'
+        if ($wingetResult.ExitCode -ne 0) {
+            $reason = "winget install exit code $($wingetResult.ExitCode)"
+            Write-Fail "$chocoId migration failed: $reason"
+            Add-ReparoSummaryRecord -Bucket Failed -Software $chocoId -CurrentVersion $package.Version -Version $target.WingetId -Method 'choco->winget' -Reason $reason
+            continue
+        }
+
+        $chocoArgs = @('uninstall', $chocoId, '-y', '--no-progress')
+        $chocoResult = Invoke-ReparoLoggedNativeCommand -FilePath 'choco' -Arguments $chocoArgs -Label 'CHOCO'
+        if ($chocoResult.ExitCode -ne 0) {
+            $reason = "choco uninstall exit code $($chocoResult.ExitCode)"
+            Write-Fail "$chocoId installed with winget but Chocolatey uninstall failed: $reason"
+            Add-ReparoSummaryRecord -Bucket Failed -Software $chocoId -CurrentVersion $package.Version -Version $target.WingetId -Method 'choco->winget' -Reason $reason
+            continue
+        }
+
+        Write-Done "Migrated $chocoId -> $($target.WingetId)"
+        Write-ReparoLog ("[DONE] Migrated {0} -> {1}" -f $chocoId, $target.WingetId)
+        Add-ReparoSummaryRecord -Bucket Updated -Software $chocoId -CurrentVersion $package.Version -Version $target.WingetId -Method 'choco->winget' -Reason 'migrated'
+    }
+}
+
 function Write-ReparoSummaryTable {
     param(
         [string]$Title,
@@ -1878,6 +2236,9 @@ if ($Force) {
 elseif ($Update) {
     $mode = 'UPDATE'
 }
+elseif ($MigrateChocoToWinget) {
+    $mode = 'MIGRATE CHOCO TO WINGET'
+}
 elseif ($Include) {
     $mode = "INCLUDE: {0}" -f ($Include -join ',')
 }
@@ -1894,6 +2255,10 @@ Write-ReparoParameterBlock
 Write-ReparoDebug ("Timeouts: Winget={0}s WingetDiscovery={1}s WindowsUpdate={2}s IgnoreTimeouts={3}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds, $IgnoreTimeouts)
 Write-ReparoDebug ("Process identity: {0}" -f [Security.Principal.WindowsIdentity]::GetCurrent().Name)
 Write-ReparoDebug ("PowerShell version: {0}" -f $PSVersionTable.PSVersion)
+
+if ($MigrateChocoToWinget) {
+    Invoke-ReparoChocoToWingetMigration
+}
 
 $runWingetSections = (Test-ReparoSectionSelected 'Winget') -or (Test-ReparoSectionSelected 'Winget(msstore)') -or $Winget -or $WingetDiscover
 if ($runWingetSections) {

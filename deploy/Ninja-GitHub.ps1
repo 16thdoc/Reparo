@@ -16,6 +16,9 @@ param(
     [switch]$Update = $true,
     [switch]$Winget,
     [switch]$WingetDiscover,
+    [switch]$MigrateChocoToWinget,
+    [string]$ChocoWingetMapPath,
+    [string[]]$MigrateChocoExclude,
     [switch]$Force,
     [switch]$Kill,
     [switch]$Status,
@@ -76,6 +79,9 @@ function Write-NinjaParameterBlock {
         Update                       = $Update
         Winget                       = $Winget
         WingetDiscover               = $WingetDiscover
+        MigrateChocoToWinget         = $MigrateChocoToWinget
+        ChocoWingetMapPath           = $ChocoWingetMapPath
+        MigrateChocoExclude          = $MigrateChocoExclude
         Force                        = $Force
         Kill                         = $Kill
         Status                       = $Status
@@ -120,6 +126,14 @@ if ($Winget) {
 }
 elseif ($WingetDiscover) {
     Write-Host '  - Winget discovery only; live winget upgrades will be skipped.'
+}
+elseif ($MigrateChocoToWinget) {
+    if ($Preview) {
+        Write-Host '  - Chocolatey to winget migration preview; no packages will be installed or removed.'
+    }
+    else {
+        Write-Host '  - Chocolatey to winget migration; matched packages install with winget before Chocolatey removal.'
+    }
 }
 elseif ($Kill) {
     Write-Host '  - Kill pass; Reparo processes and known updater front ends will be stopped.'
@@ -171,6 +185,9 @@ if ($Winget) {
 if ($WingetDiscover) {
     $arguments += '-WingetDiscover'
 }
+if ($MigrateChocoToWinget) {
+    $arguments += '-MigrateChocoToWinget'
+}
 if ($Force) {
     $arguments += '-Force'
 }
@@ -215,6 +232,14 @@ if ($IgnoreTimeouts) {
 if ($PSBoundParameters.ContainsKey('KillUpdaterNames')) {
     $arguments += '-KillUpdaterNames'
     $arguments += $KillUpdaterNames
+}
+if ($PSBoundParameters.ContainsKey('ChocoWingetMapPath')) {
+    $arguments += '-ChocoWingetMapPath'
+    $arguments += $ChocoWingetMapPath
+}
+if ($PSBoundParameters.ContainsKey('MigrateChocoExclude')) {
+    $arguments += '-MigrateChocoExclude'
+    $arguments += $MigrateChocoExclude
 }
 
 if ($Tail) {

@@ -6,7 +6,7 @@ It updates common package managers and toolchains when they are already present 
 
 ## What it does
 
-By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, and developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, and WSL.
+By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, and WSL, plus a Chocolatey-to-winget migration pass.
 
 Reparo does not install package managers from scratch. It only uses tools that are already present, then skips the sections that are not available.
 
@@ -51,6 +51,18 @@ Run only selected sections:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Include Winget Choco
+```
+
+Preview Chocolatey-to-winget migration:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -MigrateChocoToWinget
+```
+
+Run Chocolatey-to-winget migration:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -MigrateChocoToWinget
 ```
 
 ## RMM deployment
@@ -186,6 +198,9 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, and `WindowsUpdate`. |
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |
 | `-WingetDiscover` | Repairs/refreshes winget if needed and runs only winget discovery commands. |
+| `-MigrateChocoToWinget` | Inventories local Chocolatey packages, matches known or mapped winget IDs, installs the winget package, then uninstalls the Chocolatey package after winget succeeds. |
+| `-ChocoWingetMapPath <path>` | Adds or overrides Chocolatey-to-winget package mappings from a JSON or CSV file. |
+| `-MigrateChocoExclude <ids>` | Skips extra Chocolatey package IDs during migration. Chocolatey infrastructure packages are excluded automatically. |
 | `-Tail` | Follows the active Reparo log when used by itself. When combined with a run mode, it prints the tail of that run's log at the end. |
 | `-TailLines <count>` | Controls how many existing log lines `-Tail` prints before following. Default: `400`. |
 | `-Status` | Shows whether Reparo is currently running and points at the active log file. |
@@ -221,6 +236,59 @@ Available section names:
 - `WslApt`
 - `WindowsUpdate`
 
+## Chocolatey to winget migration
+
+Use `-MigrateChocoToWinget` when you want to move a workstation away from Chocolatey package ownership and toward winget package ownership.
+
+The migration pass is intentionally conservative:
+
+- It lists locally installed Chocolatey packages with `choco list --local-only --limit-output --no-color`.
+- It skips Chocolatey infrastructure packages such as `chocolatey` and Chocolatey extension packages.
+- It migrates only packages with a built-in mapping or a mapping supplied by `-ChocoWingetMapPath`.
+- It verifies the target winget package with `winget search --id <id> --exact`.
+- In live mode, it installs the mapped winget package first.
+- It uninstalls the Chocolatey package only after the winget install command succeeds.
+- Packages without a map, unavailable winget targets, failed installs, and failed uninstalls are reported in the final summary and log.
+
+Always start with:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -MigrateChocoToWinget
+```
+
+Then run live mode on a pilot machine:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -MigrateChocoToWinget
+```
+
+For Ninja/GitHub bootstrap deployments, use:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy\Ninja-GitHub.ps1 -Preview -MigrateChocoToWinget
+```
+
+Custom maps can be JSON:
+
+```json
+{
+  "git": "Git.Git",
+  "vscode": "Microsoft.VisualStudioCode",
+  "example-choco-id": {
+    "WingetId": "Vendor.Package",
+    "Source": "winget"
+  }
+}
+```
+
+Or CSV:
+
+```csv
+ChocoId,WingetId,Source
+git,Git.Git,winget
+vscode,Microsoft.VisualStudioCode,winget
+```
+
 ## Logging
 
 Logs are written to:
@@ -253,7 +321,7 @@ At the end of the run, Reparo prints a `REPARO summary` with:
 - notes for completed sections that do not expose a clean package-level update list
 - the log path
 
-Package-level update details are currently collected for `Winget`, `Winget(msstore)`, `Choco`, and `Scoop`. Other ecosystems still report section-level completion and write their raw tool output to the log.
+Package-level update details are currently collected for `Winget`, `Winget(msstore)`, `Choco`, `Scoop`, and `MigrateChocoToWinget`. Other ecosystems still report section-level completion and write their raw tool output to the log.
 
 You can override the log location:
 
@@ -266,6 +334,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Update -Lo
 - Windows PowerShell 5.1 or PowerShell 7+
 - Administrative rights for Windows Update operations
 - Existing package managers for each selected section
+- `choco` and `winget` available in the same execution context for `-MigrateChocoToWinget`
 - `PSWindowsUpdate` is auto-installed from PSGallery when possible for the `WindowsUpdate` section
 
 `winget` and Microsoft Store behavior can vary by Windows build, execution context, source agreement state, tenant policy, and device policy. Test from the same context your RMM will use, especially when running as `SYSTEM`.
