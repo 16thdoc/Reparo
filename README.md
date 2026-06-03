@@ -180,6 +180,18 @@ Pass multiple SSH aliases or hosts to install the same ProgramData runtime on se
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy\Install-ReparoRemote.ps1 -ComputerName marajade,laptop
 ```
 
+### Option 5: ScreenConnect / Backstage tools
+
+ScreenConnect-ready command files are included under `deploy\ScreenConnect`.
+
+| Tool | Purpose |
+| --- | --- |
+| `Install-Reparo.bat` | Installs or updates the ProgramData runtime from GitHub, repairs the `reparo.cmd` shim, and checks `reparo -Version`. |
+| `Run-Reparo-System.cmd` | Creates and starts a one-shot SYSTEM scheduled task that runs `C:\ProgramData\Reparo\Reparo.ps1 -Update`. |
+| `Run-Reparo-Force-System.cmd` | Creates and starts a one-shot SYSTEM scheduled task that runs `C:\ProgramData\Reparo\Reparo.ps1 -Force`. |
+
+Run these from an elevated/admin or SYSTEM context. The installer is intentionally idempotent: if Reparo is already installed, it downloads the current GitHub script and updates the existing runtime in place.
+
 ### Private repo note
 
 For client endpoints, a public repo or Ninja-hosted script copy is usually cleaner than embedding GitHub credentials. If the repo is private, avoid hard-coding a personal access token in the Ninja script body. Use Ninja-managed secure variables only if you truly need private GitHub delivery.
