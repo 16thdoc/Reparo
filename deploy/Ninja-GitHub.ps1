@@ -43,6 +43,27 @@ if ($Include -and $Include.Count -gt 0) {
 }
 Write-Host ("Mode flags: Preview={0} Update={1} Winget={2} Force={3} Tail={4} Debug={5} Include={6}" -f $Preview, $Update, $Winget, $Force, $Tail, $PSBoundParameters.ContainsKey('Debug'), $includeText)
 Write-Host ("Timeouts: Winget={0} WingetDiscovery={1} WindowsUpdate={2}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds)
+Write-Host 'Preflight:'
+if ($Winget) {
+    if ($Preview) {
+        Write-Host '  - Winget discovery will run, but live winget upgrades will stay in preview mode.'
+    }
+    else {
+        Write-Host '  - Winget discovery will run, then live winget upgrades will execute.'
+    }
+}
+elseif ($Preview) {
+    Write-Host '  - Preview only; Reparo will log commands without running live package installs.'
+}
+elseif ($Update) {
+    Write-Host '  - Managed-client update pass.'
+}
+elseif ($Force) {
+    Write-Host '  - Full maintenance pass.'
+}
+else {
+    Write-Host '  - Default Windows Update only.'
+}
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 $scriptPath = Join-Path $InstallRoot 'Reparo.ps1'
@@ -101,6 +122,7 @@ if ($Tail) {
 }
 
 Write-Host ("Launching Reparo: powershell.exe {0}" -f ($arguments -join ' '))
+Write-Host ("Forwarded to Reparo: {0}" -f ($arguments -join ' '))
 if ($PSBoundParameters.ContainsKey('Debug')) {
     Write-Host 'Ninja debug: passing -Debug through to Reparo'
 }

@@ -41,7 +41,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.6'
+$script:ReparoVersion = '0.2.7'
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
     $Include = @($Include) + @($RemainingInclude)
@@ -66,7 +66,8 @@ Modes:
   -Update              Run the managed-client pass: Winget, Winget(msstore), Choco, WindowsUpdate.
                         Updated package rows show current version -> target version when available.
   -Winget              Run a winget-focused pass. Reparo attempts to repair/register App Installer,
-                       logs discovery output, then runs the Winget sections.
+                       logs discovery output, then runs the Winget sections. In preview mode,
+                       discovery still runs so you can refresh the visible upgrade list.
   -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
   -Force               Run all sections, including developer toolchains and WSL apt handling.
   -Kill                Stop running Reparo PowerShell processes.
@@ -645,12 +646,52 @@ function Ensure-ReparoWinget {
 }
 
 function Invoke-ReparoWingetDiscovery {
-    if (-not (Test-ReparoSectionSelected 'Winget')) {
+    param(
+        [switch]$PreviewOnly
+    )
+
+    if (-not (Test-ReparoSectionSelected 'Winget') -and -not $Winget) {
         return
     }
 
-    Invoke-ReparoCommandStep -Section 'Winget(source list)' -PresenceCmd 'winget' -Command 'winget source list' -TimeoutSeconds $WingetDiscoveryTimeoutSeconds
-    Invoke-ReparoCommandStep -Section 'Winget(list upgrades)' -PresenceCmd 'winget' -Command 'winget list --upgrade-available' -TimeoutSeconds $WingetDiscoveryTimeoutSeconds
+    foreach ($step in @(
+        @{ Section = 'Winget(source list)'; Command = 'winget source list' }
+        @{ Section = 'Winget(list upgrades)'; Command = 'winget list --upgrade-available' }
+        @{ Section = 'Winget(upgrade list)'; Command = 'winget upgrade' }
+    )) {
+        if (-not (Test-ReparoSectionTool -Section 'Winget' -PresenceCmd 'winget')) {
+            return
+        }
+
+        Write-ReparoLog ("[DISCOVERY] {0}" -f $step.Section)
+        Write-ReparoLog ("[CMD] {0}" -f $step.Command)
+        if ($PreviewOnly) {
+            Write-ReparoDebug ("Preview-only winget discovery will still execute: {0}" -f $step.Command)
+        }
+
+        try {
+            $shell = Resolve-ReparoShell
+            $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command $step.Command -Section $step.Section -TimeoutSeconds $WingetDiscoveryTimeoutSeconds
+            foreach ($item in @($result.Output)) {
+                $line = [string]$item
+                Write-Host $line
+                Write-ReparoLog $line
+            }
+
+            if ($result.TimedOut) {
+                Write-ReparoLog ("[WARN] {0} discovery timed out after {1}" -f $step.Section, $result.Elapsed)
+            }
+            elseif ($result.ExitCode -ne 0) {
+                Write-ReparoLog ("[WARN] {0} discovery exit code {1}" -f $step.Section, $result.ExitCode)
+            }
+            else {
+                Write-ReparoLog ("[DONE] {0} discovery complete" -f $step.Section)
+            }
+        }
+        catch {
+            Write-ReparoLog ("[WARN] {0} discovery failed: {1}" -f $step.Section, $_.Exception.Message)
+        }
+    }
 }
 
 function Resolve-ReparoShell {
@@ -1213,7 +1254,7 @@ if ($runWingetSections) {
 
     if ($hasWinget) {
         if ($Winget) {
-            Invoke-ReparoWingetDiscovery
+            Invoke-ReparoWingetDiscovery -PreviewOnly:$Preview
         }
 
         Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command 'winget upgrade --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force' -TimeoutSeconds $WingetTimeoutSeconds
