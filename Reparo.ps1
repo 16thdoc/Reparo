@@ -28,6 +28,7 @@ param(
     [switch]$MigrateChocoToWinget,
     [string]$ChocoWingetMapPath,
     [string[]]$MigrateChocoExclude,
+    [switch]$InstallSpicetify,
     [switch]$Force,
     [switch]$Kill,
     [string[]]$KillUpdaterNames,
@@ -56,7 +57,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.22'
+$script:ReparoVersion = '0.2.23'
 
 function Get-ReparoVersionQuote {
     param([string]$Version = $script:ReparoVersion)
@@ -129,6 +130,7 @@ function Write-ReparoParameterBlock {
         MigrateChocoToWinget         = $MigrateChocoToWinget
         ChocoWingetMapPath           = $ChocoWingetMapPath
         MigrateChocoExclude          = $MigrateChocoExclude
+        InstallSpicetify             = $InstallSpicetify
         Force                        = $Force
         Kill                         = $Kill
         KillUpdaterNames             = $KillUpdaterNames
@@ -235,6 +237,8 @@ Modes:
                        Inventory Chocolatey packages, match known/exact winget packages,
                        install with winget, then uninstall the Chocolatey package after success.
                        Use -Preview first to report what would migrate.
+  -InstallSpicetify    Install or reinstall Spicetify Marketplace in the logged-on user's context,
+                       then run Spicetify update and backup/apply.
   -ChocoWingetMapPath  Optional JSON or CSV map for site-specific package IDs.
                        JSON can be an object like {"git":"Git.Git"} or an array with
                        ChocoId/WingetId/Source fields. CSV uses ChocoId,WingetId,Source.
@@ -279,7 +283,8 @@ After install, new PowerShell sessions can usually run:
 
 Common sections:
   Winget, Winget(msstore), Choco, WindowsUpdate, Scoop, Pip, Pipx, Npm,
-  Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer, Wsl, WslApt.
+  Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer, Spicetify,
+  Wsl, WslApt.
 
 Logs:
   C:\ProgramData\Reparo\Logs
@@ -331,6 +336,9 @@ if ($Force) {
 elseif ($Update) {
     $WindowsUpdate = $true
     $Include = $updateSections
+}
+elseif ($InstallSpicetify) {
+    $Include = @('Spicetify')
 }
 
 if (-not (Test-Path -LiteralPath $LogRoot)) {
@@ -1078,7 +1086,7 @@ if ($Status) {
     return
 }
 
-if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $MigrateChocoToWinget -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill)) {
+if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $MigrateChocoToWinget -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill)) {
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
@@ -1141,6 +1149,41 @@ function Test-Admin {
     catch {
         return $false
     }
+}
+
+function Test-ReparoSystemIdentity {
+    try {
+        return ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18')
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-ReparoInteractiveUserName {
+    try {
+        $explorers = @(Get-CimInstance Win32_Process -Filter "Name = 'explorer.exe'" -ErrorAction SilentlyContinue)
+        foreach ($explorer in $explorers | Sort-Object CreationDate -Descending) {
+            try {
+                $owner = Invoke-CimMethod -InputObject $explorer -MethodName GetOwner -ErrorAction Stop
+                if ($owner -and -not [string]::IsNullOrWhiteSpace($owner.User)) {
+                    if ([string]::IsNullOrWhiteSpace($owner.Domain)) {
+                        return $owner.User
+                    }
+
+                    return ('{0}\{1}' -f $owner.Domain, $owner.User)
+                }
+            }
+            catch {
+                Write-ReparoDebug ("Unable to inspect explorer.exe owner for PID {0}: {1}" -f $explorer.ProcessId, $_.Exception.Message)
+            }
+        }
+    }
+    catch {
+        Write-ReparoDebug ("Unable to enumerate explorer.exe for interactive user detection: {0}" -f $_.Exception.Message)
+    }
+
+    return $null
 }
 
 function Test-ReparoSectionSelected($Section) {
@@ -1466,6 +1509,7 @@ function Test-ReparoSectionTool {
         'conda' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
         'gem' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
         'composer' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
+        'spicetify' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
         'wsl' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--status')) }
         default { return (Test-Cmd $PresenceCmd) }
     }
@@ -2262,6 +2306,270 @@ function Invoke-ReparoCommandStep {
     }
 }
 
+function New-ReparoSpicetifyWorkerScript {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [Parameter(Mandatory)][string]$StatusPath,
+        [switch]$PreviewOnly,
+        [switch]$InstallRequested
+    )
+
+    $script = @"
+`$ErrorActionPreference = 'Continue'
+`$outputPath = $(ConvertTo-ReparoPowerShellLiteral -Value $OutputPath)
+`$statusPath = $(ConvertTo-ReparoPowerShellLiteral -Value $StatusPath)
+`$previewOnly = `$$($PreviewOnly.IsPresent.ToString().ToLowerInvariant())
+`$installRequested = `$$($InstallRequested.IsPresent.ToString().ToLowerInvariant())
+
+function Write-ReparoSpicetifyOutput {
+    param([object]`$Value)
+    `$line = [string]`$Value
+    Add-Content -LiteralPath `$outputPath -Value `$line -Encoding UTF8
+}
+
+function Resolve-ReparoSpicetifyCommand {
+    `$command = Get-Command spicetify -CommandType Application -ErrorAction SilentlyContinue
+    if (`$command) { return `$command.Source }
+
+    `$candidates = @(
+        (Join-Path `$env:APPDATA 'spicetify\spicetify.exe'),
+        (Join-Path `$env:LOCALAPPDATA 'spicetify\spicetify.exe'),
+        (Join-Path `$env:USERPROFILE '.spicetify\spicetify.exe')
+    )
+
+    foreach (`$candidate in `$candidates) {
+        if (-not [string]::IsNullOrWhiteSpace(`$candidate) -and (Test-Path -LiteralPath `$candidate)) {
+            return `$candidate
+        }
+    }
+
+    return `$null
+}
+
+try {
+    Write-ReparoSpicetifyOutput ("[INFO] Spicetify worker identity: {0}" -f [Security.Principal.WindowsIdentity]::GetCurrent().Name)
+    `$spicetify = Resolve-ReparoSpicetifyCommand
+    if (`$installRequested) {
+        Write-ReparoSpicetifyOutput '[STEP] Spicetify install/reinstall'
+        if (`$previewOnly) {
+            Write-ReparoSpicetifyOutput '[DRY-RUN] Invoke-WebRequest https://raw.githubusercontent.com/spicetify/marketplace/main/resources/install.ps1'
+            Write-ReparoSpicetifyOutput '[DRY-RUN] powershell -File install.ps1 -BypassAdmin'
+        }
+        else {
+            `$installerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("spicetify-install-{0}.ps1" -f [guid]::NewGuid())
+            Write-ReparoSpicetifyOutput ("[CMD] Download Spicetify installer to {0}" -f `$installerPath)
+            Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/spicetify/marketplace/main/resources/install.ps1' -OutFile `$installerPath
+            Unblock-File -LiteralPath `$installerPath -ErrorAction SilentlyContinue
+            `$installOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File `$installerPath -BypassAdmin 2>&1)
+            `$installExit = `$LASTEXITCODE
+            foreach (`$line in `$installOutput) { Write-ReparoSpicetifyOutput ([string]`$line) }
+            Remove-Item -LiteralPath `$installerPath -Force -ErrorAction SilentlyContinue
+            if (`$installExit -ne 0) {
+                Write-ReparoSpicetifyOutput ("[ERROR] Spicetify installer failed with exit code {0}" -f `$installExit)
+                Set-Content -LiteralPath `$statusPath -Value ([string]`$installExit) -Encoding ASCII
+                exit `$installExit
+            }
+
+            `$spicetify = Resolve-ReparoSpicetifyCommand
+        }
+    }
+
+    if (-not `$spicetify) {
+        Write-ReparoSpicetifyOutput '[SKIP] spicetify was not found in the interactive user context.'
+        Set-Content -LiteralPath `$statusPath -Value '42' -Encoding ASCII
+        exit 42
+    }
+
+    Write-ReparoSpicetifyOutput ("[CHECK] spicetify path: {0}" -f `$spicetify)
+    `$versionOutput = @(& `$spicetify --version 2>&1)
+    foreach (`$line in `$versionOutput) { Write-ReparoSpicetifyOutput ("[CHECK] {0}" -f [string]`$line) }
+
+    if (`$previewOnly) {
+        Write-ReparoSpicetifyOutput '[DRY-RUN] spicetify update'
+        Write-ReparoSpicetifyOutput '[DRY-RUN] spicetify backup apply'
+        Set-Content -LiteralPath `$statusPath -Value '0' -Encoding ASCII
+        exit 0
+    }
+
+    foreach (`$step in @(
+        @{ Label = 'Spicetify update'; Args = @('update') },
+        @{ Label = 'Spicetify backup apply'; Args = @('backup', 'apply') }
+    )) {
+        Write-ReparoSpicetifyOutput ("[STEP] {0}" -f `$step.Label)
+        `$output = @(& `$spicetify @(`$step.Args) 2>&1)
+        `$exit = `$LASTEXITCODE
+        foreach (`$line in `$output) { Write-ReparoSpicetifyOutput ([string]`$line) }
+        if (`$exit -ne 0) {
+            Write-ReparoSpicetifyOutput ("[ERROR] {0} failed with exit code {1}" -f `$step.Label, `$exit)
+            Set-Content -LiteralPath `$statusPath -Value ([string]`$exit) -Encoding ASCII
+            exit `$exit
+        }
+    }
+
+    Write-ReparoSpicetifyOutput '[DONE] Spicetify update and backup/apply completed.'
+    Set-Content -LiteralPath `$statusPath -Value '0' -Encoding ASCII
+    exit 0
+}
+catch {
+    `$message = (`$_ | Out-String).Trim()
+    if ([string]::IsNullOrWhiteSpace(`$message)) { `$message = `$_.Exception.Message }
+    Write-ReparoSpicetifyOutput ("[ERROR] {0}" -f `$message)
+    Set-Content -LiteralPath `$statusPath -Value '1' -Encoding ASCII
+    exit 1
+}
+"@
+
+    Set-Content -LiteralPath $Path -Value $script -Encoding UTF8
+}
+
+function Sync-ReparoSpicetifyOutput {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][ref]$LineCount
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    try {
+        $lines = @(Get-Content -LiteralPath $Path -ErrorAction Stop)
+    }
+    catch {
+        return
+    }
+
+    if ($lines.Count -le $LineCount.Value) {
+        return
+    }
+
+    if ($LineCount.Value -le 0) {
+        $newLines = $lines
+    }
+    else {
+        $newLines = $lines[$LineCount.Value..($lines.Count - 1)]
+    }
+
+    foreach ($line in $newLines) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+            Write-Host ([string]$line)
+            Write-ReparoLog ("[CMD-OUT] Spicetify: {0}" -f [string]$line)
+        }
+    }
+
+    $LineCount.Value = $lines.Count
+}
+
+function Invoke-ReparoSpicetify {
+    if (-not (Test-ReparoSectionSelected 'Spicetify')) { return }
+
+    Write-Step 'Spicetify'
+    Write-ReparoLog '[STEP] Spicetify'
+    Write-ReparoLog '[INFO] Spicetify runs in the interactive user context because Spotify and Spicetify state are per-user.'
+
+    $safeSection = ConvertTo-ReparoSafeFileName -Value 'Spicetify'
+    $workerScriptPath = Join-Path $LogRoot ("{0}_{1}.command.ps1" -f $script:ReparoLogBaseName, $safeSection)
+    $workerOutputPath = Join-Path $LogRoot ("{0}_{1}.out.log" -f $script:ReparoLogBaseName, $safeSection)
+    $workerStatusPath = Join-Path $LogRoot ("{0}_{1}.exit" -f $script:ReparoLogBaseName, $safeSection)
+    Remove-Item -LiteralPath $workerScriptPath, $workerOutputPath, $workerStatusPath -Force -ErrorAction SilentlyContinue
+    New-ReparoSpicetifyWorkerScript -Path $workerScriptPath -OutputPath $workerOutputPath -StatusPath $workerStatusPath -PreviewOnly:$Preview -InstallRequested:$InstallSpicetify
+
+    $lineCount = 0
+    $timeoutSeconds = 600
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+    try {
+        if ((Test-Admin) -or (Test-ReparoSystemIdentity)) {
+            $interactiveUser = Get-ReparoInteractiveUserName
+            if ([string]::IsNullOrWhiteSpace($interactiveUser)) {
+                Write-Skip 'Spicetify requested, but no logged-on Explorer user was found.'
+                Write-ReparoLog '[SKIP] Spicetify requested, but no logged-on Explorer user was found'
+                Add-ReparoSummaryRecord -Bucket Skipped -Software 'Spicetify' -Version '-' -Method 'spicetify' -Reason 'no logged-on Explorer user found'
+                return
+            }
+
+            $shell = Resolve-ReparoShell
+            $taskName = ('Reparo-Spicetify-{0}-{1}' -f $env:COMPUTERNAME, $PID)
+            $taskRun = '"{0}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{1}"' -f $shell, $workerScriptPath
+            $startTime = (Get-Date).AddMinutes(1).ToString('HH:mm')
+            Write-ReparoLog ("[CMD] schtasks /Create /TN {0} /RU {1} /IT /RL LIMITED /TR {2}" -f $taskName, $interactiveUser, $taskRun)
+            $createOutput = @(schtasks.exe /Create /TN $taskName /TR $taskRun /SC ONCE /ST $startTime /RU $interactiveUser /IT /RL LIMITED /F 2>&1)
+            foreach ($line in $createOutput) { Write-ReparoLog ("[CMD-OUT] Spicetify task create: {0}" -f [string]$line) }
+            if ($LASTEXITCODE -ne 0) {
+                throw "Unable to create Spicetify user-context scheduled task. schtasks exit code: $LASTEXITCODE"
+            }
+
+            Write-ReparoLog ("[CMD] schtasks /Run /TN {0}" -f $taskName)
+            $runOutput = @(schtasks.exe /Run /TN $taskName 2>&1)
+            foreach ($line in $runOutput) { Write-ReparoLog ("[CMD-OUT] Spicetify task run: {0}" -f [string]$line) }
+            if ($LASTEXITCODE -ne 0) {
+                throw "Unable to start Spicetify user-context scheduled task. schtasks exit code: $LASTEXITCODE"
+            }
+        }
+        else {
+            $shell = Resolve-ReparoShell
+            Write-ReparoLog ("[CMD] {0} -NoProfile -ExecutionPolicy Bypass -File {1}" -f $shell, $workerScriptPath)
+            $process = Start-Process -FilePath $shell -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $workerScriptPath) -WindowStyle Hidden -PassThru
+            Write-ReparoDebug ("Started Spicetify worker PID {0}" -f $process.Id)
+        }
+
+        while (-not (Test-Path -LiteralPath $workerStatusPath)) {
+            Start-Sleep -Milliseconds 500
+            Sync-ReparoSpicetifyOutput -Path $workerOutputPath -LineCount ([ref]$lineCount)
+
+            if ($stopwatch.Elapsed.TotalSeconds -ge $timeoutSeconds) {
+                throw "Spicetify worker did not finish within ${timeoutSeconds}s."
+            }
+        }
+
+        Sync-ReparoSpicetifyOutput -Path $workerOutputPath -LineCount ([ref]$lineCount)
+        $exitText = (Get-Content -LiteralPath $workerStatusPath -ErrorAction SilentlyContinue | Select-Object -First 1)
+        $exitCode = 1
+        if (-not [int]::TryParse([string]$exitText, [ref]$exitCode)) {
+            $exitCode = 1
+        }
+
+        if ($exitCode -eq 0) {
+            if ($Preview) {
+                Write-Skip 'Spicetify (preview only)'
+                Add-ReparoSummaryRecord -Bucket Skipped -Software 'Spicetify' -Version '-' -Method 'spicetify' -Reason 'preview only'
+            }
+            else {
+                Write-Done 'Spicetify complete'
+                if ($InstallSpicetify) {
+                    Add-ReparoSummaryNote 'Spicetify completed install/reinstall, update, and backup/apply in the interactive user context.'
+                }
+                else {
+                    Add-ReparoSummaryNote 'Spicetify completed update and backup/apply in the interactive user context.'
+                }
+            }
+        }
+        elseif ($exitCode -eq 42) {
+            Write-Skip 'spicetify not found in the interactive user context; skipping'
+            Add-ReparoSummaryRecord -Bucket Skipped -Software 'Spicetify' -Version '-' -Method 'spicetify' -Reason 'spicetify not found in interactive user context'
+        }
+        else {
+            Write-Fail "Spicetify failed with exit code $exitCode"
+            Add-ReparoSummaryRecord -Bucket Failed -Software 'Spicetify' -Version '-' -Method 'spicetify' -Reason "exit code $exitCode"
+        }
+    }
+    catch {
+        Write-Fail "Spicetify failed: $($_.Exception.Message)"
+        Write-ReparoLog ("[ERROR] Spicetify: {0}" -f $_.Exception.Message)
+        Add-ReparoSummaryRecord -Bucket Failed -Software 'Spicetify' -Version '-' -Method 'spicetify' -Reason $_.Exception.Message
+    }
+    finally {
+        if ($taskName) {
+            schtasks.exe /Delete /TN $taskName /F 2>&1 | ForEach-Object {
+                Write-ReparoDebug ("Spicetify task cleanup: {0}" -f [string]$_)
+            }
+        }
+
+        Remove-Item -LiteralPath $workerScriptPath, $workerStatusPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 if ($Force) {
     $mode = 'FORCE'
 }
@@ -2270,6 +2578,9 @@ elseif ($Update) {
 }
 elseif ($MigrateChocoToWinget) {
     $mode = 'MIGRATE CHOCO TO WINGET'
+}
+elseif ($InstallSpicetify) {
+    $mode = 'INSTALL SPICETIFY'
 }
 elseif ($Include) {
     $mode = "INCLUDE: {0}" -f ($Include -join ',')
@@ -2394,6 +2705,7 @@ Invoke-ReparoCommandStep -Section 'CargoBins' -PresenceCmd 'cargo-install-update
 Invoke-ReparoCommandStep -Section 'Conda' -PresenceCmd 'conda' -Command 'conda update -n base conda -y; conda update --all -y'
 Invoke-ReparoCommandStep -Section 'Gem' -PresenceCmd 'gem' -Command 'gem update --system; gem update'
 Invoke-ReparoCommandStep -Section 'Composer' -PresenceCmd 'composer' -Command 'composer self-update; composer global update'
+Invoke-ReparoSpicetify
 Invoke-ReparoCommandStep -Section 'Wsl' -PresenceCmd 'wsl' -Command 'wsl --update; wsl --shutdown'
 
 if ($WslApt -and (Test-ReparoSectionSelected 'WslApt')) {

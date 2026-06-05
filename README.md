@@ -6,7 +6,7 @@ It updates common package managers and toolchains when they are already present 
 
 ## What it does
 
-By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, and WSL, plus a Chocolatey-to-winget migration pass.
+By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, Spicetify, and WSL, plus a Chocolatey-to-winget migration pass.
 
 Reparo does not install package managers from scratch. It only uses tools that are already present, then skips the sections that are not available.
 
@@ -213,6 +213,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-MigrateChocoToWinget` | Inventories local Chocolatey packages, matches known or mapped winget IDs, installs the winget package, then uninstalls the Chocolatey package after winget succeeds. |
 | `-ChocoWingetMapPath <path>` | Adds or overrides Chocolatey-to-winget package mappings from a JSON or CSV file. |
 | `-MigrateChocoExclude <ids>` | Skips extra Chocolatey package IDs during migration. Chocolatey infrastructure packages are excluded automatically. |
+| `-InstallSpicetify` | Installs or reinstalls Spicetify Marketplace in the logged-on user's context, then runs update and backup/apply. |
 | `-Tail` | Follows the active Reparo log when used by itself. When combined with a run mode, it prints the tail of that run's log at the end. |
 | `-TailLines <count>` | Controls how many existing log lines `-Tail` prints before following. Default: `400`. |
 | `-Status` | Shows whether Reparo is currently running and points at the active log file. |
@@ -220,7 +221,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-AllowReboot` / `-Reboot` | Allows the Windows Update section to pass `-AutoReboot`. By default Reparo passes `-IgnoreReboot`. |
 | `-InstallNuGetProvider` | Bootstraps the NuGet provider before PSGallery installs when `true` (default). Set it to `false` only if you want to suppress that bootstrap attempt. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
-| `-Force` | Runs the full local-dev-tool pass and enables Windows Update and WSL apt handling. Use carefully. |
+| `-Force` | Runs the full local-dev-tool pass, includes the per-user Spicetify update/backup/apply section, and enables Windows Update and WSL apt handling. Use carefully. |
 
 ## Sections
 
@@ -244,9 +245,33 @@ Available section names:
 - `Conda`
 - `Gem`
 - `Composer`
+- `Spicetify`
 - `Wsl`
 - `WslApt`
 - `WindowsUpdate`
+
+### Spicetify
+
+The `Spicetify` section is included in `-Force` and can also be run directly:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Include Spicetify
+```
+
+To install or reinstall Spicetify Marketplace for the logged-on user, use:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -InstallSpicetify
+```
+
+Spicetify is intentionally handled as a per-user tool. When Reparo is running elevated or as `SYSTEM`, it creates a short-lived hidden interactive scheduled task for the logged-on Explorer user, then runs:
+
+```powershell
+spicetify update
+spicetify backup apply
+```
+
+If `-InstallSpicetify` is present, Reparo first runs the official Spicetify Marketplace PowerShell installer from that same user context. That installer also bootstraps the Spicetify CLI when needed. If Spicetify is not installed or cannot be resolved during ordinary `-Force`, the section is skipped.
 
 ## Chocolatey to winget migration
 
@@ -346,10 +371,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Update -Lo
 - Windows PowerShell 5.1 or PowerShell 7+
 - Administrative rights for Windows Update operations
 - Existing package managers for each selected section
+- A logged-on Explorer user for the `Spicetify` section when Reparo is running elevated or as `SYSTEM`
 - `choco` and `winget` available in the same execution context for `-MigrateChocoToWinget`
 - `PSWindowsUpdate` is auto-installed from PSGallery when possible for the `WindowsUpdate` section
 
 `winget` and Microsoft Store behavior can vary by Windows build, execution context, source agreement state, tenant policy, and device policy. Test from the same context your RMM will use, especially when running as `SYSTEM`.
+
+Spicetify behavior is user-context sensitive because Spotify and Spicetify files live under the interactive user's profile. Do not run the underlying Spicetify commands as admin unless you intentionally want to target the elevated account's profile instead of the desktop user's Spotify install.
 
 ## Troubleshooting
 
