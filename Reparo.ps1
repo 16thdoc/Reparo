@@ -57,7 +57,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.23'
+$script:ReparoVersion = '0.2.24'
 
 function Get-ReparoVersionQuote {
     param([string]$Version = $script:ReparoVersion)
@@ -2491,20 +2491,25 @@ function Invoke-ReparoSpicetify {
 
             $shell = Resolve-ReparoShell
             $taskName = ('Reparo-Spicetify-{0}-{1}' -f $env:COMPUTERNAME, $PID)
-            $taskRun = '"{0}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{1}"' -f $shell, $workerScriptPath
-            $startTime = (Get-Date).AddMinutes(1).ToString('HH:mm')
-            Write-ReparoLog ("[CMD] schtasks /Create /TN {0} /RU {1} /IT /RL LIMITED /TR {2}" -f $taskName, $interactiveUser, $taskRun)
-            $createOutput = @(schtasks.exe /Create /TN $taskName /TR $taskRun /SC ONCE /ST $startTime /RU $interactiveUser /IT /RL LIMITED /F 2>&1)
-            foreach ($line in $createOutput) { Write-ReparoLog ("[CMD-OUT] Spicetify task create: {0}" -f [string]$line) }
-            if ($LASTEXITCODE -ne 0) {
-                throw "Unable to create Spicetify user-context scheduled task. schtasks exit code: $LASTEXITCODE"
+            $taskArguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $workerScriptPath
+            Write-ReparoLog ("[CMD] Register-ScheduledTask -TaskName {0} -UserId {1} -Execute {2} -Argument {3}" -f $taskName, $interactiveUser, $shell, $taskArguments)
+
+            try {
+                $action = New-ScheduledTaskAction -Execute $shell -Argument $taskArguments
+                $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
+                $principal = New-ScheduledTaskPrincipal -UserId $interactiveUser -LogonType Interactive -RunLevel Limited
+                Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force -ErrorAction Stop | Out-Null
+            }
+            catch {
+                throw "Unable to create Spicetify user-context scheduled task. $($_.Exception.Message)"
             }
 
-            Write-ReparoLog ("[CMD] schtasks /Run /TN {0}" -f $taskName)
-            $runOutput = @(schtasks.exe /Run /TN $taskName 2>&1)
-            foreach ($line in $runOutput) { Write-ReparoLog ("[CMD-OUT] Spicetify task run: {0}" -f [string]$line) }
-            if ($LASTEXITCODE -ne 0) {
-                throw "Unable to start Spicetify user-context scheduled task. schtasks exit code: $LASTEXITCODE"
+            try {
+                Write-ReparoLog ("[CMD] Start-ScheduledTask -TaskName {0}" -f $taskName)
+                Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+            }
+            catch {
+                throw "Unable to start Spicetify user-context scheduled task. $($_.Exception.Message)"
             }
         }
         else {
@@ -2561,8 +2566,12 @@ function Invoke-ReparoSpicetify {
     }
     finally {
         if ($taskName) {
-            schtasks.exe /Delete /TN $taskName /F 2>&1 | ForEach-Object {
-                Write-ReparoDebug ("Spicetify task cleanup: {0}" -f [string]$_)
+            try {
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
+                Write-ReparoDebug ("Spicetify task cleanup: deleted {0}" -f $taskName)
+            }
+            catch {
+                Write-ReparoDebug ("Spicetify task cleanup failed for {0}: {1}" -f $taskName, $_.Exception.Message)
             }
         }
 
@@ -2639,17 +2648,58 @@ Invoke-ReparoCommandStep -Section 'Choco' -PresenceCmd 'choco' -Command 'choco u
 
 if (Test-ReparoSectionSelected 'Pip') {
     $ranPip = $false
+    $seenPipSources = @{}
     foreach ($pipName in @('pip', 'pip3')) {
         if (Test-Cmd $pipName) {
+            $pipCommand = Get-Command $pipName -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            $pipSourceKey = if ($pipCommand -and $pipCommand.Source) { [string]$pipCommand.Source } else { $pipName }
+            if ($seenPipSources.ContainsKey($pipSourceKey)) {
+                continue
+            }
+            $seenPipSources[$pipSourceKey] = $true
+
             Invoke-ReparoCommandStep -Section 'Pip' -PresenceCmd '' -Command @"
-`$ErrorActionPreference = 'Stop'
-& $pipName install --upgrade pip
-`$outdated = & $pipName list --outdated --format=json | Out-String
+`$ErrorActionPreference = 'Continue'
+`$pipName = '$pipName'
+`$pipCommand = Get-Command `$pipName -CommandType Application -ErrorAction Stop | Select-Object -First 1
+`$pythonCommand = `$null
+if (`$pipCommand.Source) {
+    `$pipScripts = Split-Path -Parent `$pipCommand.Source
+    `$pipRoot = Split-Path -Parent `$pipScripts
+    `$candidate = Join-Path `$pipRoot 'python.exe'
+    if (Test-Path -LiteralPath `$candidate) {
+        `$pythonCommand = `$candidate
+    }
+}
+if (-not `$pythonCommand) {
+    `$pythonCommandInfo = Get-Command python -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (`$pythonCommandInfo) {
+        `$pythonCommand = `$pythonCommandInfo.Source
+    }
+}
+if (`$pythonCommand) {
+    & `$pythonCommand -m pip install --upgrade pip
+}
+else {
+    & `$pipName install --upgrade pip
+}
+if (`$LASTEXITCODE -ne 0) {
+    throw 'Failed upgrading pip package: pip'
+}
+`$outdated = & `$pipName list --outdated --format=json | Out-String
 if (-not [string]::IsNullOrWhiteSpace(`$outdated)) {
     `$packages = `$outdated | ConvertFrom-Json
     foreach (`$pkg in `$packages) {
         if (`$pkg.name) {
-            & $pipName install --upgrade `$pkg.name
+            if ([string]`$pkg.name -ieq 'pip') {
+                continue
+            }
+            if (`$pythonCommand) {
+                & `$pythonCommand -m pip install --upgrade `$pkg.name
+            }
+            else {
+                & `$pipName install --upgrade `$pkg.name
+            }
             if (`$LASTEXITCODE -ne 0) {
                 throw "Failed upgrading pip package: `$(`$pkg.name)"
             }
