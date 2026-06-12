@@ -273,6 +273,18 @@ spicetify backup apply
 
 If `-InstallSpicetify` is present, Reparo first runs the official Spicetify Marketplace PowerShell installer from that same user context. That installer also bootstraps the Spicetify CLI when needed. If Spicetify is not installed or cannot be resolved during ordinary `-Force`, the section is skipped.
 
+If `spicetify backup apply` reports that a backup already exists and asks for `spicetify restore backup` before creating another backup, Reparo treats that as an already-backed-up state and continues. It does not clear or replace the existing Spicetify backup automatically.
+
+### WSL apt
+
+`WslApt` runs Debian/Ubuntu apt maintenance only for WSL distros where `apt` is present and noninteractive privilege escalation is available. Reparo checks `sudo -n` before starting apt work so an RMM or scheduled run does not hang on a Linux password prompt. The apt step also has its own timeout:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Include WslApt -WslAptTimeoutSeconds 1800
+```
+
+Set `-WslAptTimeoutSeconds 0` to disable that timeout, or use `-IgnoreTimeouts` to disable all configured command-step timeouts.
+
 ## Chocolatey to winget migration
 
 Use `-MigrateChocoToWinget` when you want to move a workstation away from Chocolatey package ownership and toward winget package ownership.
@@ -347,7 +359,7 @@ Use `-WingetDiscover` when you want to refresh the winget discovery list without
 Use `-Kill` when a run is stuck; it stops matched Reparo process trees and then sweeps known updater front ends so orphaned `winget.exe` or similar package-manager processes are not left running. Reparo does not kill generic shells or installer engines by default; add extra process base names with `-KillUpdaterNames` when you intentionally want that broader cleanup.
 Use `-IgnoreTimeouts` when you explicitly want to suppress timeout enforcement even if timeout values are supplied.
 Use `-AllowReboot` or `-Reboot` only when you want Windows Update to be allowed to auto-reboot. Default runs still suppress reboot with `-IgnoreReboot`.
-Timeouts are disabled by default. Use `-WingetTimeoutSeconds`, `-WingetDiscoveryTimeoutSeconds`, and `-WindowsUpdateTimeoutSeconds` only when you explicitly want Reparo to stop a command after a positive number of seconds.
+Most command timeouts are disabled by default. Use `-WingetTimeoutSeconds`, `-WingetDiscoveryTimeoutSeconds`, and `-WindowsUpdateTimeoutSeconds` only when you explicitly want Reparo to stop a command after a positive number of seconds. `WslApt` defaults to `-WslAptTimeoutSeconds 1800` because unattended sudo/apt sessions can otherwise wait forever.
 Use `-InstallNuGetProvider:$false` if a managed environment wants to block NuGet provider bootstrapping, or leave it at the default `true` so Reparo can install it before PSGallery module installs.
 
 At the end of the run, Reparo prints a `REPARO summary` with:
@@ -400,6 +412,7 @@ Some winget upgrades, including `Microsoft.PowerShell`, may require an uninstall
 - Avoid `-Force` on general client endpoints unless you intentionally want to touch developer toolchains and WSL.
 - Review logs after pilot runs.
 - Expect package managers to return nonzero exit codes for some "nothing to update" cases; Reparo treats common benign `winget` messages as successful no-op outcomes.
+- WSL apt is skipped when `sudo` would need a password; configure passwordless sudo in the distro first if you want unattended WSL package maintenance.
 
 ## Public repo note
 

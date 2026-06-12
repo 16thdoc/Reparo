@@ -39,6 +39,8 @@ param(
     [int]$WingetDiscoveryTimeoutSeconds = 0,
     [ValidateRange(0, [int]::MaxValue)]
     [int]$WindowsUpdateTimeoutSeconds = 0,
+    [ValidateRange(0, [int]::MaxValue)]
+    [int]$WslAptTimeoutSeconds = 1800,
     [bool]$InstallNuGetProvider = $true,
     [Alias('Reboot')]
     [switch]$AllowReboot,
@@ -57,7 +59,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.24'
+$script:ReparoVersion = '0.2.25'
 
 function Get-ReparoVersionQuote {
     param([string]$Version = $script:ReparoVersion)
@@ -138,6 +140,7 @@ function Write-ReparoParameterBlock {
         WingetTimeoutSeconds         = $WingetTimeoutSeconds
         WingetDiscoveryTimeoutSeconds = $WingetDiscoveryTimeoutSeconds
         WindowsUpdateTimeoutSeconds   = $WindowsUpdateTimeoutSeconds
+        WslAptTimeoutSeconds          = $WslAptTimeoutSeconds
         InstallNuGetProvider         = $InstallNuGetProvider
         AllowReboot                  = $AllowReboot
         LogRoot                      = $LogRoot
@@ -262,11 +265,12 @@ Modes:
   -Help                Show this help.
 
 Timeouts:
-  Timeouts are disabled by default. Pass a positive number of seconds only when
-  you want Reparo to stop a command that runs too long.
+  Most command timeouts are disabled by default. WSL apt has a default timeout
+  because unattended sudo/apt sessions can otherwise wait forever.
   -WingetTimeoutSeconds          Optional live Winget upgrade timeout.
   -WingetDiscoveryTimeoutSeconds Optional discovery timeout used by -Winget.
   -WindowsUpdateTimeoutSeconds   Optional Windows Update timeout.
+  -WslAptTimeoutSeconds          WSL apt timeout. Default: 1800 seconds.
   -InstallNuGetProvider         When true (default), bootstrap the NuGet provider before PSGallery installs.
   -AllowReboot                  Let the Windows Update section pass -AutoReboot instead of -IgnoreReboot.
 
@@ -2393,14 +2397,26 @@ try {
     }
 
     foreach (`$step in @(
-        @{ Label = 'Spicetify update'; Args = @('update') },
-        @{ Label = 'Spicetify backup apply'; Args = @('backup', 'apply') }
+        @{ Label = 'Spicetify update'; Args = @('update'); BenignExistingBackup = `$false },
+        @{ Label = 'Spicetify backup apply'; Args = @('backup', 'apply'); BenignExistingBackup = `$true }
     )) {
         Write-ReparoSpicetifyOutput ("[STEP] {0}" -f `$step.Label)
         `$output = @(& `$spicetify @(`$step.Args) 2>&1)
         `$exit = `$LASTEXITCODE
         foreach (`$line in `$output) { Write-ReparoSpicetifyOutput ([string]`$line) }
         if (`$exit -ne 0) {
+            `$combinedOutput = (`$output | ForEach-Object { [string]`$_ }) -join "`n"
+            `$existingBackupState = (
+                `$step.BenignExistingBackup -and
+                `$combinedOutput -match '(?i)A backup is available' -and
+                `$combinedOutput -match '(?i)Please restore first then backup'
+            )
+
+            if (`$existingBackupState) {
+                Write-ReparoSpicetifyOutput '[WARN] Spicetify already has a backup; leaving it in place and continuing.'
+                continue
+            }
+
             Write-ReparoSpicetifyOutput ("[ERROR] {0} failed with exit code {1}" -f `$step.Label, `$exit)
             Set-Content -LiteralPath `$statusPath -Value ([string]`$exit) -Encoding ASCII
             exit `$exit
@@ -2761,6 +2777,8 @@ Invoke-ReparoCommandStep -Section 'Wsl' -PresenceCmd 'wsl' -Command 'wsl --updat
 if ($WslApt -and (Test-ReparoSectionSelected 'WslApt')) {
     if (Test-Cmd 'wsl') {
         try {
+            $previousErrorActionPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
             $rawDistros = @(& wsl -l -q 2>&1)
             $wslListExit = $LASTEXITCODE
             foreach ($line in $rawDistros) {
@@ -2811,7 +2829,25 @@ if ($WslApt -and (Test-ReparoSectionSelected 'WslApt')) {
                 }
 
                 if ($testExit -eq 0) {
-                    Invoke-ReparoCommandStep -Section ("WslApt:{0}" -f $distro) -PresenceCmd '' -Command ("wsl -d ""{0}"" -- bash -lc ""sudo apt update && sudo apt -y upgrade && sudo apt -y autoremove""" -f $distro)
+                    $sudoCheckOutput = @(& wsl -d "$distro" -- bash -lc 'if [ "$(id -u)" -eq 0 ]; then exit 0; fi; command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1' 2>&1)
+                    $sudoCheckExit = $LASTEXITCODE
+
+                    foreach ($line in $sudoCheckOutput) {
+                        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                            Write-ReparoLog ([string]$line)
+                        }
+                    }
+
+                    if ($sudoCheckExit -ne 0) {
+                        Write-Skip "sudo in $distro requires a password or is unavailable; skipping WSL apt"
+                        Write-ReparoLog "[SKIP] sudo in $distro requires a password or is unavailable; skipping WSL apt"
+                        Add-ReparoSummaryRecord -Bucket Skipped -Software ("WslApt:{0}" -f $distro) -Version '-' -Method 'wsl/apt' -Reason 'sudo requires password or is unavailable'
+                        continue
+                    }
+
+                    $aptCommand = 'if [ "$(id -u)" -eq 0 ]; then DEBIAN_FRONTEND=noninteractive apt update && DEBIAN_FRONTEND=noninteractive apt -y upgrade && DEBIAN_FRONTEND=noninteractive apt -y autoremove; else sudo -n env DEBIAN_FRONTEND=noninteractive apt update && sudo -n env DEBIAN_FRONTEND=noninteractive apt -y upgrade && sudo -n env DEBIAN_FRONTEND=noninteractive apt -y autoremove; fi'
+                    $aptCommand = $aptCommand -replace '"', '\"'
+                    Invoke-ReparoCommandStep -Section ("WslApt:{0}" -f $distro) -PresenceCmd '' -Command ("wsl -d ""{0}"" -- bash -lc ""{1}""" -f $distro, $aptCommand) -TimeoutSeconds $WslAptTimeoutSeconds
                 }
                 else {
                     Write-Skip "apt not present in $distro; skipping"
@@ -2824,6 +2860,9 @@ if ($WslApt -and (Test-ReparoSectionSelected 'WslApt')) {
             Write-Fail "WSL distro enumeration failed: $($_.Exception.Message)"
             Write-ReparoLog "[ERROR] WSL distro enumeration failed: $($_.Exception.Message)"
             Add-ReparoSummaryRecord -Bucket Failed -Software 'WslApt' -Version '-' -Method 'wsl/apt' -Reason $_.Exception.Message
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
         }
     }
     else {
