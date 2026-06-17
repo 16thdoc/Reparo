@@ -59,7 +59,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.25'
+$script:ReparoVersion = '0.2.26'
 
 function Get-ReparoVersionQuote {
     param([string]$Version = $script:ReparoVersion)
@@ -241,7 +241,7 @@ Modes:
                        install with winget, then uninstall the Chocolatey package after success.
                        Use -Preview first to report what would migrate.
   -InstallSpicetify    Install or reinstall Spicetify Marketplace in the logged-on user's context,
-                       then run Spicetify update and backup/apply.
+                       then run Spicetify update and restore/backup/apply.
   -ChocoWingetMapPath  Optional JSON or CSV map for site-specific package IDs.
                        JSON can be an object like {"git":"Git.Git"} or an array with
                        ChocoId/WingetId/Source fields. CSV uses ChocoId,WingetId,Source.
@@ -2391,39 +2391,27 @@ try {
 
     if (`$previewOnly) {
         Write-ReparoSpicetifyOutput '[DRY-RUN] spicetify update'
-        Write-ReparoSpicetifyOutput '[DRY-RUN] spicetify backup apply'
+        Write-ReparoSpicetifyOutput '[DRY-RUN] spicetify restore backup apply'
         Set-Content -LiteralPath `$statusPath -Value '0' -Encoding ASCII
         exit 0
     }
 
     foreach (`$step in @(
-        @{ Label = 'Spicetify update'; Args = @('update'); BenignExistingBackup = `$false },
-        @{ Label = 'Spicetify backup apply'; Args = @('backup', 'apply'); BenignExistingBackup = `$true }
+        @{ Label = 'Spicetify update'; Args = @('update') },
+        @{ Label = 'Spicetify restore backup apply'; Args = @('restore', 'backup', 'apply') }
     )) {
         Write-ReparoSpicetifyOutput ("[STEP] {0}" -f `$step.Label)
         `$output = @(& `$spicetify @(`$step.Args) 2>&1)
         `$exit = `$LASTEXITCODE
         foreach (`$line in `$output) { Write-ReparoSpicetifyOutput ([string]`$line) }
         if (`$exit -ne 0) {
-            `$combinedOutput = (`$output | ForEach-Object { [string]`$_ }) -join "`n"
-            `$existingBackupState = (
-                `$step.BenignExistingBackup -and
-                `$combinedOutput -match '(?i)A backup is available' -and
-                `$combinedOutput -match '(?i)Please restore first then backup'
-            )
-
-            if (`$existingBackupState) {
-                Write-ReparoSpicetifyOutput '[WARN] Spicetify already has a backup; leaving it in place and continuing.'
-                continue
-            }
-
             Write-ReparoSpicetifyOutput ("[ERROR] {0} failed with exit code {1}" -f `$step.Label, `$exit)
             Set-Content -LiteralPath `$statusPath -Value ([string]`$exit) -Encoding ASCII
             exit `$exit
         }
     }
 
-    Write-ReparoSpicetifyOutput '[DONE] Spicetify update and backup/apply completed.'
+    Write-ReparoSpicetifyOutput '[DONE] Spicetify update and restore/backup/apply completed.'
     Set-Content -LiteralPath `$statusPath -Value '0' -Encoding ASCII
     exit 0
 }
@@ -2559,10 +2547,10 @@ function Invoke-ReparoSpicetify {
             else {
                 Write-Done 'Spicetify complete'
                 if ($InstallSpicetify) {
-                    Add-ReparoSummaryNote 'Spicetify completed install/reinstall, update, and backup/apply in the interactive user context.'
+                    Add-ReparoSummaryNote 'Spicetify completed install/reinstall, update, and restore/backup/apply in the interactive user context.'
                 }
                 else {
-                    Add-ReparoSummaryNote 'Spicetify completed update and backup/apply in the interactive user context.'
+                    Add-ReparoSummaryNote 'Spicetify completed update and restore/backup/apply in the interactive user context.'
                 }
             }
         }
