@@ -28,6 +28,11 @@ param(
     [switch]$MigrateChocoToWinget,
     [string]$ChocoWingetMapPath,
     [string[]]$MigrateChocoExclude,
+    [string]$CheckApp,
+    [string]$LockApp,
+    [string]$LockVersion,
+    [ValidateSet('Auto', 'Winget', 'Choco')]
+    [string]$PackageManager = 'Auto',
     [switch]$InstallSpicetify,
     [switch]$Force,
     [switch]$Kill,
@@ -59,27 +64,27 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.26'
+$script:ReparoVersion = '0.2.27'
 
-function Get-ReparoVersionQuote {
+function Get-ReparoVersionFlavor {
     param([string]$Version = $script:ReparoVersion)
 
-    $quotes = @(
-        'Hold on to your butts.',
-        'Hack the planet!',
-        'Shall we play a game?',
-        'The only winning move is not to play.',
-        'There is no spoon.',
-        'Open the pod bay doors.',
-        'Never tell me the odds.',
-        'Would you like to know more?',
-        'Access granted.',
-        'I''m in.',
-        'Enhance.',
-        'All systems nominal.',
-        'Recalculating the mainframe.',
-        'Initiating the uplink.',
-        'You''re gonna need a bigger firewall.'
+    $flavors = @(
+        [pscustomobject]@{ Quote = 'Hold on to your butts.'; Art = '  /\\_ Jurassic patch detected _/\\' },
+        [pscustomobject]@{ Quote = 'Hack the planet!'; Art = '  [*] crash_override.exe loaded' },
+        [pscustomobject]@{ Quote = 'Shall we play a game?'; Art = '  .-- WOPR warming the tea --.' },
+        [pscustomobject]@{ Quote = 'The only winning move is not to play.'; Art = '  tic-tac-toe: avoided successfully' },
+        [pscustomobject]@{ Quote = 'There is no spoon.'; Art = '  ( spoon.exe has exited with code 0 )' },
+        [pscustomobject]@{ Quote = 'Open the pod bay doors.'; Art = '  HAL says: maintenance acknowledged' },
+        [pscustomobject]@{ Quote = 'Never tell me the odds.'; Art = '  <KesselRun parsecs="12" />' },
+        [pscustomobject]@{ Quote = 'Would you like to know more?'; Art = '  SERVICE GUARANTEES CITIZENSHIP' },
+        [pscustomobject]@{ Quote = 'Access granted.'; Art = '  [root@mainframe ~]# ./reparo' },
+        [pscustomobject]@{ Quote = 'I''m in.'; Art = '  sunglasses: lowered; keyboard: clacked' },
+        [pscustomobject]@{ Quote = 'Enhance.'; Art = '  CSI zoom module: absolutely illegal' },
+        [pscustomobject]@{ Quote = 'All systems nominal.'; Art = '  MECH BAY: green lights and duct tape' },
+        [pscustomobject]@{ Quote = 'Recalculating the mainframe.'; Art = '  MAINFRAME: beep boop, probably fine' },
+        [pscustomobject]@{ Quote = 'Initiating the uplink.'; Art = '  SATCOM: pew pew packets acquired' },
+        [pscustomobject]@{ Quote = 'You''re gonna need a bigger firewall.'; Art = '  ><(((º>  firewall chomp mode enabled' }
     )
 
     $hash = [long]5381
@@ -87,7 +92,19 @@ function Get-ReparoVersionQuote {
         $hash = (($hash * 33) + [int][char]$char) % 2147483647
     }
 
-    $quotes[[int]($hash % $quotes.Count)]
+    $flavors[[int]($hash % $flavors.Count)]
+}
+
+function Get-ReparoVersionQuote {
+    param([string]$Version = $script:ReparoVersion)
+
+    (Get-ReparoVersionFlavor -Version $Version).Quote
+}
+
+function Get-ReparoVersionArt {
+    param([string]$Version = $script:ReparoVersion)
+
+    (Get-ReparoVersionFlavor -Version $Version).Art
 }
 
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
@@ -132,6 +149,10 @@ function Write-ReparoParameterBlock {
         MigrateChocoToWinget         = $MigrateChocoToWinget
         ChocoWingetMapPath           = $ChocoWingetMapPath
         MigrateChocoExclude          = $MigrateChocoExclude
+        CheckApp                     = $CheckApp
+        LockApp                      = $LockApp
+        LockVersion                  = $LockVersion
+        PackageManager               = $PackageManager
         InstallSpicetify             = $InstallSpicetify
         Force                        = $Force
         Kill                         = $Kill
@@ -207,13 +228,17 @@ function Ensure-ReparoNuGetProvider {
 
 function Show-ReparoHelp {
     $versionQuote = Get-ReparoVersionQuote
+    $versionArt = Get-ReparoVersionArt
     $helpText = @"
 Reparo $script:ReparoVersion
+$versionArt
 $versionQuote
 
 Usage:
   reparo
   reparo -Version
+  reparo -CheckApp Git.Git -PackageManager Winget
+  reparo -LockApp Git.Git -LockVersion 2.51.0 -PackageManager Winget
   reparo -Kill
   reparo -Kill -KillUpdaterNames winget msiexec
   reparo -Update
@@ -240,6 +265,10 @@ Modes:
                        Inventory Chocolatey packages, match known/exact winget packages,
                        install with winget, then uninstall the Chocolatey package after success.
                        Use -Preview first to report what would migrate.
+  -CheckApp <id/name>  Show the installed version of one app through winget/choco.
+  -LockApp <id/name>   Pin one app so package-manager update passes do not move it.
+  -LockVersion <ver>   Version to pin. If omitted, Reparo tries to pin the currently installed version.
+  -PackageManager      App lookup/lock backend: Auto, Winget, or Choco. Default: Auto.
   -InstallSpicetify    Install or reinstall Spicetify Marketplace in the logged-on user's context,
                        then run Spicetify update and restore/backup/apply.
   -ChocoWingetMapPath  Optional JSON or CSV map for site-specific package IDs.
@@ -304,6 +333,7 @@ if ($Help) {
 
 if ($Version) {
     Write-Host "Reparo $script:ReparoVersion"
+    Write-Host (Get-ReparoVersionArt)
     Write-Host (Get-ReparoVersionQuote)
     return
 }
@@ -1090,7 +1120,7 @@ if ($Status) {
     return
 }
 
-if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $MigrateChocoToWinget -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill)) {
+if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $MigrateChocoToWinget -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill -or $CheckApp -or $LockApp)) {
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
@@ -1890,6 +1920,294 @@ function Invoke-ReparoLoggedNativeCommand {
     }
 }
 
+function ConvertFrom-ReparoWingetListTable {
+    param([object[]]$Output)
+
+    $packages = New-Object System.Collections.Generic.List[object]
+    $columns = $null
+    foreach ($item in $Output) {
+        $line = ([string]$item).TrimEnd()
+        $trimmedLine = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        if ($trimmedLine -match '^[\\|/-]$') { continue }
+        if ($line -match '^Name\s+Id\s+Version') {
+            $columns = @{
+                Name      = $line.IndexOf('Name')
+                Id        = $line.IndexOf('Id')
+                Version   = $line.IndexOf('Version')
+                Available = $line.IndexOf('Available')
+                Source    = $line.IndexOf('Source')
+            }
+            continue
+        }
+
+        if ($trimmedLine -match '^[-\s]+$') { continue }
+        if ($trimmedLine -match '^(No installed package found|No packages found)') { continue }
+
+        $name = $null
+        $id = $null
+        $version = $null
+        $source = $null
+
+        if ($columns -and $columns.Name -ge 0 -and $columns.Id -gt $columns.Name -and $columns.Version -gt $columns.Id) {
+            $positions = @($columns.Name, $columns.Id, $columns.Version, $columns.Available, $columns.Source) |
+                Where-Object { $_ -ge 0 } |
+                Sort-Object -Unique
+
+            $getColumn = {
+                param([int]$Start)
+
+                if ($Start -lt 0 -or $Start -ge $line.Length) { return $null }
+
+                $end = $line.Length
+                foreach ($position in $positions) {
+                    if ($position -gt $Start) {
+                        $end = [Math]::Min($position, $line.Length)
+                        break
+                    }
+                }
+
+                return $line.Substring($Start, ($end - $Start)).Trim()
+            }
+
+            $name = & $getColumn $columns.Name
+            $id = & $getColumn $columns.Id
+            $version = & $getColumn $columns.Version
+            $source = & $getColumn $columns.Source
+        }
+        else {
+            $match = [regex]::Match($line, '^(?<name>.+?)\s{2,}(?<id>\S+)\s{2,}(?<version>\S+)(?:\s{2,}(?<source>\S+))?\s*$')
+            if ($match.Success) {
+                $name = $match.Groups['name'].Value.Trim()
+                $id = $match.Groups['id'].Value.Trim()
+                $version = $match.Groups['version'].Value.Trim()
+                $source = $match.Groups['source'].Value.Trim()
+            }
+            else {
+                $tokens = @($line -split '\s+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                if ($columns -and $columns.Available -ge 0 -and $tokens.Count -ge 5) {
+                    $source = $tokens[-1]
+                    $version = $tokens[-3]
+                    $id = $tokens[-4]
+                    $name = ($tokens[0..($tokens.Count - 5)] -join ' ')
+                }
+                elseif ($tokens.Count -ge 4) {
+                    $source = $tokens[-1]
+                    $version = $tokens[-2]
+                    $id = $tokens[-3]
+                    $name = ($tokens[0..($tokens.Count - 4)] -join ' ')
+                }
+                elseif ($tokens.Count -ge 3) {
+                    $version = $tokens[-1]
+                    $id = $tokens[-2]
+                    $name = ($tokens[0..($tokens.Count - 3)] -join ' ')
+                }
+                else {
+                    continue
+                }
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($id) -or [string]::IsNullOrWhiteSpace($version)) { continue }
+
+        [void]$packages.Add([pscustomobject]@{
+            Name    = $name
+            Id      = $id
+            Version = $version
+            Source  = $source
+            Method  = 'winget'
+        })
+    }
+
+    return $packages.ToArray()
+}
+
+function Get-ReparoWingetAppVersion {
+    param([Parameter(Mandatory)][string]$App)
+
+    if (-not (Test-ReparoExecutable -Name 'winget' -Arguments @('--version'))) {
+        return $null
+    }
+
+    $queries = @(
+        @('list', '--id', $App, '--exact', '--accept-source-agreements', '--disable-interactivity'),
+        @('list', $App, '--accept-source-agreements', '--disable-interactivity')
+    )
+
+    foreach ($arguments in $queries) {
+        $output = @(& winget @arguments 2>&1)
+        foreach ($line in $output) {
+            Write-ReparoLog ("[APP] winget {0}: {1}" -f ($arguments -join ' '), ([string]$line))
+        }
+
+        if ($LASTEXITCODE -ne 0) { continue }
+
+        $packages = @(ConvertFrom-ReparoWingetListTable -Output $output)
+        if ($packages.Count -gt 0) {
+            return $packages[0]
+        }
+    }
+
+    return $null
+}
+
+function Get-ReparoChocoAppVersion {
+    param([Parameter(Mandatory)][string]$App)
+
+    if (-not (Test-ReparoExecutable -Name 'choco' -Arguments @('--version'))) {
+        return $null
+    }
+
+    $output = @(choco list --local-only --exact $App --limit-output --no-color 2>&1)
+    foreach ($line in $output) {
+        Write-ReparoLog ("[APP] choco list: {0}" -f ([string]$line))
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        return $null
+    }
+
+    foreach ($item in $output) {
+        $line = ([string]$item).Trim()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line -notmatch '\|') { continue }
+        $parts = $line -split '\|'
+        if ($parts.Count -lt 2) { continue }
+
+        return [pscustomobject]@{
+            Name    = $parts[0].Trim()
+            Id      = $parts[0].Trim()
+            Version = $parts[1].Trim()
+            Source  = 'chocolatey'
+            Method  = 'choco'
+        }
+    }
+
+    return $null
+}
+
+function Get-ReparoAppVersion {
+    param(
+        [Parameter(Mandatory)][string]$App,
+        [ValidateSet('Auto', 'Winget', 'Choco')]
+        [string]$Manager = 'Auto'
+    )
+
+    $managers = if ($Manager -eq 'Auto') { @('Winget', 'Choco') } else { @($Manager) }
+    foreach ($candidate in $managers) {
+        $result = switch ($candidate) {
+            'Winget' { Get-ReparoWingetAppVersion -App $App }
+            'Choco' { Get-ReparoChocoAppVersion -App $App }
+        }
+
+        if ($result) {
+            return $result
+        }
+    }
+
+    return $null
+}
+
+function Invoke-ReparoCheckAppVersion {
+    param(
+        [Parameter(Mandatory)][string]$App,
+        [ValidateSet('Auto', 'Winget', 'Choco')]
+        [string]$Manager = 'Auto'
+    )
+
+    Write-Step "Check app version: $App"
+    Write-ReparoLog ("[STEP] Check app version: {0} via {1}" -f $App, $Manager)
+
+    $result = Get-ReparoAppVersion -App $App -Manager $Manager
+    if (-not $result) {
+        Write-Skip "App not found through ${Manager}: $App"
+        Write-ReparoLog ("[SKIP] App not found through {0}: {1}" -f $Manager, $App)
+        Add-ReparoSummaryRecord -Bucket Skipped -Software $App -Version '-' -Method $Manager -Reason 'app not found'
+        return $false
+    }
+
+    Write-Done ("{0} ({1}) is installed at {2} via {3}" -f $result.Name, $result.Id, $result.Version, $result.Method)
+    Write-ReparoLog ("[APP] {0}|{1}|{2}|{3}" -f $result.Name, $result.Id, $result.Version, $result.Method)
+    Add-ReparoSummaryNote ("{0} ({1}) is installed at {2} via {3}." -f $result.Name, $result.Id, $result.Version, $result.Method)
+    return $true
+}
+
+function Invoke-ReparoLockAppVersion {
+    param(
+        [Parameter(Mandatory)][string]$App,
+        [string]$Version,
+        [ValidateSet('Auto', 'Winget', 'Choco')]
+        [string]$Manager = 'Auto'
+    )
+
+    Write-Step "Lock app version: $App"
+    Write-ReparoLog ("[STEP] Lock app version: {0} via {1}" -f $App, $Manager)
+
+    $result = Get-ReparoAppVersion -App $App -Manager $Manager
+    if (-not $result) {
+        Write-Skip "App not found through ${Manager}: $App"
+        Write-ReparoLog ("[SKIP] App not found through {0}: {1}" -f $Manager, $App)
+        Add-ReparoSummaryRecord -Bucket Skipped -Software $App -Version '-' -Method $Manager -Reason 'app not found'
+        return $false
+    }
+
+    $pinVersion = $Version
+    if ([string]::IsNullOrWhiteSpace($pinVersion)) {
+        $pinVersion = $result.Version
+        if ([string]::IsNullOrWhiteSpace($pinVersion) -or $pinVersion -eq 'Unknown') {
+            $pinVersion = $null
+        }
+    }
+
+    $pinDescription = if ([string]::IsNullOrWhiteSpace($pinVersion)) { 'a blocking pin' } else { $pinVersion }
+
+    if ($Preview) {
+        Write-Info ("Preview: would lock {0} ({1}) to {2} via {3}" -f $result.Name, $result.Id, $pinDescription, $result.Method)
+        Write-ReparoLog ("[PREVIEW] Would lock {0} ({1}) to {2} via {3}" -f $result.Name, $result.Id, $pinDescription, $result.Method)
+        Add-ReparoSummaryRecord -Bucket Skipped -Software $result.Name -CurrentVersion $result.Version -Version $pinDescription -Method $result.Method -Reason 'preview only'
+        return $true
+    }
+
+    switch ($result.Method) {
+        'winget' {
+            $arguments = @('pin', 'add', '--id', $result.Id, '--exact')
+            if (-not [string]::IsNullOrWhiteSpace($result.Source)) {
+                $arguments += @('--source', $result.Source)
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($pinVersion)) {
+                $arguments += @('--version', $pinVersion)
+            }
+            else {
+                $arguments += '--blocking'
+            }
+
+            $pinResult = Invoke-ReparoLoggedNativeCommand -FilePath 'winget' -Arguments $arguments -Label 'WINGET-PIN'
+        }
+        'choco' {
+            $arguments = @('pin', 'add', '--name', $result.Id)
+            if (-not [string]::IsNullOrWhiteSpace($pinVersion)) {
+                $arguments += @('--version', $pinVersion)
+            }
+
+            $pinResult = Invoke-ReparoLoggedNativeCommand -FilePath 'choco' -Arguments $arguments -Label 'CHOCO-PIN'
+        }
+        default {
+            throw "Unsupported package manager for locking: $($result.Method)"
+        }
+    }
+
+    if ($pinResult.ExitCode -ne 0) {
+        Write-Fail ("Failed to lock {0}: exit code {1}" -f $result.Name, $pinResult.ExitCode)
+        Add-ReparoSummaryRecord -Bucket Failed -Software $result.Name -CurrentVersion $result.Version -Version $pinVersion -Method $result.Method -Reason "pin exit code $($pinResult.ExitCode)"
+        return $false
+    }
+
+    Write-Done ("Locked {0} ({1}) to {2} via {3}" -f $result.Name, $result.Id, $pinDescription, $result.Method)
+    Write-ReparoLog ("[DONE] Locked {0} ({1}) to {2} via {3}" -f $result.Name, $result.Id, $pinDescription, $result.Method)
+    Add-ReparoSummaryRecord -Bucket Updated -Software $result.Name -CurrentVersion $result.Version -Version $pinDescription -Method $result.Method -Reason 'locked'
+    return $true
+}
+
 function Invoke-ReparoChocoToWingetMigration {
     Write-Step 'Chocolatey to winget migration'
     Write-ReparoLog '[STEP] Chocolatey to winget migration'
@@ -2581,6 +2899,40 @@ function Invoke-ReparoSpicetify {
 
         Remove-Item -LiteralPath $workerScriptPath, $workerStatusPath -Force -ErrorAction SilentlyContinue
     }
+}
+
+if ($CheckApp -or $LockApp) {
+    $appMode = if ($LockApp) { 'LOCK APP' } else { 'CHECK APP' }
+    if ($Preview) { $appMode = "$appMode + PREVIEW" }
+
+    Write-Host ("REPARO starting on {0} [{1}]" -f $env:COMPUTERNAME, $appMode) -ForegroundColor Magenta
+    Write-ReparoLog ("=== reparo start: {0} on {1} (PID {2}) ===" -f (Get-Date), $env:COMPUTERNAME, $PID)
+    Write-ReparoLog ("[FLAGS] Bound parameters: {0}" -f ((($PSBoundParameters.Keys | Sort-Object) -join ', ')))
+    Write-ReparoParameterBlock
+
+    $appSucceeded = $true
+    if ($CheckApp) {
+        $appSucceeded = (Invoke-ReparoCheckAppVersion -App $CheckApp -Manager $PackageManager) -and $appSucceeded
+    }
+
+    if ($LockApp) {
+        $appSucceeded = (Invoke-ReparoLockAppVersion -App $LockApp -Version $LockVersion -Manager $PackageManager) -and $appSucceeded
+    }
+
+    Write-ReparoSummary
+    Write-ReparoLog ("=== reparo end: {0} ===" -f (Get-Date))
+    if ($script:ReparoSummary['Failed'].Count -gt 0 -or -not $appSucceeded) {
+        $script:ReparoFinalStatus = 'FAILED'
+    }
+    elseif ($Preview) {
+        $script:ReparoFinalStatus = 'PREVIEW'
+    }
+    else {
+        $script:ReparoFinalStatus = 'COMPLETE'
+    }
+
+    Finalize-ReparoLogFile -Status $script:ReparoFinalStatus
+    return
 }
 
 if ($Force) {

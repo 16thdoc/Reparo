@@ -33,6 +33,8 @@ reparo -Help
 reparo -Version
 reparo -Kill
 reparo -Tail
+reparo -CheckApp Microsoft.VisualStudioCode -PackageManager Winget
+reparo -Preview -LockApp Microsoft.VisualStudioCode -LockVersion 1.125.0 -PackageManager Winget
 ```
 
 Preview the managed-client update pass:
@@ -213,6 +215,10 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-MigrateChocoToWinget` | Inventories local Chocolatey packages, matches known or mapped winget IDs, installs the winget package, then uninstalls the Chocolatey package after winget succeeds. |
 | `-ChocoWingetMapPath <path>` | Adds or overrides Chocolatey-to-winget package mappings from a JSON or CSV file. |
 | `-MigrateChocoExclude <ids>` | Skips extra Chocolatey package IDs during migration. Chocolatey infrastructure packages are excluded automatically. |
+| `-CheckApp <id/name>` | Shows the installed version of one app through winget or Chocolatey, then exits without running update sections. |
+| `-LockApp <id/name>` | Pins one app through the package manager so Reparo and normal package-manager updates do not move it. |
+| `-LockVersion <version>` | Version to pin with `-LockApp`. If omitted, Reparo tries to pin the currently installed version. |
+| `-PackageManager Auto\|Winget\|Choco` | Selects the app lookup/lock backend for `-CheckApp` and `-LockApp`. Default is `Auto`, which tries winget first, then Chocolatey. |
 | `-InstallSpicetify` | Installs or reinstalls Spicetify Marketplace in the logged-on user's context, then runs update and backup/apply. |
 | `-Tail` | Follows the active Reparo log when used by itself. When combined with a run mode, it prints the tail of that run's log at the end. |
 | `-TailLines <count>` | Controls how many existing log lines `-Tail` prints before following. Default: `400`. |
@@ -222,6 +228,35 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-InstallNuGetProvider` | Bootstraps the NuGet provider before PSGallery installs when `true` (default). Set it to `false` only if you want to suppress that bootstrap attempt. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
 | `-Force` | Runs the full local-dev-tool pass, includes the per-user Spicetify update/backup/apply section, and enables Windows Update and WSL apt handling. Use carefully. |
+
+## App version checks and locks
+
+Check an installed version:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -CheckApp Microsoft.VisualStudioCode -PackageManager Winget
+```
+
+Preview a version lock without adding or changing package-manager pins:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -LockApp Microsoft.VisualStudioCode -LockVersion 1.125.0 -PackageManager Winget
+```
+
+Apply the lock:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -LockApp Microsoft.VisualStudioCode -LockVersion 1.125.0 -PackageManager Winget
+```
+
+Chocolatey works the same way with Chocolatey package IDs:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -CheckApp git -PackageManager Choco
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -LockApp git -LockVersion 2.51.0 -PackageManager Choco
+```
+
+Reparo uses native package-manager pins (`winget pin add` or `choco pin add`) instead of maintaining a separate skip list.
 
 ## Sections
 
