@@ -49,6 +49,9 @@ param(
     [string]$SourceUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1',
     [switch]$NoBackup,
     [switch]$Status,
+    [Alias('SweepStale', 'Clean', 'Prune')]
+    [switch]$Sweep,
+    [switch]$DeleteStale,
     [Alias('Log')]
     [switch]$Tail,
     [ValidateRange(1, 10000)]
@@ -59,7 +62,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.0.2'
+$script:ReparoVersion = '1.0.3'
 
 function Get-ReparoVersionQuote {
     param([string]$Version = $script:ReparoVersion)
@@ -149,6 +152,8 @@ function Write-ReparoParameterBlock {
         SourceUrl                    = $SourceUrl
         NoBackup                     = $NoBackup
         Status                       = $Status
+        Sweep                        = $Sweep
+        DeleteStale                  = $DeleteStale
         Tail                         = $Tail
         TailLines                    = $TailLines
         Include                      = $Include
@@ -251,6 +256,7 @@ Usage:
   reparo -MigrateChocoToWinget
   reparo -Tail
   reparo -Status
+  reparo -Status -Sweep
   reparo -Include Winget Choco
 
 Modes:
@@ -284,7 +290,9 @@ Modes:
   -Preview             Show what would run without executing update commands.
   -Tail, -Log          Follow the active log when used alone, or print this run's log tail at the end.
   -TailLines           Number of log lines to show when tailing. Default: 400.
-  -Status              Show whether Reparo is currently running and point at the active log.
+  -Status              Show running state, pending reboot state, stale logs, and last completed run.
+  -Sweep,-Clean,-Prune Rename stale _RUNNING logs to _STALE logs. Use with -Status or alone.
+  -DeleteStale         With -Sweep, delete stale _RUNNING logs instead of renaming them.
   -Include <sections>  Run only selected sections, for example: -Include Winget Choco.
   -Debug               Emit extra trace logging into the Reparo log file.
   -Version             Show the Reparo version.
@@ -1101,6 +1109,88 @@ function Get-ReparoLatestCompletedLog {
         Select-Object -First 1
 }
 
+function Get-ReparoStaleRunningLog {
+    param([object[]]$RunningProcessInfo = $null)
+
+    if ($null -eq $RunningProcessInfo) {
+        $RunningProcessInfo = @(Get-ReparoRunningProcessInfo -ExcludeProcessIds @($PID))
+    }
+
+    $runningLogPaths = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($process in $RunningProcessInfo) {
+        if ($process.LogPath) {
+            $null = $runningLogPaths.Add($process.LogPath)
+        }
+    }
+
+    Get-ChildItem -LiteralPath $LogRoot -File -Filter 'reparo_*_*_RUNNING.log' -ErrorAction SilentlyContinue |
+        Where-Object {
+            if ($runningLogPaths.Contains($_.FullName)) { return $false }
+            if ($_.Name -match '_(\d+)_\d{4}-\d{2}-\d{2}_\d{6}_RUNNING\.log$') {
+                return -not [bool](Get-Process -Id ([int]$matches[1]) -ErrorAction SilentlyContinue)
+            }
+
+            return $true
+        }
+}
+
+function Invoke-ReparoStaleLogSweep {
+    param([switch]$Delete)
+
+    $staleLogs = @(Get-ReparoStaleRunningLog)
+    if ($staleLogs.Count -eq 0) {
+        Write-Info 'No stale running logs found.'
+        return
+    }
+
+    $results = foreach ($log in ($staleLogs | Sort-Object LastWriteTime -Descending)) {
+        $status = if ($Delete) { 'Deleted' } else { 'Renamed' }
+        $targetPath = $null
+        $errorText = $null
+
+        try {
+            if ($Delete) {
+                Remove-Item -LiteralPath $log.FullName -Force -ErrorAction Stop
+            }
+            else {
+                $targetPath = $log.FullName -replace '_RUNNING\.log$', '_STALE.log'
+                Move-Item -LiteralPath $log.FullName -Destination $targetPath -Force -ErrorAction Stop
+            }
+        }
+        catch {
+            $status = 'Failed'
+            $errorText = $_.Exception.Message
+        }
+
+        [pscustomobject]@{
+            Status = $status
+            Source = $log.FullName
+            Target = $targetPath
+            Error  = $errorText
+        }
+    }
+
+    $results | Format-Table -AutoSize
+
+    $failedCount = @($results | Where-Object { $_.Status -eq 'Failed' }).Count
+    $eventId = if ($failedCount -gt 0) { 1404 } elseif ($Delete) { 1403 } else { 1402 }
+    $entryType = if ($failedCount -gt 0) { 'Warning' } else { 'Information' }
+    $action = if ($Delete) { 'deleted' } else { 'renamed' }
+
+    Write-ReparoEventLog -EventId $eventId -EntryType $entryType -Message @"
+Reparo stale running log sweep completed.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Action: $action
+Found: $($staleLogs.Count)
+Failed: $failedCount
+Results:
+$(($results | Format-Table -AutoSize | Out-String).Trim())
+LogRoot: $LogRoot
+"@
+}
+
 function Get-ReparoLogMetadata {
     param([Parameter(Mandatory)]$LogFile)
 
@@ -1194,32 +1284,26 @@ function Show-ReparoStatus {
         Write-Host 'Active log: none'
     }
 
-    $runningLogPaths = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($process in $running) {
-        if ($process.LogPath) {
-            $null = $runningLogPaths.Add($process.LogPath)
-        }
-    }
-
-    $staleRunningLogs = @(
-        Get-ChildItem -LiteralPath $LogRoot -File -Filter 'reparo_*_*_RUNNING.log' -ErrorAction SilentlyContinue |
-            Where-Object {
-                if ($runningLogPaths.Contains($_.FullName)) { return $false }
-                if ($_.Name -match '_(\d+)_\d{4}-\d{2}-\d{2}_\d{6}_RUNNING\.log$') {
-                    return -not [bool](Get-Process -Id ([int]$matches[1]) -ErrorAction SilentlyContinue)
-                }
-
-                return $true
-            }
-    )
+    $staleRunningLogs = @(Get-ReparoStaleRunningLog -RunningProcessInfo $running)
     if ($staleRunningLogs.Count -gt 0) {
-        Write-Host 'Stale running logs:'
-        $staleRunningLogs |
+        $recentCutoff = (Get-Date).AddHours(-24)
+        $recentStaleLogs = @($staleRunningLogs | Where-Object { $_.LastWriteTime -ge $recentCutoff })
+        $olderStaleCount = $staleRunningLogs.Count - $recentStaleLogs.Count
+
+        Write-Host "Stale running logs: $($staleRunningLogs.Count)"
+        if ($recentStaleLogs.Count -gt 0) {
+            Write-Host 'Recent stale running logs (<24h):'
+            $recentStaleLogs |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 5 |
             ForEach-Object {
                 Write-Host "  $($_.FullName)"
             }
+        }
+
+        if ($olderStaleCount -gt 0) {
+            Write-Host "Older stale running logs hidden: $olderStaleCount (use -Sweep to rename them _STALE)"
+        }
     }
 
     $latest = Get-ReparoLatestCompletedLog
@@ -1348,10 +1432,26 @@ if ($Kill) {
 
 if ($Status) {
     Show-ReparoStatus
+    if ($Sweep) {
+        Write-Host ''
+        Write-Host 'Sweeping stale running logs' -ForegroundColor Magenta
+        Invoke-ReparoStaleLogSweep -Delete:$DeleteStale
+    }
+
     return
 }
 
-if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $MigrateChocoToWinget -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill)) {
+if ($Sweep) {
+    Invoke-ReparoStaleLogSweep -Delete:$DeleteStale
+    return
+}
+
+if ($DeleteStale) {
+    Write-Warning '-DeleteStale only has an effect when used with -Sweep.'
+    return
+}
+
+if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $MigrateChocoToWinget -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale)) {
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
