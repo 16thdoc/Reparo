@@ -383,6 +383,7 @@ $script:ReparoDebug = $PSBoundParameters.ContainsKey('Debug') -or ($DebugPrefere
 # 1300-1399 reboot handling, 1400-1499 kill operations, 1500-1599 bootstrap/repair.
 $script:ReparoEventLogSource = 'Reparo'
 $script:ReparoEventLogReady = $null
+$script:ReparoPendingRebootDetected = $false
 
 function Write-ReparoDebug {
     param([string]$Message)
@@ -3203,15 +3204,7 @@ if (Test-ReparoSectionSelected 'WindowsUpdate') {
             Invoke-ReparoCommandStep -Section 'WindowsUpdate' -PresenceCmd '' -Command $windowsUpdateCommand -TimeoutSeconds $WindowsUpdateTimeoutSeconds
             if (Test-ReparoPendingReboot) {
                 Write-ReparoLog '[WARN] Windows indicates a reboot is pending after WindowsUpdate.'
-                Write-ReparoEventLog -EventId 1300 -EntryType Warning -Message @"
-Reparo detected a pending reboot after Windows Update.
-
-Computer: $env:COMPUTERNAME
-PID: $PID
-AllowReboot: $AllowReboot
-Mode: $mode
-Log: $script:ReparoLogPath
-"@
+                $script:ReparoPendingRebootDetected = $true
             }
         }
         else {
@@ -3220,6 +3213,25 @@ Log: $script:ReparoLogPath
             Add-ReparoSummaryRecord -Bucket Skipped -Software 'WindowsUpdate' -Version '-' -Method 'PSWindowsUpdate' -Reason 'module not found and bootstrap failed'
         }
     }
+}
+
+if (-not $script:ReparoPendingRebootDetected) {
+    $script:ReparoPendingRebootDetected = [bool](Test-ReparoPendingReboot)
+}
+
+if ($script:ReparoPendingRebootDetected) {
+    Write-Warning 'Windows indicates a reboot is pending.'
+    Write-ReparoLog '[WARN] Windows indicates a reboot is pending.'
+    Add-ReparoSummaryNote 'Windows indicates a reboot is pending.'
+    Write-ReparoEventLog -EventId 1300 -EntryType Warning -Message @"
+Reparo detected a pending reboot.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+AllowReboot: $AllowReboot
+Mode: $mode
+Log: $script:ReparoLogPath
+"@
 }
 
 Write-ReparoSummary
