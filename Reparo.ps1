@@ -59,7 +59,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.0.1'
+$script:ReparoVersion = '1.0.2'
 
 function Get-ReparoVersionQuote {
     param([string]$Version = $script:ReparoVersion)
@@ -70,7 +70,7 @@ function Get-ReparoVersionQuote {
         'Shall we play a game?',
         'The only winning move is not to play.',
         'There is no spoon.',
-        'The logs are clean. Too clean.',
+        'Do or do not. There is no try.',
         'Never tell me the odds.',
         'Would you like to know more?',
         'Access granted.',
@@ -1101,6 +1101,43 @@ function Get-ReparoLatestCompletedLog {
         Select-Object -First 1
 }
 
+function Get-ReparoLogMetadata {
+    param([Parameter(Mandatory)]$LogFile)
+
+    $name = if ($LogFile -is [System.IO.FileInfo]) { $LogFile.Name } else { [System.IO.Path]::GetFileName([string]$LogFile) }
+    if ($name -notmatch '^reparo_(?<Computer>.+)_(?<PID>\d+)_(?<Timestamp>\d{4}-\d{2}-\d{2}_\d{6})_(?<Status>RUNNING|COMPLETE|FAILED|PREVIEW)\.log$') {
+        return $null
+    }
+
+    $started = $null
+    try {
+        $started = [DateTime]::ParseExact($matches['Timestamp'], 'yyyy-MM-dd_HHmmss', [Globalization.CultureInfo]::InvariantCulture)
+    }
+    catch {
+        $started = $null
+    }
+
+    [pscustomobject]@{
+        Computer = $matches['Computer']
+        PID      = [int]$matches['PID']
+        Started  = $started
+        Status   = $matches['Status']
+    }
+}
+
+function Format-ReparoAge {
+    param([AllowNull()][DateTime]$Timestamp)
+
+    if (-not $Timestamp) { return 'unknown' }
+
+    $age = New-TimeSpan -Start $Timestamp -End (Get-Date)
+    if ($age.TotalDays -ge 1) { return ('{0}d {1}h ago' -f [int][Math]::Floor($age.TotalDays), $age.Hours) }
+    if ($age.TotalHours -ge 1) { return ('{0}h {1}m ago' -f [int][Math]::Floor($age.TotalHours), $age.Minutes) }
+    if ($age.TotalMinutes -ge 1) { return ('{0}m {1}s ago' -f [int][Math]::Floor($age.TotalMinutes), $age.Seconds) }
+
+    return ('{0}s ago' -f [int][Math]::Max(0, [Math]::Floor($age.TotalSeconds)))
+}
+
 function Get-ReparoActiveLogPath {
     param(
         [int[]]$ExcludeProcessIds = @()
@@ -1124,6 +1161,17 @@ function Get-ReparoActiveLogPath {
 function Show-ReparoStatus {
     $running = @(Get-ReparoRunningProcessInfo -ExcludeProcessIds @($PID))
     Write-Host 'REPARO status' -ForegroundColor Magenta
+    Write-Host "Version: $script:ReparoVersion"
+    Write-Host "Computer: $env:COMPUTERNAME"
+    Write-Host "Log root: $LogRoot"
+
+    $pendingReboot = Test-ReparoPendingReboot
+    if ($pendingReboot) {
+        Write-Host 'Pending reboot: yes' -ForegroundColor Yellow
+    }
+    else {
+        Write-Host 'Pending reboot: no'
+    }
 
     if ($running.Count -gt 0) {
         Write-Host "Running: $($running.Count)"
@@ -1135,7 +1183,10 @@ function Show-ReparoStatus {
         Write-Host 'Running: none'
     }
 
-    $activeLog = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
+    $activeLog = $running |
+        Where-Object { $_.LogPath } |
+        Sort-Object PID -Descending |
+        Select-Object -ExpandProperty LogPath -First 1
     if ($activeLog) {
         Write-Host "Active log: $activeLog"
     }
@@ -1173,7 +1224,21 @@ function Show-ReparoStatus {
 
     $latest = Get-ReparoLatestCompletedLog
     if ($latest) {
-        Write-Host "Latest completed log: $($latest.FullName)"
+        $metadata = Get-ReparoLogMetadata -LogFile $latest
+        Write-Host ''
+        Write-Host 'Last completed run:' -ForegroundColor Magenta
+        if ($metadata) {
+            Write-Host "  Status: $($metadata.Status)"
+            Write-Host "  Started: $($metadata.Started) ($(Format-ReparoAge -Timestamp $metadata.Started))"
+            Write-Host "  PID: $($metadata.PID)"
+            Write-Host "  Computer: $($metadata.Computer)"
+        }
+        else {
+            Write-Host '  Metadata: unavailable'
+        }
+
+        Write-Host "  Last write: $($latest.LastWriteTime) ($(Format-ReparoAge -Timestamp $latest.LastWriteTime))"
+        Write-Host "  Log: $($latest.FullName)"
     }
     else {
         Write-Host 'Latest completed log: none'
