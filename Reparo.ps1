@@ -59,7 +59,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '0.2.26'
+$script:ReparoVersion = '1.0.0'
 
 function Get-ReparoVersionQuote {
     param([string]$Version = $script:ReparoVersion)
@@ -186,6 +186,14 @@ function Ensure-ReparoNuGetProvider {
 
         Write-ReparoLog '[INFO] NuGet provider missing or outdated; attempting bootstrap from PSGallery.'
         Write-ReparoDebug 'Starting NuGet provider bootstrap path.'
+        Write-ReparoEventLog -EventId 1500 -EntryType Information -Message @"
+Reparo bootstrap requested: NuGet provider.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+MinimumVersion: $minimumVersion
+Log: $script:ReparoLogPath
+"@
 
         if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
             Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
@@ -196,11 +204,28 @@ function Ensure-ReparoNuGetProvider {
 
         Write-ReparoLog '[DONE] NuGet provider installed successfully.'
         Write-ReparoDebug 'NuGet provider bootstrap completed successfully.'
+        Write-ReparoEventLog -EventId 1501 -EntryType Information -Message @"
+Reparo bootstrap completed: NuGet provider.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+MinimumVersion: $minimumVersion
+Log: $script:ReparoLogPath
+"@
         return $true
     }
     catch {
         Write-ReparoLog ("[WARN] NuGet provider install failed: {0}" -f $_.Exception.Message)
         Write-ReparoDebug ("NuGet provider bootstrap failed: {0}" -f $_.Exception.Message)
+        Write-ReparoEventLog -EventId 1502 -EntryType Warning -Message @"
+Reparo bootstrap failed: NuGet provider.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+MinimumVersion: $minimumVersion
+Error: $($_.Exception.Message)
+Log: $script:ReparoLogPath
+"@
         return $false
     }
 }
@@ -352,6 +377,11 @@ if (-not (Test-Path -LiteralPath $LogRoot)) {
 $script:ReparoLogBaseName = "reparo_{0}_{1}_{2}" -f $env:COMPUTERNAME, $PID, (Get-Date -Format 'yyyy-MM-dd_HHmmss')
 $script:ReparoLogPath = Join-Path $LogRoot ($script:ReparoLogBaseName + '_RUNNING.log')
 $script:ReparoDebug = $PSBoundParameters.ContainsKey('Debug') -or ($DebugPreference -ne 'SilentlyContinue' -and $DebugPreference -ne 'Ignore')
+# Event IDs are scoped by LogName + Source. Reparo uses Application/Reparo with local ranges:
+# 1000-1099 run lifecycle, 1100-1199 install/update, 1200-1299 command/section,
+# 1300-1399 reboot handling, 1400-1499 kill operations, 1500-1599 bootstrap/repair.
+$script:ReparoEventLogSource = 'Reparo'
+$script:ReparoEventLogReady = $null
 
 function Write-ReparoDebug {
     param([string]$Message)
@@ -541,6 +571,16 @@ function Invoke-ReparoKillUpdaterProcesses {
     }
 
     $results | Format-Table -AutoSize
+    Write-ReparoEventLog -EventId 1401 -EntryType Warning -Message @"
+Reparo updater process kill sweep completed.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Targets: $($targetNames -join ', ')
+Results:
+$(($results | Format-Table -AutoSize | Out-String).Trim())
+Log: $script:ReparoLogPath
+"@
 }
 
 function Invoke-ReparoKill {
@@ -602,6 +642,15 @@ function Invoke-ReparoKill {
         }
 
         $results | Format-Table -AutoSize
+        Write-ReparoEventLog -EventId 1400 -EntryType Warning -Message @"
+Reparo process kill completed.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Results:
+$(($results | Format-Table -AutoSize | Out-String).Trim())
+Log: $script:ReparoLogPath
+"@
     }
 
     Invoke-ReparoKillUpdaterProcesses -ProcessNames $KillUpdaterNames
@@ -723,6 +772,18 @@ function Invoke-ReparoNew {
 
     Write-Info "Install root: $TargetRoot"
     Write-Info "Source: $Url"
+    Write-ReparoEventLog -EventId 1100 -EntryType Information -Message @"
+Reparo install/update requested.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Version: $script:ReparoVersion
+TargetRoot: $TargetRoot
+Source: $Url
+Preview: $WhatIfOnly
+SkipBackup: $SkipBackup
+Log: $script:ReparoLogPath
+"@
 
     if ($WhatIfOnly) {
         Write-Info 'Preview only. No files will be replaced.'
@@ -742,6 +803,15 @@ function Invoke-ReparoNew {
             if ($currentHash -eq $newHash) {
                 Write-Skip "Installed Reparo.ps1 is already current ($newHash)."
                 Install-ReparoCommandShim -TargetRoot $TargetRoot -WhatIfOnly:$WhatIfOnly
+                Write-ReparoEventLog -EventId 1101 -EntryType Information -Message @"
+Reparo install/update skipped; installed script is already current.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+TargetRoot: $TargetRoot
+SHA256: $newHash
+Log: $script:ReparoLogPath
+"@
                 return
             }
         }
@@ -750,6 +820,16 @@ function Invoke-ReparoNew {
             Write-Info "Would replace: $scriptPath"
             Write-Info "New SHA256: $newHash"
             Install-ReparoCommandShim -TargetRoot $TargetRoot -WhatIfOnly
+            Write-ReparoEventLog -EventId 1103 -EntryType Warning -Message @"
+Reparo install/update preview completed; no files were replaced.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+TargetRoot: $TargetRoot
+TargetScript: $scriptPath
+NewSHA256: $newHash
+Log: $script:ReparoLogPath
+"@
             return
         }
 
@@ -766,6 +846,29 @@ function Invoke-ReparoNew {
         Write-Done "Installed Reparo.ps1 updated ($newHash)."
         Write-Info "Live script: $scriptPath"
         Install-ReparoCommandShim -TargetRoot $TargetRoot
+        Write-ReparoEventLog -EventId 1102 -EntryType Information -Message @"
+Reparo install/update completed.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+TargetRoot: $TargetRoot
+TargetScript: $scriptPath
+SHA256: $newHash
+Log: $script:ReparoLogPath
+"@
+    }
+    catch {
+        Write-ReparoEventLog -EventId 1104 -EntryType Error -Message @"
+Reparo install/update failed.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+TargetRoot: $TargetRoot
+Source: $Url
+Error: $($_.Exception.Message)
+Log: $script:ReparoLogPath
+"@
+        throw
     }
     finally {
         if (Test-Path -LiteralPath $tempRoot) {
@@ -817,6 +920,97 @@ function Write-ReparoLog {
             Write-Warning "Failed to write to log file '$script:ReparoLogPath': $($_.Exception.Message)"
         }
     }
+}
+
+function Test-ReparoCurrentProcessElevated {
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+    catch {
+        Write-ReparoLog ("[EVENTLOG] Unable to determine elevation state: {0}" -f $_.Exception.Message)
+        return $false
+    }
+}
+
+function Ensure-ReparoEventLogSource {
+    if ($null -ne $script:ReparoEventLogReady) {
+        return [bool]$script:ReparoEventLogReady
+    }
+
+    $script:ReparoEventLogReady = $false
+
+    try {
+        if (-not (Get-Command Write-EventLog -ErrorAction SilentlyContinue)) {
+            Write-ReparoLog '[EVENTLOG] Write-EventLog is unavailable in this PowerShell host; skipping Windows Event Log output.'
+            return $false
+        }
+
+        if (-not [System.Diagnostics.EventLog]::SourceExists($script:ReparoEventLogSource)) {
+            if (-not (Test-ReparoCurrentProcessElevated)) {
+                Write-ReparoLog ("[EVENTLOG] Source {0} does not exist and shell is not elevated; skipping Windows Event Log registration." -f $script:ReparoEventLogSource)
+                return $false
+            }
+
+            New-EventLog -LogName Application -Source $script:ReparoEventLogSource
+            Write-ReparoLog ("[EVENTLOG] Registered Application event source: {0}" -f $script:ReparoEventLogSource)
+        }
+
+        $script:ReparoEventLogReady = $true
+        return $true
+    }
+    catch {
+        Write-ReparoLog ("[EVENTLOG] Unable to register/check event source: {0}" -f $_.Exception.Message)
+        return $false
+    }
+}
+
+function Write-ReparoEventLog {
+    param(
+        [Parameter(Mandatory)][int]$EventId,
+        [ValidateSet('Information', 'Warning', 'Error')]
+        [string]$EntryType = 'Information',
+        [Parameter(Mandatory)][string]$Message
+    )
+
+    try {
+        if (-not (Ensure-ReparoEventLogSource)) {
+            return
+        }
+
+        $eventMessage = [string]$Message
+        if ($eventMessage.Length -gt 30000) {
+            $eventMessage = $eventMessage.Substring(0, 30000) + "`r`n...[truncated]"
+        }
+
+        Write-EventLog -LogName Application -Source $script:ReparoEventLogSource -EventId $EventId -EntryType $EntryType -Message $eventMessage
+        Write-ReparoLog ("[EVENTLOG] Wrote Application/{0} event {1}." -f $script:ReparoEventLogSource, $EventId)
+    }
+    catch {
+        Write-ReparoLog ("[EVENTLOG] Failed writing event {0}: {1}" -f $EventId, $_.Exception.Message)
+    }
+}
+
+function Test-ReparoPendingReboot {
+    $checks = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired',
+        'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
+    )
+
+    try {
+        if (Test-Path -LiteralPath $checks[0]) { return $true }
+        if (Test-Path -LiteralPath $checks[1]) { return $true }
+
+        $sessionManager = Get-ItemProperty -LiteralPath $checks[2] -Name PendingFileRenameOperations -ErrorAction SilentlyContinue
+        if ($sessionManager -and $sessionManager.PendingFileRenameOperations) { return $true }
+    }
+    catch {
+        Write-ReparoLog ("[WARN] Pending reboot check failed: {0}" -f $_.Exception.Message)
+    }
+
+    return $false
 }
 
 function Finalize-ReparoLogFile {
@@ -1217,6 +1411,15 @@ function Ensure-ReparoPSWindowsUpdate {
     try {
         Write-ReparoLog '[INFO] PSWindowsUpdate not found; attempting install from PSGallery.'
         Write-ReparoDebug 'Starting PSWindowsUpdate bootstrap path.'
+        Write-ReparoEventLog -EventId 1510 -EntryType Information -Message @"
+Reparo bootstrap requested: PSWindowsUpdate.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Repository: PSGallery
+Scope: AllUsers
+Log: $script:ReparoLogPath
+"@
         if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
             Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
         }
@@ -1236,6 +1439,15 @@ function Ensure-ReparoPSWindowsUpdate {
         if (Get-Command Get-WindowsUpdate -ErrorAction SilentlyContinue) {
             Write-ReparoLog '[DONE] PSWindowsUpdate installed successfully.'
             Write-ReparoDebug 'PSWindowsUpdate bootstrap completed and Get-WindowsUpdate is now available.'
+            Write-ReparoEventLog -EventId 1511 -EntryType Information -Message @"
+Reparo bootstrap completed: PSWindowsUpdate.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Repository: PSGallery
+Scope: AllUsers
+Log: $script:ReparoLogPath
+"@
             return $true
         }
 
@@ -1244,6 +1456,14 @@ function Ensure-ReparoPSWindowsUpdate {
     catch {
         Write-ReparoLog ("[WARN] PSWindowsUpdate install failed: {0}" -f $_.Exception.Message)
         Write-ReparoDebug ("PSWindowsUpdate bootstrap failed: {0}" -f $_.Exception.Message)
+        Write-ReparoEventLog -EventId 1512 -EntryType Warning -Message @"
+Reparo bootstrap failed: PSWindowsUpdate.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Error: $($_.Exception.Message)
+Log: $script:ReparoLogPath
+"@
         return $false
     }
 }
@@ -1256,6 +1476,13 @@ function Ensure-ReparoWinget {
 
     Write-ReparoLog '[ACTION] winget not found; attempting repair/registration.'
     Write-ReparoDebug 'Starting winget repair path.'
+    Write-ReparoEventLog -EventId 1520 -EntryType Information -Message @"
+Reparo repair requested: winget.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Log: $script:ReparoLogPath
+"@
 
     try {
         if (-not (Get-Command Repair-WinGetPackageManager -ErrorAction SilentlyContinue)) {
@@ -1290,6 +1517,13 @@ function Ensure-ReparoWinget {
         if (Get-Command winget -ErrorAction SilentlyContinue) {
             Write-ReparoLog '[DONE] winget repair/registration completed successfully.'
             Write-ReparoDebug 'winget is now available after repair/registration.'
+            Write-ReparoEventLog -EventId 1521 -EntryType Information -Message @"
+Reparo repair completed: winget.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Log: $script:ReparoLogPath
+"@
             return $true
         }
 
@@ -1298,6 +1532,14 @@ function Ensure-ReparoWinget {
     catch {
         Write-ReparoLog ("[WARN] winget repair/registration failed: {0}" -f $_.Exception.Message)
         Write-ReparoDebug ("winget repair path failed: {0}" -f $_.Exception.Message)
+        Write-ReparoEventLog -EventId 1522 -EntryType Warning -Message @"
+Reparo repair failed: winget.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Error: $($_.Exception.Message)
+Log: $script:ReparoLogPath
+"@
         return $false
     }
 }
@@ -1550,6 +1792,21 @@ function Add-ReparoSummaryRecord {
         Method         = $Method
         Reason         = $Reason
     })
+
+    if ($Bucket -eq 'Failed') {
+        Write-ReparoEventLog -EventId 1202 -EntryType Error -Message @"
+Reparo section/package failed.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Software: $Software
+CurrentVersion: $CurrentVersion
+Version: $Version
+Method: $Method
+Reason: $Reason
+Log: $script:ReparoLogPath
+"@
+    }
 }
 
 function Add-ReparoSummaryNote {
@@ -2165,6 +2422,17 @@ function Invoke-ReparoTimedCommand {
 
     if ($timedOut) {
         Write-ReparoLog ("[CMD-TIMEOUT] {0} timed out after {1}s elapsed={2}" -f $Section, $TimeoutSeconds, $stopwatch.Elapsed)
+        Write-ReparoEventLog -EventId 1201 -EntryType Warning -Message @"
+Reparo command timed out.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Section: $Section
+TimeoutSeconds: $TimeoutSeconds
+Elapsed: $($stopwatch.Elapsed)
+CommandOutputLog: $commandOutputPath
+Log: $script:ReparoLogPath
+"@
         return [pscustomobject]@{
             TimedOut = $true
             ExitCode = 124
@@ -2611,6 +2879,18 @@ Write-ReparoParameterBlock
 Write-ReparoDebug ("Timeouts: Winget={0}s WingetDiscovery={1}s WindowsUpdate={2}s IgnoreTimeouts={3}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds, $IgnoreTimeouts)
 Write-ReparoDebug ("Process identity: {0}" -f [Security.Principal.WindowsIdentity]::GetCurrent().Name)
 Write-ReparoDebug ("PowerShell version: {0}" -f $PSVersionTable.PSVersion)
+Write-ReparoEventLog -EventId 1000 -EntryType Information -Message @"
+Reparo run started.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Version: $script:ReparoVersion
+Mode: $mode
+Preview: $Preview
+User: $([Security.Principal.WindowsIdentity]::GetCurrent().Name)
+PowerShell: $($PSVersionTable.PSVersion)
+Log: $script:ReparoLogPath
+"@
 
 if ($MigrateChocoToWinget) {
     Invoke-ReparoChocoToWingetMigration
@@ -2885,6 +3165,18 @@ if (Test-ReparoSectionSelected 'WindowsUpdate') {
             }
 
             Invoke-ReparoCommandStep -Section 'WindowsUpdate' -PresenceCmd '' -Command $windowsUpdateCommand -TimeoutSeconds $WindowsUpdateTimeoutSeconds
+            if (Test-ReparoPendingReboot) {
+                Write-ReparoLog '[WARN] Windows indicates a reboot is pending after WindowsUpdate.'
+                Write-ReparoEventLog -EventId 1300 -EntryType Warning -Message @"
+Reparo detected a pending reboot after Windows Update.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+AllowReboot: $AllowReboot
+Mode: $mode
+Log: $script:ReparoLogPath
+"@
+            }
         }
         else {
             Write-Skip 'PSWindowsUpdate module not found and bootstrap failed; skipping Windows Update.'
@@ -2911,6 +3203,30 @@ if ($Preview) {
 }
 
 Finalize-ReparoLogFile -Status $script:ReparoFinalStatus
+
+$eventEntryType = if ($script:ReparoFinalStatus -eq 'FAILED') { 'Error' } elseif ($script:ReparoFinalStatus -eq 'PREVIEW') { 'Warning' } else { 'Information' }
+$eventId = if ($script:ReparoFinalStatus -eq 'FAILED') { 1002 } elseif ($script:ReparoFinalStatus -eq 'PREVIEW') { 1003 } else { 1001 }
+$failedSummary = if ($script:ReparoSummary['Failed'].Count -gt 0) {
+    (($script:ReparoSummary['Failed'] | ForEach-Object { "{0} ({1})" -f $_.Software, $_.Reason }) -join '; ')
+}
+else {
+    'None'
+}
+
+Write-ReparoEventLog -EventId $eventId -EntryType $eventEntryType -Message @"
+Reparo run finished.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Version: $script:ReparoVersion
+Mode: $mode
+Status: $script:ReparoFinalStatus
+Updated: $($script:ReparoSummary['Updated'].Count)
+Skipped: $($script:ReparoSummary['Skipped'].Count)
+Failed: $($script:ReparoSummary['Failed'].Count)
+FailedSummary: $failedSummary
+Log: $script:ReparoLogPath
+"@
 
 if ($Tail) {
     Write-Host ''
