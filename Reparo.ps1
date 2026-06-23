@@ -59,7 +59,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.0.0'
+$script:ReparoVersion = '1.0.1'
 
 function Get-ReparoVersionQuote {
     param([string]$Version = $script:ReparoVersion)
@@ -70,7 +70,7 @@ function Get-ReparoVersionQuote {
         'Shall we play a game?',
         'The only winning move is not to play.',
         'There is no spoon.',
-        'Open the pod bay doors.',
+        'The logs are clean. Too clean.',
         'Never tell me the odds.',
         'Would you like to know more?',
         'Access granted.',
@@ -79,7 +79,8 @@ function Get-ReparoVersionQuote {
         'All systems nominal.',
         'Recalculating the mainframe.',
         'Initiating the uplink.',
-        'You''re gonna need a bigger firewall.'
+        'You''re gonna need a bigger firewall.',
+        'Open the pod bay doors.'
     )
 
     $hash = [long]5381
@@ -2350,6 +2351,8 @@ function Invoke-ReparoTimedCommand {
 
     $commandScript = @(
         '$ErrorActionPreference = ''Continue'''
+        '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8'
+        '$OutputEncoding = [System.Text.Encoding]::UTF8'
         ('$outputPath = {0}' -f (ConvertTo-ReparoPowerShellLiteral -Value $commandOutputPath))
         'function Write-ReparoChildOutput {'
         '    param([object]$Value)'
@@ -2459,16 +2462,29 @@ function Test-ReparoIgnorableCommandOutputLine {
         [AllowNull()][string]$Line
     )
 
-    if ($Section -notmatch '^Winget') {
-        return $false
-    }
-
-    $text = ([string]$Line).Trim()
+    $text = ([string]$Line)
+    $text = $text -replace '\x1B\[[0-?]*[ -/]*[@-~]', ''
+    $text = $text -replace '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', ''
+    $text = $text.Trim()
     if ([string]::IsNullOrWhiteSpace($text)) {
         return $true
     }
 
-    return ($text -match '^[\|/\-]+$')
+    if ($text -match '^[\|/\\\-]+$') {
+        return $true
+    }
+
+    if ($Section -eq 'Spicetify') {
+        if ($text -match '^[\|/\\\-]\s+.+') {
+            return $true
+        }
+
+        if ($text -match '^Patching files\s+\[\d+/\d+\].*\b\d{1,3}%\s*\|\s*\d+s\s*$') {
+            return $true
+        }
+    }
+
+    return $false
 }
 
 function Sync-ReparoCommandOutputLog {
@@ -2484,7 +2500,7 @@ function Sync-ReparoCommandOutputLog {
     }
 
     try {
-        $lines = @(Get-Content -LiteralPath $Path -ErrorAction Stop)
+        $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8 -ErrorAction Stop)
     }
     catch {
         return
@@ -2607,6 +2623,8 @@ function New-ReparoSpicetifyWorkerScript {
 
     $script = @"
 `$ErrorActionPreference = 'Continue'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+`$OutputEncoding = [System.Text.Encoding]::UTF8
 `$outputPath = $(ConvertTo-ReparoPowerShellLiteral -Value $OutputPath)
 `$statusPath = $(ConvertTo-ReparoPowerShellLiteral -Value $StatusPath)
 `$previewOnly = `$$($PreviewOnly.IsPresent.ToString().ToLowerInvariant())
@@ -2724,7 +2742,7 @@ function Sync-ReparoSpicetifyOutput {
     }
 
     try {
-        $lines = @(Get-Content -LiteralPath $Path -ErrorAction Stop)
+        $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8 -ErrorAction Stop)
     }
     catch {
         return
@@ -2742,7 +2760,7 @@ function Sync-ReparoSpicetifyOutput {
     }
 
     foreach ($line in $newLines) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+        if (-not (Test-ReparoIgnorableCommandOutputLine -Section 'Spicetify' -Line ([string]$line))) {
             Write-Host ([string]$line)
             Write-ReparoLog ("[CMD-OUT] Spicetify: {0}" -f [string]$line)
         }
