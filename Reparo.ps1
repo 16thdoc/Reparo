@@ -2453,6 +2453,24 @@ Log: $script:ReparoLogPath
     }
 }
 
+function Test-ReparoIgnorableCommandOutputLine {
+    param(
+        [Parameter(Mandatory)][string]$Section,
+        [AllowNull()][string]$Line
+    )
+
+    if ($Section -notmatch '^Winget') {
+        return $false
+    }
+
+    $text = ([string]$Line).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $true
+    }
+
+    return ($text -match '^[\|/\-]+$')
+}
+
 function Sync-ReparoCommandOutputLog {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -2484,7 +2502,7 @@ function Sync-ReparoCommandOutputLog {
     }
 
     foreach ($line in $newLines) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+        if (-not (Test-ReparoIgnorableCommandOutputLine -Section $Section -Line ([string]$line))) {
             [void]$Output.Add([string]$line)
             Write-Host ([string]$line)
             Write-ReparoLog ("[CMD-OUT] {0}: {1}" -f $Section, [string]$line)
