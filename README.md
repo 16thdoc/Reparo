@@ -35,6 +35,8 @@ reparo -Kill
 reparo -Tail
 reparo -CheckApp Microsoft.VisualStudioCode -PackageManager Winget
 reparo -Preview -LockApp Microsoft.VisualStudioCode -LockVersion 1.125.0 -PackageManager Winget
+reparo -Search
+reparo -Search git
 ```
 
 Preview the managed-client update pass:
@@ -212,6 +214,10 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, and `WindowsUpdate`. |
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |
 | `-WingetDiscover` | Repairs/refreshes winget if needed and runs only winget discovery commands. |
+| `-Search` / `-S` / `-s` | Inventories applications Reparo `-Force` can update and prints installed versions, available versions when known, update method, source, lock status, and a ready-to-copy `LockSpec`. Add terms after the switch to filter, for example `reparo -Search git`. |
+| `-VersionLock <spec>` | Adds an inline version lock for this run. Format: `method:id=version`, for example `winget:Git.Git=2.51.0`. |
+| `-VersionLockPath <path>` | Reads version locks from JSON. Default: `C:\ProgramData\Reparo\version-locks.json`. |
+| `-ListVersionLocks` | Prints resolved locks from the lock file and inline `-VersionLock` specs, then exits. |
 | `-MigrateChocoToWinget` | Inventories local Chocolatey packages, matches known or mapped winget IDs, installs the winget package, then uninstalls the Chocolatey package after winget succeeds. |
 | `-ChocoWingetMapPath <path>` | Adds or overrides Chocolatey-to-winget package mappings from a JSON or CSV file. |
 | `-MigrateChocoExclude <ids>` | Skips extra Chocolatey package IDs during migration. Chocolatey infrastructure packages are excluded automatically. |
@@ -406,6 +412,50 @@ At the end of the run, Reparo prints a `REPARO summary` with:
 - the log path
 
 Package-level update details are currently collected for `Winget`, `Winget(msstore)`, `Choco`, `Scoop`, and `MigrateChocoToWinget`. Other ecosystems still report section-level completion and write their raw tool output to the log.
+
+## Search and version locks
+
+Use `-Search` to see the software Reparo can update under the broader `-Force` umbrella:
+
+```powershell
+reparo -Search
+reparo -Search git
+reparo -S vscode
+```
+
+The output includes installed `Version`, `AvailableVersion` when the package manager exposes it cleanly, `Method`, `Source`, lock state, and a `LockSpec` you can paste into a lock file or pass inline.
+
+Default lock file:
+
+```text
+C:\ProgramData\Reparo\version-locks.json
+```
+
+JSON object form:
+
+```json
+{
+  "winget:Git.Git": "2.51.0",
+  "choco:git": "2.51.0"
+}
+```
+
+JSON array form:
+
+```json
+[
+  { "Method": "winget", "Id": "Git.Git", "Version": "2.51.0" },
+  { "Method": "scoop", "Id": "ripgrep", "Version": "14.1.1" }
+]
+```
+
+Inline one-run locks are also supported:
+
+```powershell
+reparo -Force -VersionLock winget:Git.Git=2.51.0
+```
+
+Automatic skipping is currently implemented for `winget`, `choco`, `scoop`, `npm`, and global `.NET` tools. Locks for other methods are listed and logged as configured, but Reparo does not yet know how to safely exclude those packages from their bulk updater commands. Tiny goblin with a clipboard, not a package manager miracle worker.
 
 You can override the log location:
 
