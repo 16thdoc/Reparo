@@ -25,6 +25,12 @@ param(
     [switch]$Update,
     [switch]$Winget,
     [switch]$WingetDiscover,
+    [Alias('S')]
+    [switch]$Search,
+    [Alias('LockVersion')]
+    [string[]]$VersionLock,
+    [string]$VersionLockPath = "$env:ProgramData\Reparo\version-locks.json",
+    [switch]$ListVersionLocks,
     [switch]$MigrateChocoToWinget,
     [string]$ChocoWingetMapPath,
     [string[]]$MigrateChocoExclude,
@@ -62,7 +68,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.0.3'
+$script:ReparoVersion = '1.0.4'
 
 function Get-ReparoVersionQuote {
     param([string]$Version = $script:ReparoVersion)
@@ -94,7 +100,7 @@ function Get-ReparoVersionQuote {
     $quotes[[int]($hash % $quotes.Count)]
 }
 
-if ($RemainingInclude -and $RemainingInclude.Count -gt 0) {
+if ($RemainingInclude -and $RemainingInclude.Count -gt 0 -and -not $Search) {
     $Include = @($Include) + @($RemainingInclude)
 }
 
@@ -133,6 +139,10 @@ function Write-ReparoParameterBlock {
         Update                       = $Update
         Winget                       = $Winget
         WingetDiscover               = $WingetDiscover
+        Search                       = $Search
+        VersionLock                  = $VersionLock
+        VersionLockPath              = $VersionLockPath
+        ListVersionLocks             = $ListVersionLocks
         MigrateChocoToWinget         = $MigrateChocoToWinget
         ChocoWingetMapPath           = $ChocoWingetMapPath
         MigrateChocoExclude          = $MigrateChocoExclude
@@ -252,6 +262,8 @@ Usage:
   reparo -Preview -Update
   reparo -Winget
   reparo -WingetDiscover
+  reparo -Search git
+  reparo -Search git | Where-Object Method -eq winget
   reparo -Preview -MigrateChocoToWinget
   reparo -MigrateChocoToWinget
   reparo -Tail
@@ -268,6 +280,14 @@ Modes:
                        discovery still runs so you can refresh the visible upgrade list.
   -WingetDiscover      Repair/register winget if needed, then run only winget discovery commands.
                        This refreshes the visible upgrade list without starting live installs.
+  -Search,-S,-s        Inventory software Reparo -Force can update, with installed versions.
+                       Optional terms filter by name, id, method, source, or version.
+  -VersionLock         Inline lock specs: method:id=version. Example: winget:Git.Git=2.51.0.
+                       Locks are matched case-insensitively by method and package id/name.
+  -VersionLockPath     JSON lock file. Default: C:\ProgramData\Reparo\version-locks.json.
+                       Supports [{"Method":"winget","Id":"Git.Git","Version":"2.51.0"}]
+                       or {"winget:Git.Git":"2.51.0"}.
+  -ListVersionLocks    Print resolved version locks and exit.
   -MigrateChocoToWinget
                        Inventory Chocolatey packages, match known/exact winget packages,
                        install with winget, then uninstall the Chocolatey package after success.
@@ -1451,7 +1471,7 @@ if ($DeleteStale) {
     return
 }
 
-if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $MigrateChocoToWinget -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale)) {
+if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $Search -or $ListVersionLocks -or $MigrateChocoToWinget -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale)) {
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
@@ -2079,6 +2099,256 @@ function Get-ReparoPendingUpdates {
     }
 
     return @()
+}
+
+function New-ReparoVersionLockRecord {
+    param(
+        [string]$Method,
+        [string]$Id,
+        [string]$Software,
+        [string]$Version,
+        [string]$Source = 'configured'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Id) -and -not [string]::IsNullOrWhiteSpace($Software)) {
+        $Id = $Software
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Software)) {
+        $Software = $Id
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Method) -or [string]::IsNullOrWhiteSpace($Id)) {
+        return $null
+    }
+
+    [pscustomobject]@{
+        Method   = $Method.Trim().ToLowerInvariant()
+        Id       = $Id.Trim()
+        Software = $Software.Trim()
+        Version  = if ([string]::IsNullOrWhiteSpace($Version)) { '*' } else { $Version.Trim() }
+        Source   = $Source
+    }
+}
+
+function ConvertFrom-ReparoVersionLockSpec {
+    param(
+        [Parameter(Mandatory)][string]$Spec,
+        [string]$Source = 'parameter'
+    )
+
+    $text = $Spec.Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+
+    $match = [regex]::Match($text, '^(?<method>[^:=\s]+)[:=](?<id>[^=]+?)(?:=(?<version>.+))?$')
+    if (-not $match.Success) {
+        throw "Invalid version lock spec '$Spec'. Use method:id=version, for example winget:Git.Git=2.51.0."
+    }
+
+    return (New-ReparoVersionLockRecord -Method $match.Groups['method'].Value -Id $match.Groups['id'].Value -Version $match.Groups['version'].Value -Source $Source)
+}
+
+function Get-ReparoVersionLocks {
+    $locks = New-Object System.Collections.Generic.List[object]
+
+    if (-not [string]::IsNullOrWhiteSpace($VersionLockPath) -and (Test-Path -LiteralPath $VersionLockPath)) {
+        try {
+            $json = Get-Content -LiteralPath $VersionLockPath -Raw | ConvertFrom-Json
+            if ($json -is [System.Array]) {
+                foreach ($row in $json) {
+                    $record = New-ReparoVersionLockRecord -Method $row.Method -Id $row.Id -Software $row.Software -Version $row.Version -Source $VersionLockPath
+                    if ($record) { [void]$locks.Add($record) }
+                }
+            }
+            else {
+                foreach ($property in $json.PSObject.Properties) {
+                    $record = ConvertFrom-ReparoVersionLockSpec -Spec ("{0}={1}" -f $property.Name, $property.Value) -Source $VersionLockPath
+                    if ($record) { [void]$locks.Add($record) }
+                }
+            }
+        }
+        catch {
+            throw "Unable to read version lock file '$VersionLockPath': $($_.Exception.Message)"
+        }
+    }
+
+    foreach ($spec in @($VersionLock)) {
+        if ([string]::IsNullOrWhiteSpace($spec)) { continue }
+        $record = ConvertFrom-ReparoVersionLockSpec -Spec $spec -Source 'parameter'
+        if ($record) { [void]$locks.Add($record) }
+    }
+
+    return $locks.ToArray()
+}
+
+function Test-ReparoPackageVersionLocked {
+    param(
+        [Parameter(Mandatory)][string]$Method,
+        [AllowNull()][string]$Id,
+        [AllowNull()][string]$Software,
+        [AllowNull()][string]$CurrentVersion
+    )
+
+    foreach ($lock in @(Get-ReparoVersionLocks)) {
+        if ($lock.Method -ne $Method.ToLowerInvariant()) { continue }
+        $packageMatches = ($Id -and $lock.Id -ieq $Id) -or ($Software -and (($lock.Id -ieq $Software) -or ($lock.Software -ieq $Software)))
+        if (-not $packageMatches) { continue }
+
+        return $lock
+    }
+
+    return $null
+}
+
+function Get-ReparoLockedPackageIds {
+    param([Parameter(Mandatory)][string]$Method)
+
+    @(Get-ReparoVersionLocks) |
+        Where-Object { $_.Method -eq $Method.ToLowerInvariant() } |
+        ForEach-Object { $_.Id } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Select-Object -Unique
+}
+
+function New-ReparoInventoryRecord {
+    param(
+        [string]$Software,
+        [string]$Id,
+        [string]$Version,
+        [string]$AvailableVersion,
+        [string]$Method,
+        [string]$Source
+    )
+
+    $lock = Test-ReparoPackageVersionLocked -Method $Method -Id $Id -Software $Software -CurrentVersion $Version
+    $lockSpec = if ($Method -and $Id -and $Version) { "{0}:{1}={2}" -f $Method, $Id, $Version } else { '-' }
+
+    [pscustomobject]@{
+        Software         = if ([string]::IsNullOrWhiteSpace($Software)) { $Id } else { $Software }
+        Id               = if ([string]::IsNullOrWhiteSpace($Id)) { $Software } else { $Id }
+        Version          = if ([string]::IsNullOrWhiteSpace($Version)) { '-' } else { $Version }
+        AvailableVersion = if ([string]::IsNullOrWhiteSpace($AvailableVersion)) { '-' } else { $AvailableVersion }
+        Method           = $Method
+        Source           = if ([string]::IsNullOrWhiteSpace($Source)) { '-' } else { $Source }
+        Locked           = [bool]$lock
+        LockVersion      = if ($lock) { $lock.Version } else { '-' }
+        LockSpec         = $lockSpec
+    }
+}
+
+function ConvertFrom-ReparoWingetListTable {
+    param([object[]]$Output)
+
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($item in $Output) {
+        $line = ([string]$item).TrimEnd()
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        if ($line -match '^(Name|[-]+)\s+') { continue }
+        if ($line -match '^(No installed package found|No packages found)') { continue }
+
+        $match = [regex]::Match($line, '^(?<name>.+?)\s{2,}(?<id>\S+)\s{2,}(?<version>\S+)(?:\s{2,}(?<available>\S+))?(?:\s{2,}(?<source>\S+))?\s*$')
+        if (-not $match.Success) { continue }
+
+        $available = $match.Groups['available'].Value.Trim()
+        $source = $match.Groups['source'].Value.Trim()
+        if ([string]::IsNullOrWhiteSpace($source) -and $available -match '^(winget|msstore)$') {
+            $source = $available
+            $available = $null
+        }
+
+        [void]$rows.Add((New-ReparoInventoryRecord -Software $match.Groups['name'].Value.Trim() -Id $match.Groups['id'].Value.Trim() -Version $match.Groups['version'].Value.Trim() -AvailableVersion $available -Method 'winget' -Source $source))
+    }
+
+    return $rows.ToArray()
+}
+
+function Get-ReparoForceInventory {
+    $items = New-Object System.Collections.Generic.List[object]
+
+    if (Test-ReparoExecutable -Name 'winget' -Arguments @('--version')) {
+        foreach ($row in @(ConvertFrom-ReparoWingetListTable -Output @(winget list --accept-source-agreements --disable-interactivity 2>&1))) { [void]$items.Add($row) }
+    }
+
+    if (Test-ReparoExecutable -Name 'choco' -Arguments @('--version')) {
+        foreach ($package in @(Get-ReparoChocoPackages)) {
+            [void]$items.Add((New-ReparoInventoryRecord -Software $package.ChocoId -Id $package.ChocoId -Version $package.Version -Method 'choco' -Source 'choco'))
+        }
+    }
+
+    if (Test-ReparoExecutable -Name 'scoop' -Arguments @('--version')) {
+        $output = @(scoop list 2>&1)
+        foreach ($line in $output) {
+            $text = ([string]$line).Trim()
+            if ([string]::IsNullOrWhiteSpace($text) -or $text -match '^(Installed apps|Name\s+Version|[-]+)') { continue }
+            $match = [regex]::Match($text, '^(?<name>\S+)\s+(?<version>\S+)(?:\s+(?<source>\S+))?')
+            if ($match.Success) {
+                [void]$items.Add((New-ReparoInventoryRecord -Software $match.Groups['name'].Value -Id $match.Groups['name'].Value -Version $match.Groups['version'].Value -Method 'scoop' -Source $match.Groups['source'].Value))
+            }
+        }
+    }
+
+    if (Test-ReparoExecutable -Name 'dotnet' -Arguments @('--version')) {
+        $output = @(dotnet tool list --global 2>&1)
+        foreach ($line in $output) {
+            $text = ([string]$line).Trim()
+            if ($text -match '^\s*(\S+)\s+(\S+)\s+(\S+)\s*$' -and $text -notmatch 'Package Id' -and $text -notmatch '^-+$') {
+                [void]$items.Add((New-ReparoInventoryRecord -Software $matches[1] -Id $matches[1] -Version $matches[2] -Method 'dotnet' -Source 'dotnet-tool'))
+            }
+        }
+    }
+
+    if (Test-ReparoExecutable -Name 'npm' -Arguments @('--version')) {
+        $output = @(npm list -g --depth=0 --json 2>&1)
+        try {
+            $json = ($output -join [Environment]::NewLine) | ConvertFrom-Json
+            foreach ($property in $json.dependencies.PSObject.Properties) {
+                [void]$items.Add((New-ReparoInventoryRecord -Software $property.Name -Id $property.Name -Version $property.Value.version -Method 'npm' -Source 'npm-global'))
+            }
+        }
+        catch { }
+    }
+
+    if (Test-ReparoExecutable -Name 'pipx' -Arguments @('--version')) {
+        $output = @(pipx list --json 2>&1)
+        try {
+            $json = ($output -join [Environment]::NewLine) | ConvertFrom-Json
+            foreach ($property in $json.venvs.PSObject.Properties) {
+                [void]$items.Add((New-ReparoInventoryRecord -Software $property.Name -Id $property.Name -Version $property.Value.metadata.main_package.package_version -Method 'pipx' -Source 'pipx'))
+            }
+        }
+        catch { }
+    }
+
+    return $items.ToArray()
+}
+
+function Show-ReparoSearchResults {
+    param([string[]]$Terms)
+
+    $rows = @(Get-ReparoForceInventory)
+    foreach ($term in @($Terms)) {
+        if ([string]::IsNullOrWhiteSpace($term)) { continue }
+        $needle = [regex]::Escape($term.Trim())
+        $rows = @($rows | Where-Object { $_.Software -match $needle -or $_.Id -match $needle -or $_.Method -match $needle -or $_.Source -match $needle -or $_.Version -match $needle })
+    }
+
+    if (-not $rows -or $rows.Count -eq 0) {
+        Write-Warning 'No Reparo-managed applications matched the search.'
+        return
+    }
+
+    $rows | Sort-Object Method, Software | Select-Object Software, Id, Version, AvailableVersion, Method, Source, Locked, LockVersion, LockSpec
+}
+
+function Show-ReparoVersionLocks {
+    $locks = @(Get-ReparoVersionLocks)
+    if (-not $locks -or $locks.Count -eq 0) {
+        Write-Host 'No Reparo version locks are configured.'
+        Write-Host "Default lock file: $VersionLockPath"
+        return
+    }
+
+    $locks | Sort-Object Method, Id | Select-Object Method, Id, Version, Software, Source
 }
 
 function Add-ReparoSectionUpdates {
@@ -3053,6 +3323,16 @@ function Invoke-ReparoSpicetify {
     }
 }
 
+if ($ListVersionLocks) {
+    Show-ReparoVersionLocks
+    return
+}
+
+if ($Search) {
+    Show-ReparoSearchResults -Terms $RemainingInclude
+    return
+}
+
 if ($Force) {
     $mode = 'FORCE'
 }
@@ -3081,6 +3361,18 @@ Write-ReparoParameterBlock
 Write-ReparoDebug ("Timeouts: Winget={0}s WingetDiscovery={1}s WindowsUpdate={2}s IgnoreTimeouts={3}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds, $IgnoreTimeouts)
 Write-ReparoDebug ("Process identity: {0}" -f [Security.Principal.WindowsIdentity]::GetCurrent().Name)
 Write-ReparoDebug ("PowerShell version: {0}" -f $PSVersionTable.PSVersion)
+
+$configuredVersionLocks = @(Get-ReparoVersionLocks)
+if ($configuredVersionLocks.Count -gt 0) {
+    Write-ReparoLog ("[LOCK] Loaded {0} Reparo version lock(s)." -f $configuredVersionLocks.Count)
+    $supportedLockMethods = @('winget', 'choco', 'scoop', 'npm', 'dotnet')
+    foreach ($lock in $configuredVersionLocks) {
+        Write-ReparoLog ("[LOCK] {0}:{1}={2} ({3})" -f $lock.Method, $lock.Id, $lock.Version, $lock.Source)
+        if ($supportedLockMethods -notcontains $lock.Method) {
+            Add-ReparoSummaryNote ("Version lock configured for {0}:{1}, but automatic skipping is not implemented for that method yet." -f $lock.Method, $lock.Id)
+        }
+    }
+}
 Write-ReparoEventLog -EventId 1000 -EntryType Information -Message @"
 Reparo run started.
 
@@ -3113,8 +3405,22 @@ if ($runWingetSections) {
         }
 
         if (-not $WingetDiscover) {
-            Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command 'winget upgrade --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force' -TimeoutSeconds $WingetTimeoutSeconds
-            Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command 'winget upgrade --source msstore --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force' -TimeoutSeconds $WingetTimeoutSeconds
+            $wingetCommand = 'winget upgrade --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force'
+            $lockedWingetIds = @(Get-ReparoLockedPackageIds -Method 'winget')
+            foreach ($lockedWingetId in $lockedWingetIds) {
+                $wingetCommand += (' --except {0}' -f $lockedWingetId)
+            }
+            if ($lockedWingetIds.Count -gt 0) {
+                Add-ReparoSummaryNote ("Winget version locks active; excluding: {0}" -f ($lockedWingetIds -join ', '))
+            }
+
+            Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command $wingetCommand -TimeoutSeconds $WingetTimeoutSeconds
+
+            $wingetStoreCommand = 'winget upgrade --source msstore --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force'
+            foreach ($lockedWingetId in $lockedWingetIds) {
+                $wingetStoreCommand += (' --except {0}' -f $lockedWingetId)
+            }
+            Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command $wingetStoreCommand -TimeoutSeconds $WingetTimeoutSeconds
         }
         else {
             Write-Skip 'WingetDiscover requested; skipping live winget upgrade commands.'
@@ -3129,8 +3435,58 @@ if ($runWingetSections) {
         Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget(msstore)' -Version '-' -Method 'Winget(msstore)' -Reason 'winget not found or could not be repaired'
     }
 }
-Invoke-ReparoCommandStep -Section 'Scoop' -PresenceCmd 'scoop' -Command 'scoop update; scoop update *'
-Invoke-ReparoCommandStep -Section 'Choco' -PresenceCmd 'choco' -Command 'choco upgrade all -y --no-progress'
+$lockedScoopIds = @(Get-ReparoLockedPackageIds -Method 'scoop')
+if ($lockedScoopIds.Count -gt 0) {
+    $scoopLockLiteral = '@({0})' -f ((@($lockedScoopIds | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))
+    $scoopCommand = @"
+scoop update
+`$lockedPackages = $scoopLockLiteral
+`$status = @(scoop status 2>`$null)
+foreach (`$line in `$status) {
+    if (`$line -match '^\s*(\S+)\s+(\S+)\s+(\S+)') {
+        `$app = `$matches[1]
+        if (`$lockedPackages -contains `$app) {
+            Write-Host "Skipping locked Scoop package: `$app"
+            continue
+        }
+
+        scoop update `$app
+        if (`$LASTEXITCODE -ne 0) { throw "Failed updating Scoop package: `$app" }
+    }
+}
+"@
+    Add-ReparoSummaryNote ("Scoop version locks active; excluding: {0}" -f ($lockedScoopIds -join ', '))
+}
+else {
+    $scoopCommand = 'scoop update; scoop update *'
+}
+Invoke-ReparoCommandStep -Section 'Scoop' -PresenceCmd 'scoop' -Command $scoopCommand
+
+$lockedChocoIds = @(Get-ReparoLockedPackageIds -Method 'choco')
+if ($lockedChocoIds.Count -gt 0) {
+    $chocoLockLiteral = '@({0})' -f ((@($lockedChocoIds | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))
+    $chocoCommand = @"
+`$lockedPackages = $chocoLockLiteral
+`$outdated = @(choco outdated --limit-output --no-color 2>`$null)
+foreach (`$line in `$outdated) {
+    if (`$line -notmatch '\|') { continue }
+    `$packageId = (`$line -split '\|')[0].Trim()
+    if ([string]::IsNullOrWhiteSpace(`$packageId)) { continue }
+    if (`$lockedPackages -contains `$packageId) {
+        Write-Host "Skipping locked Chocolatey package: `$packageId"
+        continue
+    }
+
+    choco upgrade `$packageId -y --no-progress
+    if (`$LASTEXITCODE -ne 0) { throw "Failed upgrading Chocolatey package: `$packageId" }
+}
+"@
+    Add-ReparoSummaryNote ("Chocolatey version locks active; excluding: {0}" -f ($lockedChocoIds -join ', '))
+}
+else {
+    $chocoCommand = 'choco upgrade all -y --no-progress'
+}
+Invoke-ReparoCommandStep -Section 'Choco' -PresenceCmd 'choco' -Command $chocoCommand
 
 if (Test-ReparoSectionSelected 'Pip') {
     $ranPip = $false
@@ -3206,11 +3562,48 @@ if (-not [string]::IsNullOrWhiteSpace(`$outdated)) {
 }
 
 Invoke-ReparoCommandStep -Section 'Pipx' -PresenceCmd 'pipx' -Command 'pipx upgrade-all'
-Invoke-ReparoCommandStep -Section 'Npm' -PresenceCmd 'npm' -Command 'npm install -g npm; npm update -g'
+
+$lockedNpmIds = @(Get-ReparoLockedPackageIds -Method 'npm')
+if ($lockedNpmIds.Count -gt 0) {
+    $npmLockLiteral = '@({0})' -f ((@($lockedNpmIds | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))
+    $npmCommand = @"
+`$lockedPackages = $npmLockLiteral
+if (-not (`$lockedPackages -contains 'npm')) {
+    npm install -g npm
+    if (`$LASTEXITCODE -ne 0) { throw 'Failed updating npm itself.' }
+}
+`$jsonText = npm outdated -g --json 2>`$null | Out-String
+if (-not [string]::IsNullOrWhiteSpace(`$jsonText)) {
+    try { `$outdated = `$jsonText | ConvertFrom-Json } catch { `$outdated = `$null }
+    if (`$outdated) {
+        foreach (`$property in `$outdated.PSObject.Properties) {
+            if (`$lockedPackages -contains `$property.Name) {
+                Write-Host "Skipping locked npm package: `$(`$property.Name)"
+                continue
+            }
+
+            npm update -g `$property.Name
+            if (`$LASTEXITCODE -ne 0) { throw "Failed updating npm package: `$(`$property.Name)" }
+        }
+    }
+}
+"@
+    Add-ReparoSummaryNote ("npm version locks active; excluding: {0}" -f ($lockedNpmIds -join ', '))
+}
+else {
+    $npmCommand = 'npm install -g npm; npm update -g'
+}
+Invoke-ReparoCommandStep -Section 'Npm' -PresenceCmd 'npm' -Command $npmCommand
 Invoke-ReparoCommandStep -Section 'Pnpm' -PresenceCmd 'pnpm' -Command 'pnpm add -g pnpm@latest; pnpm update -g'
 Invoke-ReparoCommandStep -Section 'Yarn' -PresenceCmd 'yarn' -Command 'yarn global upgrade'
+$lockedDotNetIds = @(Get-ReparoLockedPackageIds -Method 'dotnet')
+$dotNetLockLiteral = '@({0})' -f ((@($lockedDotNetIds | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))
+if ($lockedDotNetIds.Count -gt 0) {
+    Add-ReparoSummaryNote (".NET tool version locks active; excluding: {0}" -f ($lockedDotNetIds -join ', '))
+}
 Invoke-ReparoCommandStep -Section 'DotNet' -PresenceCmd 'dotnet' -Command @"
 `$ErrorActionPreference = 'Stop'
+`$lockedPackages = $dotNetLockLiteral
 `$tools = dotnet tool list --global 2>`$null
 if (`$LASTEXITCODE -ne 0) {
     throw 'Unable to list global dotnet tools.'
@@ -3229,6 +3622,11 @@ if (-not `$toolIds -or `$toolIds.Count -eq 0) {
 }
 else {
     foreach (`$tool in `$toolIds) {
+        if (`$lockedPackages -contains `$tool) {
+            Write-Host "Skipping locked .NET tool: `$tool"
+            continue
+        }
+
         dotnet tool update --global `$tool
         if (`$LASTEXITCODE -ne 0) {
             throw "Failed updating dotnet tool: `$tool"
