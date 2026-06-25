@@ -14,65 +14,96 @@ sections.
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
+    [Alias('H')]
     [switch]$Help,
+    [Alias('V')]
     [switch]$Version,
-    [Alias('Install')]
+    [Alias('Install', 'N')]
     [switch]$New,
+    [Alias('P')]
     [switch]$Preview,
+    [Alias('WU')]
     [switch]$WindowsUpdate,
     [Alias('WSL')]
     [switch]$WslApt,
+    [Alias('U')]
     [switch]$Update,
+    [Alias('WG')]
     [switch]$Winget,
+    [Alias('WD')]
     [switch]$WingetDiscover,
-    [Alias('S')]
+    [Alias('S', 'List', 'L')]
     [switch]$Search,
+    [Alias('VL')]
     [string[]]$VersionLock,
+    [Alias('VLP')]
     [string]$VersionLockPath = "$env:ProgramData\Reparo\version-locks.json",
+    [Alias('LVL')]
     [switch]$ListVersionLocks,
+    [Alias('MCW')]
     [switch]$MigrateChocoToWinget,
+    [Alias('CWM')]
     [string]$ChocoWingetMapPath,
+    [Alias('MCE')]
     [string[]]$MigrateChocoExclude,
     [string]$CheckApp,
     [string]$LockApp,
     [string]$LockVersion,
     [ValidateSet('Auto', 'Winget', 'Choco')]
     [string]$PackageManager = 'Auto',
+    [Alias('IS')]
     [switch]$InstallSpicetify,
+    [Alias('F')]
     [switch]$Force,
+    [Alias('K')]
     [switch]$Kill,
+    [Alias('KUN')]
     [string[]]$KillUpdaterNames,
+    [Alias('IT')]
     [switch]$IgnoreTimeouts,
     [ValidateRange(0, [int]::MaxValue)]
+    [Alias('WTS')]
     [int]$WingetTimeoutSeconds = 0,
     [ValidateRange(0, [int]::MaxValue)]
+    [Alias('WDTS')]
     [int]$WingetDiscoveryTimeoutSeconds = 0,
     [ValidateRange(0, [int]::MaxValue)]
+    [Alias('WUTS')]
     [int]$WindowsUpdateTimeoutSeconds = 0,
     [ValidateRange(0, [int]::MaxValue)]
+    [Alias('WATS')]
     [int]$WslAptTimeoutSeconds = 1800,
+    [Alias('INP')]
     [bool]$InstallNuGetProvider = $true,
-    [Alias('Reboot')]
+    [Alias('Reboot', 'R')]
     [switch]$AllowReboot,
+    [Alias('LR')]
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs",
+    [Alias('IR')]
     [string]$InstallRoot = "$env:ProgramData\Reparo",
+    [Alias('SU')]
     [string]$SourceUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1',
+    [Alias('NB')]
     [switch]$NoBackup,
+    [Alias('ST')]
     [switch]$Status,
-    [Alias('SweepStale', 'Clean', 'Prune')]
+    [Alias('SweepStale', 'Clean', 'Prune', 'SW')]
     [switch]$Sweep,
+    [Alias('DS')]
     [switch]$DeleteStale,
-    [Alias('Log')]
+    [Alias('Log', 'T')]
     [switch]$Tail,
     [ValidateRange(1, 10000)]
+    [Alias('TL')]
     [int]$TailLines = 400,
+    [Alias('I')]
     [string[]]$Include,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RemainingInclude
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.0.4'
+$script:ReparoVersion = '1.0.5'
 
 function Get-ReparoVersionFlavor {
     param([string]$Version = $script:ReparoVersion)
@@ -286,7 +317,9 @@ Usage:
   reparo -Preview -Update
   reparo -Winget
   reparo -WingetDiscover
+  reparo -List
   reparo -Search git
+  reparo -List git
   reparo -Search git | Where-Object Method -eq winget
   reparo -Preview -MigrateChocoToWinget
   reparo -MigrateChocoToWinget
@@ -304,7 +337,7 @@ Modes:
                        discovery still runs so you can refresh the visible upgrade list.
   -WingetDiscover      Repair/register winget if needed, then run only winget discovery commands.
                        This refreshes the visible upgrade list without starting live installs.
-  -Search,-S,-s        Inventory software Reparo -Force can update, with installed versions.
+  -Search,-List,-S,-L  Inventory software Reparo -Force can update, with installed versions.
                        Optional terms filter by name, id, method, source, or version.
   -VersionLock         Inline lock specs: method:id=version. Example: winget:Git.Git=2.51.0.
                        Locks are matched case-insensitively by method and package id/name.
@@ -343,8 +376,8 @@ Modes:
   -DeleteStale         With -Sweep, delete stale _RUNNING logs instead of renaming them.
   -Include <sections>  Run only selected sections, for example: -Include Winget Choco.
   -Debug               Emit extra trace logging into the Reparo log file.
-  -Version             Show the Reparo version.
-  -Help                Show this help.
+  -Version,-V          Show the Reparo version.
+  -Help,-H             Show this help.
 
 Timeouts:
   Most command timeouts are disabled by default. WSL apt has a default timeout
@@ -2265,7 +2298,7 @@ function New-ReparoInventoryRecord {
     }
 }
 
-function ConvertFrom-ReparoWingetListTable {
+function ConvertFrom-ReparoWingetInventoryTable {
     param([object[]]$Output)
 
     $rows = New-Object System.Collections.Generic.List[object]
@@ -2295,7 +2328,7 @@ function Get-ReparoForceInventory {
     $items = New-Object System.Collections.Generic.List[object]
 
     if (Test-ReparoExecutable -Name 'winget' -Arguments @('--version')) {
-        foreach ($row in @(ConvertFrom-ReparoWingetListTable -Output @(winget list --accept-source-agreements --disable-interactivity 2>&1))) { [void]$items.Add($row) }
+        foreach ($row in @(ConvertFrom-ReparoWingetInventoryTable -Output @(winget list --accept-source-agreements --disable-interactivity 2>&1))) { [void]$items.Add($row) }
     }
 
     if (Test-ReparoExecutable -Name 'choco' -Arguments @('--version')) {

@@ -36,6 +36,7 @@ reparo -Tail
 reparo -CheckApp Microsoft.VisualStudioCode -PackageManager Winget
 reparo -Preview -LockApp Microsoft.VisualStudioCode -LockVersion 1.125.0 -PackageManager Winget
 reparo -Search
+reparo -List
 reparo -Search git
 ```
 
@@ -206,15 +207,15 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | --- | --- |
 | Default | Runs `WindowsUpdate` only. |
 | `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` from GitHub, with parse validation and backup handling. |
-| `-Help` | Prints Reparo usage and exits without running updates. |
-| `-Version` | Prints the Reparo version, a version-selected movie-ish quote, and exits without running updates. |
+| `-Help` / `-H` / `-h` | Prints Reparo usage and exits without running updates. |
+| `-Version` / `-V` / `-v` | Prints the Reparo version, a version-selected movie-ish quote, and exits without running updates. |
 | `-Kill` | Stops running Reparo PowerShell processes, then sweeps known updater front-end processes such as `winget`, `choco`, `npm`, `pip`, and related package managers. |
 | `-KillUpdaterNames <names>` | Adds extra process base names to the `-Kill` updater sweep, for example `-Kill -KillUpdaterNames msiexec`. |
 | `-Preview` | Logs what would run without executing package manager commands. |
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, and `WindowsUpdate`. |
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |
 | `-WingetDiscover` | Repairs/refreshes winget if needed and runs only winget discovery commands. |
-| `-Search` / `-S` / `-s` | Inventories applications Reparo `-Force` can update and prints installed versions, available versions when known, update method, source, lock status, and a ready-to-copy `LockSpec`. Add terms after the switch to filter, for example `reparo -Search git`. |
+| `-Search` / `-List` / `-S` / `-L` | Inventories applications Reparo `-Force` can update and prints installed versions, available versions when known, update method, source, lock status, and a ready-to-copy `LockSpec`. Add terms after the switch to filter, for example `reparo -Search git` or `reparo -List git`. PowerShell switch names are case-insensitive, so lowercase forms work too. |
 | `-VersionLock <spec>` | Adds an inline version lock for this run. Format: `method:id=version`, for example `winget:Git.Git=2.51.0`. |
 | `-VersionLockPath <path>` | Reads version locks from JSON. Default: `C:\ProgramData\Reparo\version-locks.json`. |
 | `-ListVersionLocks` | Prints resolved locks from the lock file and inline `-VersionLock` specs, then exits. |
@@ -415,12 +416,15 @@ Package-level update details are currently collected for `Winget`, `Winget(mssto
 
 ## Search and version locks
 
-Use `-Search` to see the software Reparo can update under the broader `-Force` umbrella:
+Use `-Search` or `-List` to see the software Reparo can update under the broader `-Force` umbrella:
 
 ```powershell
 reparo -Search
+reparo -List
 reparo -Search git
+reparo -List git
 reparo -S vscode
+reparo -L vscode
 ```
 
 The output includes installed `Version`, `AvailableVersion` when the package manager exposes it cleanly, `Method`, `Source`, lock state, and a `LockSpec` you can paste into a lock file or pass inline.
