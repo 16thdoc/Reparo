@@ -36,6 +36,8 @@ param(
     [switch]$Search,
     [Alias('VL')]
     [string[]]$VersionLock,
+    [Alias('SaveVersionLock', 'AVL')]
+    [string[]]$AddVersionLock,
     [Alias('VLP')]
     [string]$VersionLockPath = "$env:ProgramData\Reparo\version-locks.json",
     [Alias('LVL')]
@@ -103,7 +105,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.0.5'
+$script:ReparoVersion = '1.0.7'
 
 function Get-ReparoVersionFlavor {
     param([string]$Version = $script:ReparoVersion)
@@ -188,6 +190,7 @@ function Write-ReparoParameterBlock {
         WingetDiscover               = $WingetDiscover
         Search                       = $Search
         VersionLock                  = $VersionLock
+        AddVersionLock               = $AddVersionLock
         VersionLockPath              = $VersionLockPath
         ListVersionLocks             = $ListVersionLocks
         MigrateChocoToWinget         = $MigrateChocoToWinget
@@ -321,6 +324,8 @@ Usage:
   reparo -Search git
   reparo -List git
   reparo -Search git | Where-Object Method -eq winget
+  reparo -AddVersionLock winget:ScanSnap.PackageId=1.2.3
+  reparo -ListVersionLocks
   reparo -Preview -MigrateChocoToWinget
   reparo -MigrateChocoToWinget
   reparo -Tail
@@ -330,7 +335,7 @@ Usage:
 
 Modes:
   Default              Run Windows Update only.
-  -Update              Run the managed-client pass: Winget, Winget(msstore), Choco, WindowsUpdate.
+  -Update              Run the managed-client pass: Winget, Winget(msstore), Choco, PowerShell7, WindowsUpdate.
                         Updated package rows show current version -> target version when available.
   -Winget              Run a winget-focused pass. Reparo attempts to repair/register App Installer,
                        logs discovery output, then runs the Winget sections. In preview mode,
@@ -341,6 +346,8 @@ Modes:
                        Optional terms filter by name, id, method, source, or version.
   -VersionLock         Inline lock specs: method:id=version. Example: winget:Git.Git=2.51.0.
                        Locks are matched case-insensitively by method and package id/name.
+  -AddVersionLock      Persist lock specs to the local workstation lock file, then exit.
+                       Use this for client/workstation-specific exclusions like ScanSnap.
   -VersionLockPath     JSON lock file. Default: C:\ProgramData\Reparo\version-locks.json.
                        Supports [{"Method":"winget","Id":"Git.Git","Version":"2.51.0"}]
                        or {"winget:Git.Git":"2.51.0"}.
@@ -401,7 +408,7 @@ After install, new PowerShell sessions can usually run:
   reparo -Install
 
 Common sections:
-  Winget, Winget(msstore), Choco, WindowsUpdate, Scoop, Pip, Pipx, Npm,
+  Winget, Winget(msstore), Choco, PowerShell7, WindowsUpdate, Scoop, Pip, Pipx, Npm,
   Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer, Spicetify,
   Wsl, WslApt.
 
@@ -429,6 +436,7 @@ $updateSections = @(
     'Winget'
     'Winget(msstore)'
     'Choco'
+    'PowerShell7'
 )
 
 if ($Winget) {
@@ -1533,7 +1541,7 @@ if ($DeleteStale) {
     return
 }
 
-if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $Search -or $ListVersionLocks -or $MigrateChocoToWinget -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
+if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
@@ -2222,6 +2230,10 @@ function Get-ReparoVersionLocks {
                     if ($record) { [void]$locks.Add($record) }
                 }
             }
+            elseif ($json.PSObject.Properties.Name -contains 'Method' -and $json.PSObject.Properties.Name -contains 'Id') {
+                $record = New-ReparoVersionLockRecord -Method $json.Method -Id $json.Id -Software $json.Software -Version $json.Version -Source $VersionLockPath
+                if ($record) { [void]$locks.Add($record) }
+            }
             else {
                 foreach ($property in $json.PSObject.Properties) {
                     $record = ConvertFrom-ReparoVersionLockSpec -Spec ("{0}={1}" -f $property.Name, $property.Value) -Source $VersionLockPath
@@ -2411,6 +2423,82 @@ function Show-ReparoVersionLocks {
     }
 
     $locks | Sort-Object Method, Id | Select-Object Method, Id, Version, Software, Source
+}
+
+function Add-ReparoVersionLocksToFile {
+    param([Parameter(Mandatory)][string[]]$Specs)
+
+    if ([string]::IsNullOrWhiteSpace($VersionLockPath)) {
+        throw 'VersionLockPath cannot be blank when adding persistent locks.'
+    }
+
+    $existing = New-Object 'System.Collections.Generic.List[object]'
+    if (Test-Path -LiteralPath $VersionLockPath) {
+        try {
+            $json = Get-Content -LiteralPath $VersionLockPath -Raw | ConvertFrom-Json
+            if ($json -is [System.Array]) {
+                foreach ($row in $json) {
+                    $record = New-ReparoVersionLockRecord -Method $row.Method -Id $row.Id -Software $row.Software -Version $row.Version -Source $VersionLockPath
+                    if ($record) { [void]$existing.Add($record) }
+                }
+            }
+            elseif ($json.PSObject.Properties.Name -contains 'Method' -and $json.PSObject.Properties.Name -contains 'Id') {
+                $record = New-ReparoVersionLockRecord -Method $json.Method -Id $json.Id -Software $json.Software -Version $json.Version -Source $VersionLockPath
+                if ($record) { [void]$existing.Add($record) }
+            }
+            else {
+                foreach ($property in $json.PSObject.Properties) {
+                    $record = ConvertFrom-ReparoVersionLockSpec -Spec ("{0}={1}" -f $property.Name, $property.Value) -Source $VersionLockPath
+                    if ($record) { [void]$existing.Add($record) }
+                }
+            }
+        }
+        catch {
+            throw "Unable to read existing version lock file '$VersionLockPath': $($_.Exception.Message)"
+        }
+    }
+
+    foreach ($spec in @($Specs)) {
+        if ([string]::IsNullOrWhiteSpace($spec)) { continue }
+        $record = ConvertFrom-ReparoVersionLockSpec -Spec $spec -Source $VersionLockPath
+        if (-not $record) { continue }
+
+        $merged = New-Object 'System.Collections.Generic.List[object]'
+        foreach ($item in @($existing.ToArray())) {
+            if ($item.Method -ieq $record.Method -and $item.Id -ieq $record.Id) { continue }
+            [void]$merged.Add($item)
+        }
+        $existing = $merged
+        [void]$existing.Add($record)
+    }
+
+    $rows = @(
+        $existing |
+            Sort-Object Method, Id |
+            ForEach-Object {
+                [pscustomobject]@{
+                    Method   = $_.Method
+                    Id       = $_.Id
+                    Software = $_.Software
+                    Version  = $_.Version
+                }
+            }
+    )
+
+    if ($Preview) {
+        Write-Host "Preview: would write $($rows.Count) lock(s) to $VersionLockPath"
+        $rows | Select-Object Method, Id, Version, Software
+        return
+    }
+
+    $parent = Split-Path -Parent $VersionLockPath
+    if (-not [string]::IsNullOrWhiteSpace($parent) -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+
+    ConvertTo-Json -InputObject @($rows) -Depth 4 | Set-Content -LiteralPath $VersionLockPath -Encoding UTF8
+    Write-Host "Saved $($rows.Count) Reparo version lock(s) to $VersionLockPath"
+    $rows | Select-Object Method, Id, Version, Software
 }
 
 function Add-ReparoSectionUpdates {
@@ -3678,6 +3766,11 @@ if ($ListVersionLocks) {
     return
 }
 
+if ($AddVersionLock) {
+    Add-ReparoVersionLocksToFile -Specs $AddVersionLock
+    return
+}
+
 if ($Search) {
     Show-ReparoSearchResults -Terms $RemainingInclude
     return
@@ -3819,6 +3912,64 @@ if ($runWingetSections) {
         Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget(msstore)' -Version '-' -Method 'Winget(msstore)' -Reason 'winget not found or could not be repaired'
     }
 }
+
+$lockedPowerShell7Ids = @(Get-ReparoLockedPackageIds -Method 'winget') | Where-Object { $_ -ieq 'Microsoft.PowerShell' }
+$powerShell7LockLiteral = '@({0})' -f ((@($lockedPowerShell7Ids | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))
+if ($lockedPowerShell7Ids.Count -gt 0) {
+    Add-ReparoSummaryNote 'PowerShell 7 winget version lock active; skipping dedicated PowerShell7 section.'
+}
+
+Invoke-ReparoCommandStep -Section 'PowerShell7' -PresenceCmd 'winget' -Command @"
+`$ErrorActionPreference = 'Stop'
+`$lockedPackages = $powerShell7LockLiteral
+if (`$lockedPackages | Where-Object { `$_ -ieq 'Microsoft.PowerShell' }) {
+    Write-Host 'Skipping locked PowerShell 7 package: Microsoft.PowerShell'
+    exit 0
+}
+
+`$pwshCommand = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (`$pwshCommand) {
+    try {
+        `$currentVersion = & `$pwshCommand.Source -NoProfile -Command '`$PSVersionTable.PSVersion.ToString()'
+    }
+    catch {
+        `$currentVersion = 'unknown'
+    }
+
+    Write-Host "PowerShell 7 current version: `$currentVersion"
+}
+else {
+    Write-Host 'PowerShell 7 not found; installing Microsoft.PowerShell through winget.'
+}
+
+`$upgradeOutput = @(winget upgrade --id Microsoft.PowerShell --exact --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1)
+`$upgradeExit = `$LASTEXITCODE
+`$upgradeOutput | ForEach-Object { Write-Host ([string]`$_) }
+`$upgradeText = (`$upgradeOutput | ForEach-Object { [string]`$_ }) -join [Environment]::NewLine
+
+if (`$upgradeExit -eq 0) {
+    exit 0
+}
+
+`$nothingToUpgrade = `$upgradeText -match 'No installed package found matching input criteria|No applicable update found|No available upgrade found|No packages found'
+if (`$pwshCommand -and `$nothingToUpgrade) {
+    Write-Host 'PowerShell 7 is installed and winget reports no applicable update.'
+    exit 0
+}
+
+if ((-not `$pwshCommand) -or (`$upgradeText -match 'No installed package found matching input criteria')) {
+    `$installOutput = @(winget install --id Microsoft.PowerShell --exact --accept-source-agreements --accept-package-agreements --disable-interactivity --silent 2>&1)
+    `$installExit = `$LASTEXITCODE
+    `$installOutput | ForEach-Object { Write-Host ([string]`$_) }
+    if (`$installExit -eq 0) {
+        exit 0
+    }
+
+    throw "winget install Microsoft.PowerShell failed with exit code `$installExit"
+}
+
+throw "winget upgrade Microsoft.PowerShell failed with exit code `$upgradeExit"
+"@ -TimeoutSeconds $WingetTimeoutSeconds
 $lockedScoopIds = @(Get-ReparoLockedPackageIds -Method 'scoop')
 if ($lockedScoopIds.Count -gt 0) {
     $scoopLockLiteral = '@({0})' -f ((@($lockedScoopIds | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))

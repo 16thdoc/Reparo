@@ -6,7 +6,7 @@ It updates common package managers and toolchains when they are already present 
 
 ## What it does
 
-By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, Spicetify, and WSL, plus a Chocolatey-to-winget migration pass.
+By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, PowerShell 7 through winget, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, Spicetify, and WSL, plus a Chocolatey-to-winget migration pass.
 
 Reparo does not install package managers from scratch. It only uses tools that are already present, then skips the sections that are not available.
 
@@ -212,11 +212,12 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Kill` | Stops running Reparo PowerShell processes, then sweeps known updater front-end processes such as `winget`, `choco`, `npm`, `pip`, and related package managers. |
 | `-KillUpdaterNames <names>` | Adds extra process base names to the `-Kill` updater sweep, for example `-Kill -KillUpdaterNames msiexec`. |
 | `-Preview` | Logs what would run without executing package manager commands. |
-| `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, and `WindowsUpdate`. |
+| `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, `PowerShell7`, and `WindowsUpdate`. |
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |
 | `-WingetDiscover` | Repairs/refreshes winget if needed and runs only winget discovery commands. |
 | `-Search` / `-List` / `-S` / `-L` | Inventories applications Reparo `-Force` can update and prints installed versions, available versions when known, update method, source, lock status, and a ready-to-copy `LockSpec`. Add terms after the switch to filter, for example `reparo -Search git` or `reparo -List git`. PowerShell switch names are case-insensitive, so lowercase forms work too. |
 | `-VersionLock <spec>` | Adds an inline version lock for this run. Format: `method:id=version`, for example `winget:Git.Git=2.51.0`. |
+| `-AddVersionLock <spec>` / `-SaveVersionLock <spec>` / `-AVL <spec>` | Persists a Reparo-side version lock to the local workstation lock file, then exits. Use this for machine-specific exclusions such as ScanSnap. |
 | `-VersionLockPath <path>` | Reads version locks from JSON. Default: `C:\ProgramData\Reparo\version-locks.json`. |
 | `-ListVersionLocks` | Prints resolved locks from the lock file and inline `-VersionLock` specs, then exits. |
 | `-MigrateChocoToWinget` | Inventories local Chocolatey packages, matches known or mapped winget IDs, installs the winget package, then uninstalls the Chocolatey package after winget succeeds. |
@@ -276,6 +277,7 @@ Available section names:
 - `Winget(msstore)`
 - `Scoop`
 - `Choco`
+- `PowerShell7`
 - `Pip`
 - `Pipx`
 - `Npm`
@@ -291,6 +293,23 @@ Available section names:
 - `Wsl`
 - `WslApt`
 - `WindowsUpdate`
+
+### PowerShell 7
+
+The `PowerShell7` section updates or installs the official winget package ID `Microsoft.PowerShell`. It is included in `-Update` and `-Force`, and can also be run directly:
+
+```powershell
+reparo -Preview -Include PowerShell7
+reparo -Include PowerShell7
+```
+
+If you need to freeze PowerShell 7 for a machine, use the existing winget lock format:
+
+```powershell
+reparo -Force -VersionLock winget:Microsoft.PowerShell=7.5.2
+```
+
+When that lock is active, Reparo skips the dedicated `PowerShell7` section.
 
 ### Spicetify
 
@@ -458,6 +477,16 @@ Inline one-run locks are also supported:
 ```powershell
 reparo -Force -VersionLock winget:Git.Git=2.51.0
 ```
+
+Persist a lock on just one workstation by writing that machine's local lock file:
+
+```powershell
+reparo -Search scansnap
+reparo -AddVersionLock winget:ScanSnap.PackageId=1.2.3
+reparo -ListVersionLocks
+```
+
+Use the `LockSpec` from `-Search` when possible. This is the right workflow for client-specific exclusions: the locked workstation skips that app during Reparo runs, while other workstations without the lock continue updating it normally.
 
 Automatic skipping is currently implemented for `winget`, `choco`, `scoop`, `npm`, and global `.NET` tools. Locks for other methods are listed and logged as configured, but Reparo does not yet know how to safely exclude those packages from their bulk updater commands. Tiny goblin with a clipboard, not a package manager miracle worker.
 
