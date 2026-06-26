@@ -118,7 +118,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.0.8.2'
+$script:ReparoVersion = '1.0.8.3'
 
 function Get-ReparoVersionFlavor {
     param([string]$Version = $script:ReparoVersion)
@@ -126,6 +126,7 @@ function Get-ReparoVersionFlavor {
     $versionFlavors = @{
         '1.0.8.1' = [pscustomobject]@{ Quote = 'Hotfix applied. The goblin has been relocated.'; Art = '  GOBLIN: evicted from version output' }
         '1.0.8.2' = [pscustomobject]@{ Quote = 'New quote online. Old ghosts denied boarding.'; Art = '  QUOTE BAY: temporal lint removed' }
+        '1.0.8.3' = [pscustomobject]@{ Quote = 'I cast Magic Missile at the darkness.'; Art = '  D20: quote gremlin takes 1d4+1 force damage' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -142,13 +143,13 @@ function Get-ReparoVersionFlavor {
         [pscustomobject]@{ Quote = 'Open the pod bay doors.'; Art = '  HAL says: maintenance acknowledged' },
         [pscustomobject]@{ Quote = 'Never tell me the odds.'; Art = '  <KesselRun parsecs="12" />' },
         [pscustomobject]@{ Quote = 'Would you like to know more?'; Art = '  SERVICE GUARANTEES CITIZENSHIP' },
-        [pscustomobject]@{ Quote = 'Access granted.'; Art = '  [root@mainframe ~]# ./reparo' },
-        [pscustomobject]@{ Quote = 'I''m in.'; Art = '  sunglasses: lowered; keyboard: clacked' },
-        [pscustomobject]@{ Quote = 'Enhance.'; Art = '  CSI zoom module: absolutely illegal' },
-        [pscustomobject]@{ Quote = 'All systems nominal.'; Art = '  MECH BAY: green lights and duct tape' },
-        [pscustomobject]@{ Quote = 'Recalculating the mainframe.'; Art = '  MAINFRAME: beep boop, probably fine' },
-        [pscustomobject]@{ Quote = 'Initiating the uplink.'; Art = '  SATCOM: pew pew packets acquired' },
-        [pscustomobject]@{ Quote = 'You''re gonna need a bigger firewall.'; Art = '  ><(((º>  firewall chomp mode enabled' }
+        [pscustomobject]@{ Quote = 'By Grabthar''s hammer, what a savings.'; Art = '  GALAXY QUEST: thermian patch ritual complete' },
+        [pscustomobject]@{ Quote = 'I cast Magic Missile at the darkness.'; Art = '  D20: quote gremlin takes 1d4+1 force damage' },
+        [pscustomobject]@{ Quote = 'The spice must flow.'; Art = '  ARRAKIS: maintenance harvester deployed' },
+        [pscustomobject]@{ Quote = 'So say we all.'; Art = '  BSG: jump drive cooled, logs synced' },
+        [pscustomobject]@{ Quote = 'Roll for initiative.'; Art = '  D20: service encounter begins' },
+        [pscustomobject]@{ Quote = 'The cake is a lie.'; Art = '  APERTURE: morally dubious maintenance complete' },
+        [pscustomobject]@{ Quote = 'It is pitch black. You are likely to be eaten by a grue.'; Art = '  ZORK: lantern battery critically petty' }
     )
 
     $hash = [long]5381
