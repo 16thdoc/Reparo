@@ -61,13 +61,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Include Wi
 Preview Chocolatey-to-winget migration:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -MigrateChocoToWinget
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -MigrateChocoToWinget -MigrationReportPath "$env:USERPROFILE\Desktop\reparo-choco-winget-preview"
 ```
 
 Run Chocolatey-to-winget migration:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -MigrateChocoToWinget
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -MigrateChocoToWinget -ChocoDeregisterOnly -MigrationReportPath "$env:USERPROFILE\Desktop\reparo-choco-winget-live"
 ```
 
 ## RMM deployment
@@ -220,7 +220,13 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-AddVersionLock <spec>` / `-SaveVersionLock <spec>` / `-AVL <spec>` | Persists a Reparo-side version lock to the local workstation lock file, then exits. Use this for machine-specific exclusions such as ScanSnap. |
 | `-VersionLockPath <path>` | Reads version locks from JSON. Default: `C:\ProgramData\Reparo\version-locks.json`. |
 | `-ListVersionLocks` | Prints resolved locks from the lock file and inline `-VersionLock` specs, then exits. |
-| `-MigrateChocoToWinget` | Inventories local Chocolatey packages, matches known or mapped winget IDs, installs the winget package, then uninstalls the Chocolatey package after winget succeeds. |
+| `-MigrateChocoToWinget` | Builds a conservative Chocolatey-to-winget migration plan with package class, risk level, duplicate grouping, ProgramData payload status, shim status, winget availability, and proposed action. Live mode installs/verifies winget replacements. |
+| `-ChocoDeregisterOnly` | After winget verification, deregisters safe Chocolatey package records with `--skip-autouninstaller` and `--skip-powershell`. This is not an app uninstall. |
+| `-ForceWingetReinstall` | Allows `winget install --force` during migration. Off by default. |
+| `-AllowRuntimeDeregister` | Allows runtime package records such as VC++ redistributables and .NET Desktop Runtime to be deregistered after verification. Off by default. |
+| `-AllowPortableDeregister` | Allows portable/CLI payload package records to be deregistered after non-Chocolatey command-path verification. Off by default. |
+| `-FinalizeChocolateyRemoval` | Separate explicit phase that backs up and removes Chocolatey after safety checks. Uses `$env:ChocolateyInstall` when available, otherwise `C:\ProgramData\chocolatey` / `C:\ProgramData\choco` fallback detection. |
+| `-MigrationReportPath <path>` | Exports migration plan/results to CSV and JSON. A bare path writes both `<path>.csv` and `<path>.json`. |
 | `-ChocoWingetMapPath <path>` | Adds or overrides Chocolatey-to-winget package mappings from a JSON or CSV file. |
 | `-MigrateChocoExclude <ids>` | Skips extra Chocolatey package IDs during migration. Chocolatey infrastructure packages are excluded automatically. |
 | `-CheckApp <id/name>` | Shows the installed version of one app through winget or Chocolatey, then exits without running update sections. |
@@ -348,29 +354,48 @@ Set `-WslAptTimeoutSeconds 0` to disable that timeout, or use `-IgnoreTimeouts` 
 
 ## Chocolatey to winget migration
 
-Use `-MigrateChocoToWinget` when you want to move a workstation away from Chocolatey package ownership and toward winget package ownership.
+Use `-MigrateChocoToWinget` when you want to move a workstation away from Chocolatey package ownership and toward winget package ownership. The migration is plan-based and intentionally conservative; final Chocolatey removal is a separate explicit phase.
 
 The migration pass is intentionally conservative:
 
 - It lists locally installed Chocolatey packages with `choco list --local-only --limit-output --no-color`.
-- It skips Chocolatey infrastructure packages such as `chocolatey` and Chocolatey extension packages.
-- It migrates only packages with a built-in mapping or a mapping supplied by `-ChocoWingetMapPath`.
-- It verifies the target winget package with `winget search --id <id> --exact`.
-- In live mode, it installs the mapped winget package first.
-- It uninstalls the Chocolatey package only after the winget install command succeeds.
-- Packages without a map, unavailable winget targets, failed installs, and failed uninstalls are reported in the final summary and log.
+- It audits Chocolatey ProgramData payloads and command shims that resolve under the Chocolatey root.
+- It classifies packages as normal GUI apps, duplicate clusters, runtime dependencies, portable payloads, infrastructure, prerequisites, unsupported, or manual review.
+- It groups duplicate Chocolatey package records that map to the same winget ID and verifies/installs the winget target only once per group.
+- It verifies the target winget package with `winget search --id <id> --exact` and checks whether it is already installed.
+- Live mode installs or verifies the mapped winget package without `--force` unless `-ForceWingetReinstall` is supplied.
+- Chocolatey cleanup is safe record deregistration with skip flags when `-ChocoDeregisterOnly` is supplied, not a blind application uninstall.
+- Runtime packages require `-AllowRuntimeDeregister`; portable/CLI payloads require non-Chocolatey command verification and may require `-AllowPortableDeregister`.
+- Packages without a map, unavailable winget targets, risky payloads, and manual-review items are reported in the final summary and optional CSV/JSON reports.
+- CyberChef is treated as disposable during the final Chocolatey removal phase; the backup-first finalizer is the recovery path instead of trying to preserve a random portable web app forever like a tiny cursed museum exhibit.
 
 Always start with:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -MigrateChocoToWinget
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -MigrateChocoToWinget -MigrationReportPath "$env:USERPROFILE\Desktop\reparo-choco-winget-preview"
 ```
 
-Then run live mode on a pilot machine:
+Then run live mode on a pilot machine after reviewing the report:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -MigrateChocoToWinget
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -MigrateChocoToWinget -ChocoDeregisterOnly -MigrationReportPath "$env:USERPROFILE\Desktop\reparo-choco-winget-live"
 ```
+
+Handle runtime and portable/CLI payload records only after the normal app migration is boring:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -MigrateChocoToWinget -ChocoDeregisterOnly -AllowRuntimeDeregister
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -MigrateChocoToWinget -ChocoDeregisterOnly -AllowPortableDeregister
+```
+
+When reports show no critical Chocolatey-only payloads remain, final removal is explicit and backup-first:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -FinalizeChocolateyRemoval
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -FinalizeChocolateyRemoval
+```
+
+`-FinalizeChocolateyRemoval` respects `$env:ChocolateyInstall` so managed devices with a nonstandard Chocolatey root are handled correctly. If that variable is absent, Reparo falls back to `C:\ProgramData\chocolatey`, with `C:\ProgramData\choco` detection for oddball installs.
 
 For Ninja/GitHub bootstrap deployments, use:
 

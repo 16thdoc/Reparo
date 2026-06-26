@@ -44,6 +44,19 @@ param(
     [switch]$ListVersionLocks,
     [Alias('MCW')]
     [switch]$MigrateChocoToWinget,
+    [Alias('CDO')]
+    [switch]$ChocoDeregisterOnly,
+    [Alias('FWR')]
+    [switch]$ForceWingetReinstall,
+    [Alias('ARD')]
+    [switch]$AllowRuntimeDeregister,
+    [Alias('APD')]
+    [switch]$AllowPortableDeregister,
+    [Alias('FCR')]
+    [switch]$FinalizeChocolateyRemoval,
+    [switch]$AllowRemainingChocoPackages,
+    [switch]$NoChocolateyBackup,
+    [string]$MigrationReportPath,
     [Alias('CWM')]
     [string]$ChocoWingetMapPath,
     [Alias('MCE')]
@@ -203,6 +216,14 @@ function Write-ReparoParameterBlock {
         VersionLockPath              = $VersionLockPath
         ListVersionLocks             = $ListVersionLocks
         MigrateChocoToWinget         = $MigrateChocoToWinget
+        ChocoDeregisterOnly          = $ChocoDeregisterOnly
+        ForceWingetReinstall         = $ForceWingetReinstall
+        AllowRuntimeDeregister       = $AllowRuntimeDeregister
+        AllowPortableDeregister      = $AllowPortableDeregister
+        FinalizeChocolateyRemoval    = $FinalizeChocolateyRemoval
+        AllowRemainingChocoPackages  = $AllowRemainingChocoPackages
+        NoChocolateyBackup           = $NoChocolateyBackup
+        MigrationReportPath          = $MigrationReportPath
         ChocoWingetMapPath           = $ChocoWingetMapPath
         MigrateChocoExclude          = $MigrateChocoExclude
         CheckApp                     = $CheckApp
@@ -335,8 +356,9 @@ Usage:
   reparo -Search git | Where-Object Method -eq winget
   reparo -AddVersionLock winget:ScanSnap.PackageId=1.2.3
   reparo -ListVersionLocks
-  reparo -Preview -MigrateChocoToWinget
-  reparo -MigrateChocoToWinget
+  reparo -Preview -MigrateChocoToWinget -MigrationReportPath "$env:USERPROFILE\Desktop\reparo-choco-winget-preview"
+  reparo -MigrateChocoToWinget -ChocoDeregisterOnly
+  reparo -FinalizeChocolateyRemoval
   reparo -Tail
   reparo -Status
   reparo -Status -Sweep
@@ -362,9 +384,23 @@ Modes:
                        or {"winget:Git.Git":"2.51.0"}.
   -ListVersionLocks    Print resolved version locks and exit.
   -MigrateChocoToWinget
-                       Inventory Chocolatey packages, match known/exact winget packages,
-                       install with winget, then uninstall the Chocolatey package after success.
-                       Use -Preview first to report what would migrate.
+                       Build a plan from Chocolatey inventory, winget availability,
+                       duplicate groups, Chocolatey ProgramData payloads, and PATH shims.
+                       Live mode installs/verifies winget replacements. Chocolatey cleanup is
+                       safe deregistration with skip flags, not app uninstall.
+                       Use -Preview first and review the CSV/JSON report.
+  -ChocoDeregisterOnly After winget verification, deregister safe Chocolatey records with
+                       --skip-autouninstaller and --skip-powershell.
+  -ForceWingetReinstall
+                       Allow winget install --force during migration. Off by default.
+  -AllowRuntimeDeregister
+                       Allow runtime package Chocolatey records to be deregistered.
+  -AllowPortableDeregister
+                       Allow portable/CLI payload records after non-Chocolatey command verification.
+  -FinalizeChocolateyRemoval
+                       Separate explicit Chocolatey removal phase. Backs up first and blocks
+                       if non-excluded packages or Chocolatey-only commands remain.
+  -MigrationReportPath Export migration plan/results. A bare path writes .csv and .json.
   -CheckApp <id/name>  Show the installed version of one app through winget/choco.
   -LockApp <id/name>   Pin one app so package-manager update passes do not move it.
   -LockVersion <ver>   Version to pin. If omitted, Reparo tries to pin the currently installed version.
@@ -1594,7 +1630,7 @@ if ($DeleteStale) {
     return
 }
 
-if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
+if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $WslApt -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
@@ -1700,12 +1736,12 @@ function Test-ReparoSectionSelected($Section) {
         $includeText = $Include -join ','
     }
 
-    Write-ReparoDebug ("Test-ReparoSectionSelected({0}) Force={1} Update={2} WindowsUpdate={3} MigrateChocoToWinget={4} Include={5}" -f $Section, $Force, $Update, $WindowsUpdate, $MigrateChocoToWinget, $includeText)
+    Write-ReparoDebug ("Test-ReparoSectionSelected({0}) Force={1} Update={2} WindowsUpdate={3} MigrateChocoToWinget={4} FinalizeChocolateyRemoval={5} Include={6}" -f $Section, $Force, $Update, $WindowsUpdate, $MigrateChocoToWinget, $FinalizeChocolateyRemoval, $includeText)
     if ($Force) { return $true }
     if ($Include -and $Include.Count -gt 0) {
         return ($Include -contains $Section)
     }
-    if ($MigrateChocoToWinget -and -not ($Update -or $WindowsUpdate -or $Winget -or $WingetDiscover -or $WslApt)) {
+    if (($MigrateChocoToWinget -or $FinalizeChocolateyRemoval) -and -not ($Update -or $WindowsUpdate -or $Winget -or $WingetDiscover -or $WslApt)) {
         return $false
     }
 
@@ -2589,23 +2625,34 @@ function Get-ReparoChocoWingetBuiltinMap {
         'bitwarden'                    = 'Bitwarden.Bitwarden'
         'brave'                        = 'Brave.Brave'
         'calibre'                      = 'calibre.calibre'
+        'bulkrenameutility'            = 'TGRMNSoftware.BulkRenameUtility'
         'discord'                      = 'Discord.Discord'
+        'dosbox'                       = 'DOSBox.DOSBox'
         'docker-desktop'               = 'Docker.DockerDesktop'
         'dotnet'                       = 'Microsoft.DotNet.SDK.8'
+        'dotnet-10.0-desktopruntime'   = 'Microsoft.DotNet.DesktopRuntime.10'
+        'dotnet-5.0-desktopruntime'    = 'Microsoft.DotNet.DesktopRuntime.5'
+        'dotnet-8.0-desktopruntime'    = 'Microsoft.DotNet.DesktopRuntime.8'
+        'dotnet-desktopruntime'        = 'Microsoft.DotNet.DesktopRuntime.10'
         'dotnet-8.0-sdk'               = 'Microsoft.DotNet.SDK.8'
         'dotnet-9.0-sdk'               = 'Microsoft.DotNet.SDK.9'
         'dropbox'                      = 'Dropbox.Dropbox'
+        'dupeguru'                     = 'DupeGuru.DupeGuru'
+        'epicgameslauncher'            = 'EpicGames.EpicGamesLauncher'
         'everything'                   = 'voidtools.Everything'
         'firefox'                      = 'Mozilla.Firefox'
         'ffmpeg'                       = 'Gyan.FFmpeg'
+        'freecad'                      = 'FreeCAD.FreeCAD'
         'git'                          = 'Git.Git'
         'git.install'                  = 'Git.Git'
         'github-desktop'               = 'GitHub.GitHubDesktop'
         'googlechrome'                 = 'Google.Chrome'
         'googledrive'                  = 'Google.GoogleDrive'
+        'googleearthpro'               = 'Google.EarthPro'
         'greenshot'                    = 'Greenshot.Greenshot'
         'handbrake'                    = 'HandBrake.HandBrake'
         'handbrake.install'            = 'HandBrake.HandBrake'
+        'httpie'                       = 'HTTPie.HTTPie'
         'itunes'                       = 'Apple.iTunes'
         'javaruntime'                  = 'Oracle.JavaRuntimeEnvironment'
         'jdk8'                         = 'EclipseAdoptium.Temurin.8.JDK'
@@ -2619,37 +2666,61 @@ function Get-ReparoChocoWingetBuiltinMap {
         'microsoft-teams'              = 'Microsoft.Teams'
         'microsoft-windows-terminal'   = 'Microsoft.WindowsTerminal'
         'microsoftazurestorageexplorer' = 'Microsoft.Azure.StorageExplorer'
+        'micro'                        = 'zyedidia.micro'
+        'mkvtoolnix'                   = 'MoritzBunkus.MKVToolNix'
+        'moonlight'                    = 'MoonlightGameStreamingProject.Moonlight'
+        'moonlight-qt'                 = 'MoonlightGameStreamingProject.Moonlight'
+        'moonlight-qt.install'         = 'MoonlightGameStreamingProject.Moonlight'
+        'mouse-jiggler'                = 'ArkaneSystems.MouseJiggler'
+        'mp3tag'                       = 'FlorianHeidenreich.Mp3tag'
+        'nano'                         = 'okibcn.nano'
+        'nano-win'                     = 'okibcn.nano'
         'nodejs'                       = 'OpenJS.NodeJS'
         'nodejs.install'               = 'OpenJS.NodeJS'
         'notepadplusplus'              = 'Notepad++.Notepad++'
         'notepadplusplus.install'      = 'Notepad++.Notepad++'
+        'obsidian'                     = 'Obsidian.Obsidian'
         'obs-studio'                   = 'OBSProject.OBSStudio'
         'paint.net'                    = 'dotPDN.PaintDotNet'
         'plex'                         = 'Plex.Plex'
         'plexamp'                      = 'Plex.Plexamp'
         'postman'                      = 'Postman.Postman'
         'powertoys'                    = 'Microsoft.PowerToys'
+        'protonvpn'                    = 'Proton.ProtonVPN'
         'python'                       = 'Python.Python.3.14'
         'python3'                      = 'Python.Python.3.14'
         'python313'                    = 'Python.Python.3.13'
         'python314'                    = 'Python.Python.3.14'
         'putty'                        = 'PuTTY.PuTTY'
+        'putty.portable'               = 'PuTTY.PuTTY'
+        'qflipper'                     = 'FlipperDevicesInc.qFlipper'
         'rufus'                        = 'Rufus.Rufus'
         'signal'                       = 'OpenWhisperSystems.Signal'
         'slack'                        = 'SlackTechnologies.Slack'
         'spotify'                      = 'Spotify.Spotify'
         'steam'                        = 'Valve.Steam'
+        'sunshine'                     = 'LizardByte.Sunshine'
+        'sysmon'                       = 'Microsoft.Sysinternals.Sysmon'
         'sysinternals'                 = 'Microsoft.Sysinternals'
         'teamviewer'                   = 'TeamViewer.TeamViewer'
         'terraform'                    = 'Hashicorp.Terraform'
         'thunderbird'                  = 'Mozilla.Thunderbird'
         'vivaldi'                      = 'Vivaldi.Vivaldi'
+        'vcredist140'                  = 'Microsoft.VCRedist.2015+.x64'
+        'vcredist2015'                 = 'Microsoft.VCRedist.2015+.x64'
+        'vcredist2017'                 = 'Microsoft.VCRedist.2015+.x64'
         'vlc'                          = 'VideoLAN.VLC'
         'vlc.install'                  = 'VideoLAN.VLC'
         'vscode'                       = 'Microsoft.VisualStudioCode'
         'vscode.install'               = 'Microsoft.VisualStudioCode'
+        'vigembus'                     = 'ViGEm.ViGEmBus'
+        'whois'                        = 'Microsoft.Sysinternals.Whois'
         'winscp'                       = 'WinSCP.WinSCP'
+        'winscp.install'               = 'WinSCP.WinSCP'
+        'windirstat'                   = 'WinDirStat.WinDirStat'
         'wireshark'                    = 'WiresharkFoundation.Wireshark'
+        'wiztree'                      = 'AntibodySoftware.WizTree'
+        'vortex'                       = 'NexusMods.Vortex'
         'zoom'                         = 'Zoom.Zoom'
     }
 
@@ -2764,6 +2835,553 @@ function Test-ReparoWingetPackageAvailable {
     }
 
     return ($LASTEXITCODE -eq 0 -and (($output -join "`n") -match [regex]::Escape($WingetId)))
+}
+
+function Get-ReparoChocolateyRoot {
+    if (-not [string]::IsNullOrWhiteSpace($env:ChocolateyInstall)) {
+        return $env:ChocolateyInstall
+    }
+
+    if ((Test-Path -LiteralPath 'C:\ProgramData\choco') -and -not (Test-Path -LiteralPath 'C:\ProgramData\chocolatey')) {
+        return 'C:\ProgramData\choco'
+    }
+
+    return 'C:\ProgramData\chocolatey'
+}
+
+function Get-ReparoChocoMigrationDefaultExcludes {
+    return @(
+        'chocolatey',
+        'chocolatey-agent',
+        'chocolatey-compatibility.extension',
+        'chocolatey-core.extension',
+        'chocolatey-dotnetfx.extension',
+        'chocolatey-fastanswers.extension',
+        'chocolatey-font-helpers.extension',
+        'chocolatey-misc-helpers.extension',
+        'chocolatey-visualstudio.extension',
+        'chocolatey-windowsupdate.extension',
+        'KB2919355',
+        'KB2919442',
+        'KB2999226',
+        'KB3033929',
+        'KB3035131',
+        'KB3063858',
+        'DotNet4.5',
+        'dotnetfx',
+        'netfx-4.7.2'
+    )
+}
+
+function Get-ReparoChocoFinalizeAllowedPackageIds {
+    return @(
+        @(Get-ReparoChocoMigrationDefaultExcludes) +
+        @(
+            # Trenton is fine with CyberChef being discarded with Chocolatey instead of preserved.
+            'cyberchef'
+        )
+    )
+}
+
+function Get-ReparoChocoRuntimePackageIds {
+    return @(
+        'dotnet-10.0-desktopruntime',
+        'dotnet-5.0-desktopruntime',
+        'dotnet-8.0-desktopruntime',
+        'dotnet-desktopruntime',
+        'vcredist140',
+        'vcredist2015',
+        'vcredist2017'
+    )
+}
+
+function Get-ReparoChocoPortableCommandMap {
+    return @{
+        'micro'          = @('micro')
+        'nano'           = @('nano')
+        'nano-win'       = @('nano')
+        'putty.portable' = @('putty', 'plink', 'pscp', 'psftp', 'puttygen', 'pageant')
+        'sysmon'         = @('sysmon', 'sysmon64')
+        'whois'          = @('whois')
+    }
+}
+
+function Test-ReparoChocoPayloadIsSignificant {
+    param([Parameter(Mandatory)][System.IO.FileInfo]$File)
+
+    $name = $File.Name
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($name)
+    $extension = $File.Extension.ToLowerInvariant()
+
+    if ($name -match '^chocolatey(install|uninstall|beforemodify)\.ps1$') { return $false }
+    if ($name -match '^(helper|helpers|data|update|install|uninstall|beforemodify)\.ps1$') { return $false }
+    if ($extension -in '.html', '.htm') { return $false }
+    if ($extension -eq '.ps1' -and $baseName -match '(helper|data|install|uninstall|beforemodify)') { return $false }
+    if ($extension -eq '.exe' -and $baseName -match '(setup|installer|install|unins|uninstall)') { return $false }
+
+    return ($extension -in '.exe', '.cmd', '.bat', '.ps1', '.psm1', '.js')
+}
+
+function Get-ReparoChocoProgramDataAudit {
+    $chocoRoot = Get-ReparoChocolateyRoot
+    $libPath = Join-Path $chocoRoot 'lib'
+    if (-not (Test-Path -LiteralPath $libPath)) { return @() }
+
+    Get-ChildItem -LiteralPath $libPath -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $packageDir = $_
+        $files = @(Get-ChildItem -LiteralPath $packageDir.FullName -Recurse -File -ErrorAction SilentlyContinue)
+        $toolPayloads = @($files | Where-Object {
+            $_.Extension -in '.exe', '.cmd', '.bat', '.ps1', '.psm1', '.html', '.htm', '.js' -and
+            $_.FullName -match '\\tools\\|\\bin\\'
+        })
+        $nonChocoPayloads = @($toolPayloads | Where-Object { Test-ReparoChocoPayloadIsSignificant -File $_ })
+
+        [pscustomobject]@{
+            Package              = $packageDir.Name
+            Path                 = $packageDir.FullName
+            SizeMB               = [math]::Round((($files | Measure-Object Length -Sum).Sum / 1MB), 2)
+            FileCount            = $files.Count
+            ToolPayloadCount     = $toolPayloads.Count
+            NonChocoPayloadCount = $nonChocoPayloads.Count
+            HasNonChocoPayload   = [bool]$nonChocoPayloads
+            SamplePayload        = ($nonChocoPayloads | Select-Object -First 5 -ExpandProperty FullName) -join '; '
+        }
+    }
+}
+
+function Get-ReparoChocoPackageDirs {
+    $chocoRoot = Get-ReparoChocolateyRoot
+    $libPath = Join-Path $chocoRoot 'lib'
+    if (-not (Test-Path -LiteralPath $libPath)) { return @() }
+
+    Get-ChildItem -LiteralPath $libPath -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        [pscustomobject]@{
+            ChocoId = $_.Name
+            Version = '(disk)'
+            Path    = $_.FullName
+        }
+    }
+}
+
+function Test-ReparoPathIsUnderRoot {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Root
+    )
+
+    $normalizedPath = $Path.Trim().TrimEnd('\')
+    $normalizedRoot = $Root.Trim().TrimEnd('\')
+    return ($normalizedPath -ieq $normalizedRoot -or $normalizedPath.StartsWith($normalizedRoot + '\', [System.StringComparison]::OrdinalIgnoreCase))
+}
+
+function Get-ReparoChocoPathShimAudit {
+    $chocoRoot = Get-ReparoChocolateyRoot
+    $seen = @{}
+    $rows = New-Object System.Collections.Generic.List[object]
+
+    @(Get-Command * -CommandType Application -ErrorAction SilentlyContinue | Where-Object {
+        Test-ReparoPathIsUnderRoot -Path $_.Source -Root $chocoRoot
+    } | ForEach-Object {
+        $key = $_.Source.ToLowerInvariant()
+        if (-not $seen.ContainsKey($key)) {
+            $seen[$key] = $true
+            [void]$rows.Add([pscustomobject]@{
+                Name    = $_.Name
+                Source  = $_.Source
+                Package = $null
+            })
+        }
+    })
+
+    $binPath = Join-Path $chocoRoot 'bin'
+    if (Test-Path -LiteralPath $binPath) {
+        Get-ChildItem -LiteralPath $binPath -File -ErrorAction SilentlyContinue | Where-Object {
+            $_.Extension -in '.exe', '.cmd', '.bat', '.ps1'
+        } | ForEach-Object {
+            $key = $_.FullName.ToLowerInvariant()
+            if (-not $seen.ContainsKey($key)) {
+                $seen[$key] = $true
+                [void]$rows.Add([pscustomobject]@{
+                    Name    = $_.Name
+                    Source  = $_.FullName
+                    Package = $null
+                })
+            }
+        }
+    }
+
+    return @($rows.ToArray() | Sort-Object Name)
+}
+
+function Test-ReparoCommandHasNonChocoSource {
+    param([Parameter(Mandatory)][string]$CommandName)
+
+    $chocoRoot = Get-ReparoChocolateyRoot
+    $hits = @(Get-Command $CommandName -All -ErrorAction SilentlyContinue)
+    if ($hits.Count -eq 0) {
+        return [pscustomobject]@{
+            Command            = $CommandName
+            Found              = $false
+            HasNonChocoSource  = $false
+            Sources            = @()
+        }
+    }
+
+    return [pscustomobject]@{
+        Command            = $CommandName
+        Found              = $true
+        HasNonChocoSource  = [bool]($hits | Where-Object { -not (Test-ReparoPathIsUnderRoot -Path $_.Source -Root $chocoRoot) })
+        Sources            = @($hits.Source)
+    }
+}
+
+function Get-ReparoWingetInstalledPackage {
+    param(
+        [Parameter(Mandatory)][string]$WingetId,
+        [string]$Source = 'winget'
+    )
+
+    $arguments = @('list', '--id', $WingetId, '--exact', '--accept-source-agreements', '--disable-interactivity')
+    if (-not [string]::IsNullOrWhiteSpace($Source)) {
+        $arguments += @('--source', $Source)
+    }
+
+    $output = @(& winget @arguments 2>&1)
+    foreach ($line in $output) {
+        Write-ReparoLog ("[MIGRATE] winget list: {0}" -f ([string]$line))
+    }
+
+    if ($LASTEXITCODE -ne 0) { return $null }
+    $packages = @(ConvertFrom-ReparoWingetListTable -Output $output)
+    return @($packages | Where-Object { $_.Id -ieq $WingetId } | Select-Object -First 1)[0]
+}
+
+function Ensure-ReparoWingetPackageInstalled {
+    param(
+        [Parameter(Mandatory)][string]$WingetId,
+        [string]$Source = 'winget'
+    )
+
+    $installed = Get-ReparoWingetInstalledPackage -WingetId $WingetId -Source $Source
+    if ($installed -and -not $ForceWingetReinstall) {
+        Write-Info "winget target already installed: $WingetId $($installed.Version)"
+        Write-ReparoLog ("[MIGRATE] winget target already installed: {0} {1}" -f $WingetId, $installed.Version)
+        return [pscustomobject]@{ ExitCode = 0; Action = 'AlreadyInstalled'; Installed = $true; Version = $installed.Version }
+    }
+
+    $arguments = @(
+        'install',
+        '--id', $WingetId,
+        '--exact',
+        '--source', $Source,
+        '--accept-source-agreements',
+        '--accept-package-agreements',
+        '--disable-interactivity',
+        '--silent'
+    )
+    if ($ForceWingetReinstall) { $arguments += '--force' }
+
+    if ($Preview) {
+        Write-Info "Preview: would run winget $($arguments -join ' ')"
+        Write-ReparoLog ("[PREVIEW] Would run winget {0}" -f ($arguments -join ' '))
+        return [pscustomobject]@{ ExitCode = 0; Action = 'PreviewInstall'; Installed = $false; Version = $null }
+    }
+
+    $result = Invoke-ReparoLoggedNativeCommand -FilePath 'winget' -Arguments $arguments -Label 'WINGET-MIGRATE'
+    $result | Add-Member -NotePropertyName Action -NotePropertyValue 'Install' -Force
+    return $result
+}
+
+function Invoke-ReparoChocoDeregisterPackage {
+    param([Parameter(Mandatory)][string]$ChocoId)
+
+    $arguments = @('uninstall', $ChocoId, '-y', '--no-progress', '--skip-autouninstaller', '--skip-powershell')
+    if ($Preview) {
+        Write-Info "Preview: would deregister Chocolatey package record $ChocoId using safe skip flags"
+        Write-ReparoLog ("[PREVIEW] Would deregister Chocolatey package record {0} with safe skip flags" -f $ChocoId)
+        return [pscustomobject]@{ ExitCode = 0; Preview = $true }
+    }
+
+    Invoke-ReparoLoggedNativeCommand -FilePath 'choco' -Arguments $arguments -Label 'CHOCO-DEREGISTER'
+}
+
+function Get-ReparoChocoMigrationClass {
+    param(
+        [Parameter(Mandatory)][string]$ChocoId,
+        [bool]$HasMap,
+        [bool]$HasProgramDataPayload,
+        [int]$DuplicateCount
+    )
+
+    $key = $ChocoId.ToLowerInvariant()
+    if ($key -eq 'chocolatey' -or $key -like 'chocolatey-*') { return 'ChocolateyInfrastructure' }
+    if ((Get-ReparoChocoMigrationDefaultExcludes | ForEach-Object { $_.ToLowerInvariant() }) -contains $key) { return 'WindowsPrerequisite' }
+    if ((Get-ReparoChocoRuntimePackageIds | ForEach-Object { $_.ToLowerInvariant() }) -contains $key) { return 'RuntimeDependency' }
+    if ($key -eq 'sysmon') { return 'PortablePayload' }
+    if ($key -eq 'cyberchef') { return 'ManualReview' }
+    if ((Get-ReparoChocoPortableCommandMap).ContainsKey($key) -or $HasProgramDataPayload) { return 'PortablePayload' }
+    if (-not $HasMap) { return 'Unsupported' }
+    if ($DuplicateCount -gt 1) { return 'DuplicateCluster' }
+    return 'GuiApp'
+}
+
+function Get-ReparoChocoMigrationRiskLevel {
+    param([Parameter(Mandatory)][string]$MigrationClass)
+
+    switch ($MigrationClass) {
+        'ChocolateyInfrastructure' { 'Critical' }
+        'WindowsPrerequisite'      { 'Critical' }
+        'RuntimeDependency'        { 'High' }
+        'PortablePayload'          { 'High' }
+        'ManualReview'             { 'High' }
+        'Unsupported'              { 'High' }
+        'DuplicateCluster'         { 'Medium' }
+        default                    { 'Low' }
+    }
+}
+
+function Get-ReparoChocoMigrationPlan {
+    param(
+        [Parameter(Mandatory)][object[]]$Packages,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Map,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$ExcludeSet
+    )
+
+    $payloadAudit = @(Get-ReparoChocoProgramDataAudit)
+    $shimAudit = @(Get-ReparoChocoPathShimAudit)
+    $portableCommandMap = Get-ReparoChocoPortableCommandMap
+    $duplicateCounts = @{}
+
+    foreach ($package in $Packages) {
+        $key = ([string]$package.ChocoId).ToLowerInvariant()
+        if ($Map.ContainsKey($key)) {
+            $target = $Map[$key]
+            $groupKey = ("{0}|{1}" -f $target.Source, $target.WingetId).ToLowerInvariant()
+            if (-not $duplicateCounts.ContainsKey($groupKey)) { $duplicateCounts[$groupKey] = 0 }
+            $duplicateCounts[$groupKey]++
+        }
+    }
+
+    $plan = New-Object System.Collections.Generic.List[object]
+    foreach ($package in ($Packages | Sort-Object ChocoId)) {
+        $chocoId = [string]$package.ChocoId
+        $key = $chocoId.ToLowerInvariant()
+        $target = if ($Map.ContainsKey($key)) { $Map[$key] } else { $null }
+        $groupKey = if ($target) { ("{0}|{1}" -f $target.Source, $target.WingetId).ToLowerInvariant() } else { $null }
+        $payload = @($payloadAudit | Where-Object { $_.Package -ieq $chocoId } | Select-Object -First 1)[0]
+        $commands = if ($portableCommandMap.ContainsKey($key)) { @($portableCommandMap[$key]) } else { @() }
+        $chocoShimCommands = @($shimAudit | Where-Object {
+            $shimName = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
+            $commands -contains $shimName -or $_.Name -ieq $chocoId -or $shimName -ieq $chocoId
+        } | Select-Object -ExpandProperty Name)
+        $commandChecks = @($commands | ForEach-Object { Test-ReparoCommandHasNonChocoSource -CommandName $_ })
+        $hasChocolateyOnlyCommand = [bool]($commandChecks | Where-Object { -not $_.HasNonChocoSource })
+        $wingetAvailable = $false
+        $wingetInstalled = $false
+        $wingetInstalledVersion = $null
+
+        if ($target) {
+            $wingetAvailable = Test-ReparoWingetPackageAvailable -WingetId $target.WingetId -Source $target.Source
+            $installed = Get-ReparoWingetInstalledPackage -WingetId $target.WingetId -Source $target.Source
+            if ($installed) {
+                $wingetInstalled = $true
+                $wingetInstalledVersion = $installed.Version
+            }
+        }
+
+        $duplicateCount = if ($groupKey -and $duplicateCounts.ContainsKey($groupKey)) { $duplicateCounts[$groupKey] } else { 1 }
+        $migrationClass = Get-ReparoChocoMigrationClass -ChocoId $chocoId -HasMap ([bool]$target) -HasProgramDataPayload ([bool]($payload -and $payload.HasNonChocoPayload)) -DuplicateCount $duplicateCount
+        $riskLevel = Get-ReparoChocoMigrationRiskLevel -MigrationClass $migrationClass
+        $safeToDeregister = $false
+        $reason = $null
+
+        if ($ExcludeSet.ContainsKey($key)) {
+            $reason = 'excluded from normal migration'
+        }
+        elseif (-not $target) {
+            $reason = 'no winget map'
+        }
+        elseif (-not $wingetAvailable) {
+            $reason = 'winget package not found'
+        }
+        elseif ($migrationClass -eq 'RuntimeDependency' -and -not $AllowRuntimeDeregister) {
+            $reason = 'runtime package requires -AllowRuntimeDeregister'
+        }
+        elseif ($migrationClass -eq 'PortablePayload' -and -not $AllowPortableDeregister) {
+            $reason = 'portable/CLI payload requires -AllowPortableDeregister and command verification'
+        }
+        elseif ($migrationClass -eq 'PortablePayload' -and $hasChocolateyOnlyCommand) {
+            $reason = 'portable/CLI payload requires post-winget non-Chocolatey command verification'
+            $safeToDeregister = $true
+        }
+        elseif ($migrationClass -in @('ChocolateyInfrastructure', 'WindowsPrerequisite', 'Unsupported', 'ManualReview')) {
+            $reason = "class $migrationClass requires manual review"
+        }
+        else {
+            $safeToDeregister = $true
+            $reason = 'safe after winget verification'
+        }
+
+        [void]$plan.Add([pscustomobject]@{
+            ChocoId                  = $chocoId
+            ChocoVersion             = $package.Version
+            WingetId                 = if ($target) { $target.WingetId } else { $null }
+            Source                   = if ($target) { $target.Source } else { $null }
+            WingetAvailable          = $wingetAvailable
+            WingetInstalled          = $wingetInstalled
+            WingetInstalledVersion   = $wingetInstalledVersion
+            MigrationClass           = $migrationClass
+            RiskLevel                = $riskLevel
+            DuplicateGroupKey        = $groupKey
+            DuplicateCount           = $duplicateCount
+            ProgramDataPayload       = [bool]($payload -and $payload.HasNonChocoPayload)
+            ProgramDataSizeMB        = if ($payload) { $payload.SizeMB } else { 0 }
+            ProgramDataSamplePayload = if ($payload) { $payload.SamplePayload } else { '' }
+            ChocoShimCommands        = ($chocoShimCommands -join ';')
+            RequiredCommands         = ($commands -join ';')
+            ChocolateyOnlyCommands   = (($commandChecks | Where-Object { -not $_.HasNonChocoSource } | Select-Object -ExpandProperty Command) -join ';')
+            SafeToDeregister         = $safeToDeregister
+            ProposedAction           = if ($target) { if ($safeToDeregister) { 'InstallOrVerifyWingetThenDeregister' } else { 'InstallOrVerifyWingetOnly' } } else { 'ReportOnly' }
+            Reason                   = $reason
+        })
+    }
+
+    return $plan.ToArray()
+}
+
+function Export-ReparoChocoMigrationPlan {
+    param([Parameter(Mandatory)][object[]]$Plan)
+
+    if ([string]::IsNullOrWhiteSpace($MigrationReportPath)) { return }
+
+    $basePath = $MigrationReportPath
+    $extension = [System.IO.Path]::GetExtension($basePath)
+    if ($extension -ieq '.csv') {
+        $csvPath = $basePath
+        $jsonPath = [System.IO.Path]::ChangeExtension($basePath, '.json')
+    }
+    elseif ($extension -ieq '.json') {
+        $jsonPath = $basePath
+        $csvPath = [System.IO.Path]::ChangeExtension($basePath, '.csv')
+    }
+    else {
+        $csvPath = "$basePath.csv"
+        $jsonPath = "$basePath.json"
+    }
+
+    $csvParent = Split-Path -Parent $csvPath
+    if (-not [string]::IsNullOrWhiteSpace($csvParent)) {
+        New-Item -ItemType Directory -Force -Path $csvParent | Out-Null
+    }
+
+    $Plan | Export-Csv -LiteralPath $csvPath -NoTypeInformation
+    $Plan | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+    Write-Done "Exported Chocolatey migration reports: $csvPath and $jsonPath"
+    Write-ReparoLog ("[MIGRATE] Exported reports: {0}; {1}" -f $csvPath, $jsonPath)
+    Add-ReparoSummaryNote ("Chocolatey migration report exported to $csvPath and $jsonPath")
+}
+
+function Get-ReparoChocolateyBackupPath {
+    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $desktopPath = [Environment]::GetFolderPath('DesktopDirectory')
+    if ([string]::IsNullOrWhiteSpace($desktopPath)) {
+        $desktopPath = Join-Path $env:USERPROFILE 'Desktop'
+    }
+    if ([string]::IsNullOrWhiteSpace($desktopPath) -or -not (Test-Path -LiteralPath $desktopPath)) {
+        $desktopPath = Join-Path ([System.IO.Path]::GetTempPath()) 'Reparo'
+    }
+
+    return (Join-Path $desktopPath ("chocolatey-backup-{0}" -f $timestamp))
+}
+
+function Invoke-ReparoFinalizeChocolateyRemoval {
+    Write-Step 'Finalize Chocolatey removal'
+    Write-ReparoLog '[STEP] Finalize Chocolatey removal'
+
+    $chocoRoot = Get-ReparoChocolateyRoot
+    if (-not (Test-Path -LiteralPath $chocoRoot)) {
+        Write-Skip "Chocolatey root not found: $chocoRoot"
+        Add-ReparoSummaryNote "Chocolatey removal skipped; root not found: $chocoRoot"
+        return
+    }
+
+    $remainingPackages = New-Object System.Collections.Generic.List[object]
+    try {
+        @(Get-ReparoChocoPackages) | ForEach-Object { [void]$remainingPackages.Add($_) }
+    }
+    catch {
+        Write-Info "Unable to query Chocolatey package records; falling back to $chocoRoot\lib inventory: $($_.Exception.Message)"
+        Write-ReparoLog ("[WARN] choco list unavailable during finalization; using lib inventory: {0}" -f $_.Exception.Message)
+    }
+
+    $knownIds = @{}
+    foreach ($package in @($remainingPackages.ToArray())) {
+        $knownIds[([string]$package.ChocoId).ToLowerInvariant()] = $true
+    }
+    foreach ($package in @(Get-ReparoChocoPackageDirs)) {
+        $key = ([string]$package.ChocoId).ToLowerInvariant()
+        if (-not $knownIds.ContainsKey($key)) {
+            [void]$remainingPackages.Add($package)
+            $knownIds[$key] = $true
+        }
+    }
+
+    $allowedFinalizePackages = @(Get-ReparoChocoFinalizeAllowedPackageIds | ForEach-Object { $_.ToLowerInvariant() })
+    $nonExcludedPackages = @($remainingPackages.ToArray() | Where-Object { $allowedFinalizePackages -notcontains ([string]$_.ChocoId).ToLowerInvariant() })
+    if ($nonExcludedPackages.Count -gt 0 -and -not $AllowRemainingChocoPackages) {
+        $reason = "remaining non-excluded Chocolatey packages: $($nonExcludedPackages.ChocoId -join ', ')"
+        Write-Fail "Blocked Chocolatey removal: $reason"
+        Add-ReparoSummaryRecord -Bucket Failed -Software 'Chocolatey' -Version '-' -Method 'choco-finalize' -Reason $reason
+        return
+    }
+
+    $shimAudit = @(Get-ReparoChocoPathShimAudit | Where-Object { $_.Name -notin @('choco.exe', 'RefreshEnv.cmd') })
+    if ($shimAudit.Count -gt 0) {
+        $reason = "Chocolatey-only commands remain: $($shimAudit.Name -join ', ')"
+        Write-Fail "Blocked Chocolatey removal: $reason"
+        Add-ReparoSummaryRecord -Bucket Failed -Software 'Chocolatey' -Version '-' -Method 'choco-finalize' -Reason $reason
+        return
+    }
+
+    $backupPath = $null
+    if (-not $NoChocolateyBackup) {
+        $backupPath = Get-ReparoChocolateyBackupPath
+        if ($Preview) {
+            Write-Info "Preview: would back up $chocoRoot to $backupPath"
+            Write-ReparoLog ("[PREVIEW] Would back up {0} to {1}" -f $chocoRoot, $backupPath)
+        }
+        else {
+            $backupParent = Split-Path -Parent $backupPath
+            if (-not [string]::IsNullOrWhiteSpace($backupParent)) {
+                New-Item -ItemType Directory -Force -Path $backupParent | Out-Null
+            }
+            Copy-Item -LiteralPath $chocoRoot -Destination $backupPath -Recurse -Force
+            Write-Done "Backed up Chocolatey to $backupPath"
+            Write-ReparoLog ("[DONE] Backed up Chocolatey to {0}" -f $backupPath)
+        }
+    }
+
+    if ($Preview) {
+        Write-Info "Preview: would remove $chocoRoot, ChocolateyInstall, and Chocolatey PATH entries"
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Chocolatey' -Version '-' -Method 'choco-finalize' -Reason 'preview only'
+        return
+    }
+
+    Remove-Item -LiteralPath $chocoRoot -Recurse -Force
+    [Environment]::SetEnvironmentVariable('ChocolateyInstall', $null, 'Machine')
+    [Environment]::SetEnvironmentVariable('ChocolateyInstall', $null, 'User')
+
+    foreach ($target in @('Machine', 'User')) {
+        $pathValue = [Environment]::GetEnvironmentVariable('Path', $target)
+        if ([string]::IsNullOrWhiteSpace($pathValue)) { continue }
+        $newPath = (($pathValue -split ';') | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_) -and -not (Test-ReparoPathIsUnderRoot -Path $_ -Root $chocoRoot)
+        }) -join ';'
+        [Environment]::SetEnvironmentVariable('Path', $newPath, $target)
+    }
+
+    Write-Done 'Chocolatey finalized/removed after safety checks.'
+    Add-ReparoSummaryRecord -Bucket Updated -Software 'Chocolatey' -Version '-' -Method 'choco-finalize' -Reason 'removed after backup and safety checks'
 }
 
 function Invoke-ReparoLoggedNativeCommand {
@@ -3118,17 +3736,7 @@ function Invoke-ReparoChocoToWingetMigration {
         return
     }
 
-    $defaultExclude = @(
-        'chocolatey',
-        'chocolatey-agent',
-        'chocolatey-compatibility.extension',
-        'chocolatey-core.extension',
-        'chocolatey-dotnetfx.extension',
-        'chocolatey-fastanswers.extension',
-        'chocolatey-font-helpers.extension',
-        'chocolatey-misc-helpers.extension',
-        'chocolatey-windowsupdate.extension'
-    )
+    $defaultExclude = @(Get-ReparoChocoMigrationDefaultExcludes)
     $excludeSet = @{}
     foreach ($exclude in (@($defaultExclude) + @($MigrateChocoExclude))) {
         if (-not [string]::IsNullOrWhiteSpace($exclude)) {
@@ -3136,71 +3744,80 @@ function Invoke-ReparoChocoToWingetMigration {
         }
     }
 
-    foreach ($package in ($packages | Sort-Object ChocoId)) {
-        $chocoId = [string]$package.ChocoId
-        $chocoKey = $chocoId.ToLowerInvariant()
+    $plan = @(Get-ReparoChocoMigrationPlan -Packages $packages -Map $map -ExcludeSet $excludeSet)
+    Export-ReparoChocoMigrationPlan -Plan $plan
 
-        if ($excludeSet.ContainsKey($chocoKey)) {
-            Write-Skip "Skipping Chocolatey infrastructure package: $chocoId"
-            Write-ReparoLog ("[SKIP] {0}: excluded from migration" -f $chocoId)
-            Add-ReparoSummaryRecord -Bucket Skipped -Software $chocoId -CurrentVersion $package.Version -Version '-' -Method 'choco->winget' -Reason 'excluded'
-            continue
+    foreach ($row in $plan) {
+        Write-ReparoLog ("[MIGRATE-PLAN] {0}|{1}|{2}|{3}|{4}|Safe={5}|{6}" -f $row.ChocoId, $row.ChocoVersion, $row.WingetId, $row.MigrationClass, $row.RiskLevel, $row.SafeToDeregister, $row.Reason)
+    }
+
+    if ($Preview) {
+        Write-Info ("Preview: built Chocolatey migration plan for {0} package(s)." -f $plan.Count)
+        foreach ($row in $plan) {
+            $bucket = if ($row.WingetId -and $row.WingetAvailable -and $row.SafeToDeregister) { 'Updated' } else { 'Skipped' }
+            Add-ReparoSummaryRecord -Bucket $bucket -Software $row.ChocoId -CurrentVersion $row.ChocoVersion -Version $row.WingetId -Method 'choco->winget' -Reason ("preview: {0}; {1}" -f $row.MigrationClass, $row.Reason)
         }
+        return
+    }
 
-        if (-not $map.ContainsKey($chocoKey)) {
-            Write-Skip "No winget map for Chocolatey package: $chocoId"
-            Write-ReparoLog ("[SKIP] {0}: no winget map" -f $chocoId)
-            Add-ReparoSummaryRecord -Bucket Skipped -Software $chocoId -CurrentVersion $package.Version -Version '-' -Method 'choco->winget' -Reason 'no winget map'
-            continue
-        }
+    $candidateRows = @($plan | Where-Object { $_.WingetId -and $_.WingetAvailable })
+    $groups = @($candidateRows | Group-Object DuplicateGroupKey)
+    foreach ($group in $groups) {
+        $groupRows = @($group.Group)
+        $target = $groupRows[0]
+        Write-ReparoLog ("[MIGRATE] Winget group {0}: {1}" -f $target.DuplicateGroupKey, (($groupRows | Select-Object -ExpandProperty ChocoId) -join ', '))
 
-        $target = $map[$chocoKey]
-        Write-ReparoLog ("[MIGRATE] {0} {1} -> {2} ({3})" -f $chocoId, $package.Version, $target.WingetId, $target.Source)
-
-        if (-not (Test-ReparoWingetPackageAvailable -WingetId $target.WingetId -Source $target.Source)) {
-            Write-Skip "winget package not found for $chocoId -> $($target.WingetId)"
-            Add-ReparoSummaryRecord -Bucket Skipped -Software $chocoId -CurrentVersion $package.Version -Version $target.WingetId -Method 'choco->winget' -Reason 'winget package not found'
-            continue
-        }
-
-        if ($Preview) {
-            Write-Info "Preview: would install winget $($target.WingetId), then uninstall Chocolatey package $chocoId"
-            Write-ReparoLog ("[PREVIEW] Would migrate {0} -> {1}" -f $chocoId, $target.WingetId)
-            Add-ReparoSummaryRecord -Bucket Updated -Software $chocoId -CurrentVersion $package.Version -Version $target.WingetId -Method 'choco->winget' -Reason 'preview'
-            continue
-        }
-
-        $wingetArgs = @(
-            'install',
-            '--id', $target.WingetId,
-            '--exact',
-            '--source', $target.Source,
-            '--accept-source-agreements',
-            '--accept-package-agreements',
-            '--disable-interactivity',
-            '--silent',
-            '--force'
-        )
-        $wingetResult = Invoke-ReparoLoggedNativeCommand -FilePath 'winget' -Arguments $wingetArgs -Label 'WINGET'
+        $wingetResult = Ensure-ReparoWingetPackageInstalled -WingetId $target.WingetId -Source $target.Source
         if ($wingetResult.ExitCode -ne 0) {
-            $reason = "winget install exit code $($wingetResult.ExitCode)"
-            Write-Fail "$chocoId migration failed: $reason"
-            Add-ReparoSummaryRecord -Bucket Failed -Software $chocoId -CurrentVersion $package.Version -Version $target.WingetId -Method 'choco->winget' -Reason $reason
+            $reason = "winget install/verify exit code $($wingetResult.ExitCode)"
+            foreach ($row in $groupRows) {
+                Write-Fail "$($row.ChocoId) migration failed: $reason"
+                Add-ReparoSummaryRecord -Bucket Failed -Software $row.ChocoId -CurrentVersion $row.ChocoVersion -Version $row.WingetId -Method 'choco->winget' -Reason $reason
+            }
             continue
         }
 
-        $chocoArgs = @('uninstall', $chocoId, '-y', '--no-progress')
-        $chocoResult = Invoke-ReparoLoggedNativeCommand -FilePath 'choco' -Arguments $chocoArgs -Label 'CHOCO'
-        if ($chocoResult.ExitCode -ne 0) {
-            $reason = "choco uninstall exit code $($chocoResult.ExitCode)"
-            Write-Fail "$chocoId installed with winget but Chocolatey uninstall failed: $reason"
-            Add-ReparoSummaryRecord -Bucket Failed -Software $chocoId -CurrentVersion $package.Version -Version $target.WingetId -Method 'choco->winget' -Reason $reason
-            continue
-        }
+        foreach ($row in $groupRows) {
+            if (-not $row.SafeToDeregister) {
+                Write-Skip "Verified winget target for $($row.ChocoId), but not deregistering: $($row.Reason)"
+                Add-ReparoSummaryRecord -Bucket Skipped -Software $row.ChocoId -CurrentVersion $row.ChocoVersion -Version $row.WingetId -Method 'choco->winget' -Reason $row.Reason
+                continue
+            }
 
-        Write-Done "Migrated $chocoId -> $($target.WingetId)"
-        Write-ReparoLog ("[DONE] Migrated {0} -> {1}" -f $chocoId, $target.WingetId)
-        Add-ReparoSummaryRecord -Bucket Updated -Software $chocoId -CurrentVersion $package.Version -Version $target.WingetId -Method 'choco->winget' -Reason 'migrated'
+            if (-not $ChocoDeregisterOnly) {
+                Write-Done "Verified winget target for $($row.ChocoId) -> $($row.WingetId); Chocolatey record left registered."
+                Add-ReparoSummaryRecord -Bucket Updated -Software $row.ChocoId -CurrentVersion $row.ChocoVersion -Version $row.WingetId -Method 'choco->winget' -Reason 'winget verified; deregistration not requested'
+                continue
+            }
+
+            if ($row.MigrationClass -eq 'PortablePayload' -and -not [string]::IsNullOrWhiteSpace($row.RequiredCommands)) {
+                $requiredCommands = @($row.RequiredCommands -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                $postInstallCommandChecks = @($requiredCommands | ForEach-Object { Test-ReparoCommandHasNonChocoSource -CommandName $_ })
+                $chocoOnlyCommands = @($postInstallCommandChecks | Where-Object { -not $_.HasNonChocoSource } | Select-Object -ExpandProperty Command)
+                if ($chocoOnlyCommands.Count -gt 0) {
+                    $reason = "portable/CLI commands still resolve only through Chocolatey: $($chocoOnlyCommands -join ', ')"
+                    Write-Skip "Verified winget target for $($row.ChocoId), but not deregistering: $reason"
+                    Add-ReparoSummaryRecord -Bucket Skipped -Software $row.ChocoId -CurrentVersion $row.ChocoVersion -Version $row.WingetId -Method 'choco->winget' -Reason $reason
+                    continue
+                }
+            }
+
+            $chocoResult = Invoke-ReparoChocoDeregisterPackage -ChocoId $row.ChocoId
+            if ($chocoResult.ExitCode -ne 0) {
+                $reason = "choco deregister exit code $($chocoResult.ExitCode)"
+                Write-Fail "$($row.ChocoId) winget verified but Chocolatey deregistration failed: $reason"
+                Add-ReparoSummaryRecord -Bucket Failed -Software $row.ChocoId -CurrentVersion $row.ChocoVersion -Version $row.WingetId -Method 'choco->winget' -Reason $reason
+                continue
+            }
+
+            Write-Done "Migrated $($row.ChocoId) -> $($row.WingetId); deregistered Chocolatey package record."
+            Add-ReparoSummaryRecord -Bucket Updated -Software $row.ChocoId -CurrentVersion $row.ChocoVersion -Version $row.WingetId -Method 'choco->winget' -Reason 'winget verified; Chocolatey record deregistered'
+        }
+    }
+
+    foreach ($row in @($plan | Where-Object { -not ($_.WingetId -and $_.WingetAvailable) })) {
+        Write-Skip "Skipping $($row.ChocoId): $($row.Reason)"
+        Add-ReparoSummaryRecord -Bucket Skipped -Software $row.ChocoId -CurrentVersion $row.ChocoVersion -Version $row.WingetId -Method 'choco->winget' -Reason $row.Reason
     }
 }
 
@@ -3863,7 +4480,10 @@ if ($CheckApp -or $LockApp) {
     return
 }
 
-if ($Force) {
+if ($MigrateChocoToWinget -and $FinalizeChocolateyRemoval) {
+    $mode = 'MIGRATE CHOCO TO WINGET + FINALIZE CHOCOLATEY REMOVAL'
+}
+elseif ($Force) {
     $mode = 'FORCE'
 }
 elseif ($Update) {
@@ -3871,6 +4491,9 @@ elseif ($Update) {
 }
 elseif ($MigrateChocoToWinget) {
     $mode = 'MIGRATE CHOCO TO WINGET'
+}
+elseif ($FinalizeChocolateyRemoval) {
+    $mode = 'FINALIZE CHOCOLATEY REMOVAL'
 }
 elseif ($InstallSpicetify) {
     $mode = 'INSTALL SPICETIFY'
@@ -3918,6 +4541,10 @@ Log: $script:ReparoLogPath
 
 if ($MigrateChocoToWinget) {
     Invoke-ReparoChocoToWingetMigration
+}
+
+if ($FinalizeChocolateyRemoval) {
+    Invoke-ReparoFinalizeChocolateyRemoval
 }
 
 $runWingetSections = (Test-ReparoSectionSelected 'Winget') -or (Test-ReparoSectionSelected 'Winget(msstore)') -or $Winget -or $WingetDiscover
