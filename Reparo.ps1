@@ -1647,7 +1647,7 @@ function Resolve-ReparoCommand {
     param([Parameter(Mandatory)][string]$Name)
 
     try {
-        return (Get-Command $Name -CommandType Application -ErrorAction Stop)
+        return @(Get-Command $Name -CommandType Application -ErrorAction Stop | Select-Object -First 1)[0]
     }
     catch {
         return $null
