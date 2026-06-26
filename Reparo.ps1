@@ -105,13 +105,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.0.8.1'
+$script:ReparoVersion = '1.0.8.2'
 
 function Get-ReparoVersionFlavor {
     param([string]$Version = $script:ReparoVersion)
 
     $versionFlavors = @{
         '1.0.8.1' = [pscustomobject]@{ Quote = 'Hotfix applied. The goblin has been relocated.'; Art = '  GOBLIN: evicted from version output' }
+        '1.0.8.2' = [pscustomobject]@{ Quote = 'New quote online. Old ghosts denied boarding.'; Art = '  QUOTE BAY: temporal lint removed' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
