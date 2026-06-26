@@ -208,7 +208,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | Default | Runs `WindowsUpdate` only. |
 | `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` from GitHub, with parse validation and backup handling. |
 | `-Help` / `-H` / `-h` | Prints Reparo usage and exits without running updates. |
-| `-Version` / `-V` / `-v` | Prints the Reparo version, a version-selected movie-ish quote, and exits without running updates. |
+| `-Version` / `-V` / `-v` | Prints the Reparo version, script source path, a version-selected movie-ish quote, and exits without running updates. |
 | `-Kill` | Stops running Reparo PowerShell processes, then sweeps known updater front-end processes such as `winget`, `choco`, `npm`, `pip`, and related package managers. |
 | `-KillUpdaterNames <names>` | Adds extra process base names to the `-Kill` updater sweep, for example `-Kill -KillUpdaterNames msiexec`. |
 | `-Preview` | Logs what would run without executing package manager commands. |
@@ -230,7 +230,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-InstallSpicetify` | Installs or reinstalls Spicetify Marketplace in the logged-on user's context, then runs update and backup/apply. |
 | `-Tail` | Follows the active Reparo log when used by itself. When combined with a run mode, it prints the tail of that run's log at the end. |
 | `-TailLines <count>` | Controls how many existing log lines `-Tail` prints before following. Default: `400`. |
-| `-Status` | Shows whether Reparo is currently running and points at the active log file. |
+| `-Status` | Shows whether Reparo is currently running, points at the active log file, and prints the registry evidence behind any pending reboot flag. |
 | `-IgnoreTimeouts` | Disables timeout enforcement even when timeout parameters are supplied. |
 | `-AllowReboot` / `-Reboot` | Allows the Windows Update section to pass `-AutoReboot`. By default Reparo passes `-IgnoreReboot`. |
 | `-InstallNuGetProvider` | Bootstraps the NuGet provider before PSGallery installs when `true` (default). Set it to `false` only if you want to suppress that bootstrap attempt. |

@@ -105,7 +105,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.0.7'
+$script:ReparoVersion = '1.0.8'
 
 function Get-ReparoVersionFlavor {
     param([string]$Version = $script:ReparoVersion)
@@ -426,6 +426,7 @@ if ($Help) {
 
 if ($Version) {
     Write-Host "Reparo $script:ReparoVersion"
+    Write-Host "Source: $PSCommandPath"
     Write-Host (Get-ReparoVersionArt)
     Write-Host (Get-ReparoVersionQuote)
     return
@@ -1092,7 +1093,7 @@ function Write-ReparoEventLog {
     }
 }
 
-function Test-ReparoPendingReboot {
+function Get-ReparoPendingRebootEvidence {
     $checks = @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired',
@@ -1100,17 +1101,57 @@ function Test-ReparoPendingReboot {
     )
 
     try {
-        if (Test-Path -LiteralPath $checks[0]) { return $true }
-        if (Test-Path -LiteralPath $checks[1]) { return $true }
+        if (Test-Path -LiteralPath $checks[0]) {
+            [pscustomobject]@{
+                Source = 'Component Based Servicing'
+                Path   = $checks[0]
+                Detail = 'Registry key exists'
+            }
+        }
+
+        if (Test-Path -LiteralPath $checks[1]) {
+            [pscustomobject]@{
+                Source = 'Windows Update'
+                Path   = $checks[1]
+                Detail = 'Registry key exists'
+            }
+        }
 
         $sessionManager = Get-ItemProperty -LiteralPath $checks[2] -Name PendingFileRenameOperations -ErrorAction SilentlyContinue
-        if ($sessionManager -and $sessionManager.PendingFileRenameOperations) { return $true }
+        if ($sessionManager -and $sessionManager.PendingFileRenameOperations) {
+            $operations = @($sessionManager.PendingFileRenameOperations)
+            for ($i = 0; $i -lt $operations.Count; $i += 2) {
+                $source = [string]$operations[$i]
+                $target = if (($i + 1) -lt $operations.Count) { [string]$operations[$i + 1] } else { '' }
+
+                if ([string]::IsNullOrWhiteSpace($source) -and [string]::IsNullOrWhiteSpace($target)) {
+                    continue
+                }
+
+                $detail = if ([string]::IsNullOrWhiteSpace($target)) {
+                    "Pending delete: $source"
+                }
+                else {
+                    "Pending rename: $source -> $target"
+                }
+
+                [pscustomobject]@{
+                    Source = 'PendingFileRenameOperations'
+                    Path   = $checks[2]
+                    Detail = $detail
+                }
+            }
+        }
     }
     catch {
         Write-ReparoLog ("[WARN] Pending reboot check failed: {0}" -f $_.Exception.Message)
     }
+}
 
-    return $false
+function Test-ReparoPendingReboot {
+    $evidence = @(Get-ReparoPendingRebootEvidence)
+
+    return ($evidence.Count -gt 0)
 }
 
 function Finalize-ReparoLogFile {
@@ -1345,9 +1386,13 @@ function Show-ReparoStatus {
     Write-Host "Computer: $env:COMPUTERNAME"
     Write-Host "Log root: $LogRoot"
 
-    $pendingReboot = Test-ReparoPendingReboot
-    if ($pendingReboot) {
+    $pendingRebootEvidence = @(Get-ReparoPendingRebootEvidence)
+    if ($pendingRebootEvidence.Count -gt 0) {
         Write-Host 'Pending reboot: yes' -ForegroundColor Yellow
+        Write-Host 'Pending reboot evidence:'
+        $pendingRebootEvidence |
+            Select-Object Source, Detail |
+            Format-Table -AutoSize
     }
     else {
         Write-Host 'Pending reboot: no'
