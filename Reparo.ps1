@@ -105,10 +105,18 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.0.8'
+$script:ReparoVersion = '1.0.8.1'
 
 function Get-ReparoVersionFlavor {
     param([string]$Version = $script:ReparoVersion)
+
+    $versionFlavors = @{
+        '1.0.8.1' = [pscustomobject]@{ Quote = 'Hotfix applied. The goblin has been relocated.'; Art = '  GOBLIN: evicted from version output' }
+    }
+
+    if ($versionFlavors.ContainsKey($Version)) {
+        return $versionFlavors[$Version]
+    }
 
     $flavors = @(
         [pscustomobject]@{ Quote = 'Hold on to your butts.'; Art = '  /\\_ Jurassic patch detected _/\\' },
@@ -427,7 +435,6 @@ if ($Help) {
 if ($Version) {
     Write-Host "Reparo $script:ReparoVersion"
     Write-Host "Source: $PSCommandPath"
-    Write-Host (Get-ReparoVersionArt)
     Write-Host (Get-ReparoVersionQuote)
     return
 }
