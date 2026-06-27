@@ -1141,8 +1141,7 @@ function Write-ReparoEventLog {
 function Get-ReparoPendingRebootEvidence {
     $checks = @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired',
-        'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
     )
 
     try {
@@ -1162,31 +1161,10 @@ function Get-ReparoPendingRebootEvidence {
             }
         }
 
-        $sessionManager = Get-ItemProperty -LiteralPath $checks[2] -Name PendingFileRenameOperations -ErrorAction SilentlyContinue
-        if ($sessionManager -and $sessionManager.PendingFileRenameOperations) {
-            $operations = @($sessionManager.PendingFileRenameOperations)
-            for ($i = 0; $i -lt $operations.Count; $i += 2) {
-                $source = [string]$operations[$i]
-                $target = if (($i + 1) -lt $operations.Count) { [string]$operations[$i + 1] } else { '' }
-
-                if ([string]::IsNullOrWhiteSpace($source) -and [string]::IsNullOrWhiteSpace($target)) {
-                    continue
-                }
-
-                $detail = if ([string]::IsNullOrWhiteSpace($target)) {
-                    "Pending delete: $source"
-                }
-                else {
-                    "Pending rename: $source -> $target"
-                }
-
-                [pscustomobject]@{
-                    Source = 'PendingFileRenameOperations'
-                    Path   = $checks[2]
-                    Detail = $detail
-                }
-            }
-        }
+        # PendingFileRenameOperations is intentionally ignored here. Lots of
+        # installers leave harmless rename/delete operations behind, and treating
+        # that registry value as a Reparo-level pending reboot creates noisy
+        # false positives.
     }
     catch {
         Write-ReparoLog ("[WARN] Pending reboot check failed: {0}" -f $_.Exception.Message)
