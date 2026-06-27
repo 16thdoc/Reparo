@@ -127,7 +127,7 @@ function Get-ReparoVersionFlavor {
         '1.0.8.1' = [pscustomobject]@{ Quote = 'Hotfix applied. The goblin has been relocated.'; Art = '  GOBLIN: evicted from version output' }
         '1.0.8.2' = [pscustomobject]@{ Quote = 'New quote online. Old ghosts denied boarding.'; Art = '  QUOTE BAY: temporal lint removed' }
         '1.0.8.3' = [pscustomobject]@{ Quote = 'I cast Magic Missile at the darkness.'; Art = '  D20: quote gremlin takes 1d4+1 force damage' }
-        '1.0.8.4' = [pscustomobject]@{ Quote = 'The logs now know when to die.'; Art = '  TOMBSTONE: undead RUNNING logs denied resurrection' }
+        '1.0.8.4' = [pscustomobject]@{ Quote = "He's dead, Jim."; Art = '  ENTERPRISE: set phasers to finalize' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
