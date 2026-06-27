@@ -118,7 +118,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.0.8.3'
+$script:ReparoVersion = '1.0.8.4'
 
 function Get-ReparoVersionFlavor {
     param([string]$Version = $script:ReparoVersion)
@@ -127,6 +127,7 @@ function Get-ReparoVersionFlavor {
         '1.0.8.1' = [pscustomobject]@{ Quote = 'Hotfix applied. The goblin has been relocated.'; Art = '  GOBLIN: evicted from version output' }
         '1.0.8.2' = [pscustomobject]@{ Quote = 'New quote online. Old ghosts denied boarding.'; Art = '  QUOTE BAY: temporal lint removed' }
         '1.0.8.3' = [pscustomobject]@{ Quote = 'I cast Magic Missile at the darkness.'; Art = '  D20: quote gremlin takes 1d4+1 force damage' }
+        '1.0.8.4' = [pscustomobject]@{ Quote = 'The logs now know when to die.'; Art = '  TOMBSTONE: undead RUNNING logs denied resurrection' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -528,6 +529,7 @@ $script:ReparoDebug = $PSBoundParameters.ContainsKey('Debug') -or ($DebugPrefere
 $script:ReparoEventLogSource = 'Reparo'
 $script:ReparoEventLogReady = $null
 $script:ReparoPendingRebootDetected = $false
+$script:ReparoLogFinalized = $false
 
 function Write-ReparoDebug {
     param([string]$Message)
@@ -1187,11 +1189,16 @@ function Finalize-ReparoLogFile {
     }
 
     $finalPath = Join-Path $LogRoot ($script:ReparoLogBaseName + "_{0}.log" -f $Status)
+    $hadLog = Test-Path -LiteralPath $script:ReparoLogPath
 
     try {
-        if ((Test-Path -LiteralPath $script:ReparoLogPath) -and ($script:ReparoLogPath -ne $finalPath)) {
+        if ($hadLog -and ($script:ReparoLogPath -ne $finalPath)) {
             Move-Item -LiteralPath $script:ReparoLogPath -Destination $finalPath -Force
             $script:ReparoLogPath = $finalPath
+        }
+
+        if ($hadLog) {
+            $script:ReparoLogFinalized = $true
         }
     }
     catch {
@@ -1199,8 +1206,32 @@ function Finalize-ReparoLogFile {
         return
     }
 
-    Write-Host ("Final log: {0}" -f $script:ReparoLogPath) -ForegroundColor Cyan
-    Write-ReparoLog ("[SUMMARY] Final log renamed to: {0}" -f $script:ReparoLogPath)
+    if ($hadLog) {
+        Write-Host ("Final log: {0}" -f $script:ReparoLogPath) -ForegroundColor Cyan
+        Write-ReparoLog ("[SUMMARY] Final log renamed to: {0}" -f $script:ReparoLogPath)
+    }
+}
+
+function Complete-ReparoUtilityLog {
+    param([string]$Status = 'COMPLETE')
+
+    if (Test-Path -LiteralPath $script:ReparoLogPath) {
+        Finalize-ReparoLogFile -Status $Status
+    }
+}
+
+trap {
+    try {
+        if (-not $script:ReparoLogFinalized -and (Test-Path -LiteralPath $script:ReparoLogPath)) {
+            Write-ReparoLog ("[ERROR] Unhandled terminating error: {0}" -f $_.Exception.Message)
+            Finalize-ReparoLogFile -Status 'FAILED'
+        }
+    }
+    catch {
+        Write-Warning "Failed to finalize Reparo log after unhandled error: $($_.Exception.Message)"
+    }
+
+    break
 }
 
 function Get-ReparoRunningProcessInfo {
@@ -1580,11 +1611,13 @@ function Invoke-ReparoTailLog {
 
 if ($New) {
     Invoke-ReparoNew -TargetRoot $InstallRoot -Url $SourceUrl -SkipBackup:$NoBackup -WhatIfOnly:$Preview
+    Complete-ReparoUtilityLog -Status $(if ($Preview) { 'PREVIEW' } else { 'COMPLETE' })
     return
 }
 
 if ($Kill) {
     Invoke-ReparoKill
+    Complete-ReparoUtilityLog -Status 'COMPLETE'
     return
 }
 
@@ -1596,16 +1629,19 @@ if ($Status) {
         Invoke-ReparoStaleLogSweep -Delete:$DeleteStale
     }
 
+    Complete-ReparoUtilityLog -Status 'COMPLETE'
     return
 }
 
 if ($Sweep) {
     Invoke-ReparoStaleLogSweep -Delete:$DeleteStale
+    Complete-ReparoUtilityLog -Status 'COMPLETE'
     return
 }
 
 if ($DeleteStale) {
     Write-Warning '-DeleteStale only has an effect when used with -Sweep.'
+    Complete-ReparoUtilityLog -Status 'COMPLETE'
     return
 }
 
@@ -1618,6 +1654,7 @@ if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $Search -or $Ad
     else {
         Write-Warning 'No active or completed Reparo log was found to tail.'
     }
+    Complete-ReparoUtilityLog -Status 'COMPLETE'
     return
 }
 
