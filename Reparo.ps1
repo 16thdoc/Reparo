@@ -94,6 +94,7 @@ param(
     [switch]$AllowReboot,
     [Alias('LR')]
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs",
+    [string]$Syslog,
     [Alias('IR')]
     [string]$InstallRoot = "$env:ProgramData\Reparo",
     [Alias('SU')]
@@ -118,7 +119,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.0.8.4'
+$script:ReparoVersion = '1.0.8.5'
 
 function Get-ReparoVersionFlavor {
     param([string]$Version = $script:ReparoVersion)
@@ -128,6 +129,7 @@ function Get-ReparoVersionFlavor {
         '1.0.8.2' = [pscustomobject]@{ Quote = 'New quote online. Old ghosts denied boarding.'; Art = '  QUOTE BAY: temporal lint removed' }
         '1.0.8.3' = [pscustomobject]@{ Quote = 'I cast Magic Missile at the darkness.'; Art = '  D20: quote gremlin takes 1d4+1 force damage' }
         '1.0.8.4' = [pscustomobject]@{ Quote = "He's dead, Jim."; Art = '  ENTERPRISE: set phasers to finalize' }
+        '1.0.8.5' = [pscustomobject]@{ Quote = 'Syslog pipe online. The logs have learned to phone home.'; Art = '  TCP: tiny log goblins marching single-file' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -244,6 +246,7 @@ function Write-ReparoParameterBlock {
         InstallNuGetProvider         = $InstallNuGetProvider
         AllowReboot                  = $AllowReboot
         LogRoot                      = $LogRoot
+        Syslog                       = $Syslog
         InstallRoot                  = $InstallRoot
         SourceUrl                    = $SourceUrl
         NoBackup                     = $NoBackup
@@ -416,6 +419,9 @@ Modes:
   -IgnoreTimeouts      Disable command-step timeout enforcement even when timeout parameters are supplied.
   -AllowReboot,-Reboot Allow Windows Update to auto-reboot if PSWindowsUpdate requires it.
                        Default behavior still uses -IgnoreReboot.
+  -Syslog <host[:port]> Persistently set and use a TCP syslog listener. Default port: 514.
+                       Example: -Syslog 192.168.50.31:514
+                       Use -Syslog off or -Syslog disable to clear the saved target.
   -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
   -Force               Run all sections, including developer toolchains and WSL apt handling.
   -Kill                Stop running Reparo PowerShell processes and known updater front ends.
@@ -461,6 +467,7 @@ Common sections:
 
 Logs:
   C:\ProgramData\Reparo\Logs
+  Optional persistent TCP syslog forwarding with -Syslog <host[:port]>
 "@
 
     Write-Host $helpText
@@ -530,6 +537,15 @@ $script:ReparoEventLogSource = 'Reparo'
 $script:ReparoEventLogReady = $null
 $script:ReparoPendingRebootDetected = $false
 $script:ReparoLogFinalized = $false
+$script:ReparoSyslogEnabled = $false
+$script:ReparoSyslogTarget = $Syslog
+$script:ReparoSyslogHost = $null
+$script:ReparoSyslogPort = 514
+$script:ReparoSyslogClient = $null
+$script:ReparoSyslogWriter = $null
+$script:ReparoSyslogFailureReported = $false
+$script:ReparoSettingsPath = Join-Path $InstallRoot 'reparo-settings.json'
+$script:ReparoSyslogConfiguredThisRun = $false
 
 function Write-ReparoDebug {
     param([string]$Message)
@@ -1025,6 +1041,246 @@ Log: $script:ReparoLogPath
     }
 }
 
+function Resolve-ReparoSyslogTarget {
+    param([AllowNull()][string]$Target)
+
+    if ([string]::IsNullOrWhiteSpace($Target)) {
+        return $null
+    }
+
+    $targetText = $Target.Trim()
+    if ($targetText -match '(?i)^tcp://(.+)$') {
+        $targetText = $Matches[1]
+    }
+
+    $hostName = $targetText
+    $port = 514
+
+    if ($targetText -match '^\[(.+)\]:(\d+)$') {
+        $hostName = $Matches[1]
+        $port = [int]$Matches[2]
+    }
+    elseif ($targetText -match '^([^:]+):(\d+)$') {
+        $hostName = $Matches[1]
+        $port = [int]$Matches[2]
+    }
+    elseif (($targetText.ToCharArray() | Where-Object { $_ -eq ':' }).Count -gt 1) {
+        throw "Invalid -Syslog target '$Target'. Use host:port, hostname, IPv4:port, or [IPv6]:port. TCP only."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($hostName)) {
+        throw "Invalid -Syslog target '$Target'. Host cannot be empty."
+    }
+
+    if ($port -lt 1 -or $port -gt 65535) {
+        throw "Invalid -Syslog target '$Target'. Port must be between 1 and 65535."
+    }
+
+    [pscustomobject]@{
+        Host = $hostName
+        Port = $port
+    }
+}
+
+function Test-ReparoSyslogDisableValue {
+    param([AllowNull()][string]$Target)
+
+    if ([string]::IsNullOrWhiteSpace($Target)) {
+        return $false
+    }
+
+    $Target.Trim() -match '(?i)^(off|disable|disabled|none|null|false)$'
+}
+
+function Read-ReparoSettings {
+    if (-not (Test-Path -LiteralPath $script:ReparoSettingsPath)) {
+        return [pscustomobject]@{}
+    }
+
+    try {
+        $raw = Get-Content -LiteralPath $script:ReparoSettingsPath -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            return [pscustomobject]@{}
+        }
+
+        $settings = $raw | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $settings) {
+            return [pscustomobject]@{}
+        }
+
+        return $settings
+    }
+    catch {
+        Write-ReparoLog ("[WARN] Unable to read Reparo settings file '{0}': {1}" -f $script:ReparoSettingsPath, $_.Exception.Message)
+        return [pscustomobject]@{}
+    }
+}
+
+function Write-ReparoSettings {
+    param([Parameter(Mandatory)]$Settings)
+
+    $settingsRoot = Split-Path -Parent $script:ReparoSettingsPath
+    if (-not (Test-Path -LiteralPath $settingsRoot)) {
+        New-Item -ItemType Directory -Force -Path $settingsRoot | Out-Null
+    }
+
+    $Settings | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:ReparoSettingsPath -Encoding UTF8
+}
+
+function Set-ReparoPersistentSyslogTarget {
+    param([Parameter(Mandatory)][string]$Target)
+
+    $resolved = Resolve-ReparoSyslogTarget -Target $Target
+    $settings = Read-ReparoSettings
+    $settings | Add-Member -NotePropertyName Syslog -NotePropertyValue ("{0}:{1}" -f $resolved.Host, $resolved.Port) -Force
+    Write-ReparoSettings -Settings $settings
+    return $settings.Syslog
+}
+
+function Clear-ReparoPersistentSyslogTarget {
+    $settings = Read-ReparoSettings
+    if ($settings.PSObject.Properties.Name -contains 'Syslog') {
+        $settings.PSObject.Properties.Remove('Syslog')
+        Write-ReparoSettings -Settings $settings
+    }
+}
+
+function Get-ReparoPersistentSyslogTarget {
+    $settings = Read-ReparoSettings
+    if ($settings.PSObject.Properties.Name -contains 'Syslog') {
+        return [string]$settings.Syslog
+    }
+
+    return $null
+}
+
+function Initialize-ReparoSyslog {
+    param(
+        [AllowNull()][string]$Target,
+        [switch]$Bound
+    )
+
+    if ($Bound) {
+        if (Test-ReparoSyslogDisableValue -Target $Target) {
+            Clear-ReparoPersistentSyslogTarget
+            $script:ReparoSyslogConfiguredThisRun = $true
+            Write-ReparoLog '[SYSLOG] Persistent TCP forwarding disabled.'
+            return
+        }
+
+        $Target = Set-ReparoPersistentSyslogTarget -Target $Target
+        $script:ReparoSyslogConfiguredThisRun = $true
+        Write-ReparoLog ("[SYSLOG] Persistent TCP target saved: {0}" -f $Target)
+    }
+    else {
+        $Target = Get-ReparoPersistentSyslogTarget
+    }
+
+    $resolved = Resolve-ReparoSyslogTarget -Target $Target
+    if (-not $resolved) {
+        return
+    }
+
+    $script:ReparoSyslogHost = $resolved.Host
+    $script:ReparoSyslogPort = [int]$resolved.Port
+    $script:ReparoSyslogEnabled = $true
+    Write-ReparoLog ("[SYSLOG] TCP forwarding enabled: {0}:{1}" -f $script:ReparoSyslogHost, $script:ReparoSyslogPort)
+}
+
+function Close-ReparoSyslogConnection {
+    try {
+        if ($script:ReparoSyslogWriter) {
+            $script:ReparoSyslogWriter.Dispose()
+        }
+    }
+    catch { }
+    finally {
+        $script:ReparoSyslogWriter = $null
+    }
+
+    try {
+        if ($script:ReparoSyslogClient) {
+            $script:ReparoSyslogClient.Close()
+        }
+    }
+    catch { }
+    finally {
+        $script:ReparoSyslogClient = $null
+    }
+}
+
+function Connect-ReparoSyslog {
+    if (-not $script:ReparoSyslogEnabled) {
+        return $false
+    }
+
+    if ($script:ReparoSyslogClient -and $script:ReparoSyslogClient.Connected -and $script:ReparoSyslogWriter) {
+        return $true
+    }
+
+    Close-ReparoSyslogConnection
+
+    $client = New-Object System.Net.Sockets.TcpClient
+    $async = $client.BeginConnect($script:ReparoSyslogHost, $script:ReparoSyslogPort, $null, $null)
+    if (-not $async.AsyncWaitHandle.WaitOne(1500, $false)) {
+        $client.Close()
+        throw ("Timed out connecting to TCP syslog target {0}:{1}" -f $script:ReparoSyslogHost, $script:ReparoSyslogPort)
+    }
+
+    $client.EndConnect($async)
+    $client.SendTimeout = 1500
+    $client.ReceiveTimeout = 1500
+
+    $encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    $writer = New-Object System.IO.StreamWriter -ArgumentList ($client.GetStream()), $encoding
+    $writer.AutoFlush = $true
+
+    $script:ReparoSyslogClient = $client
+    $script:ReparoSyslogWriter = $writer
+    return $true
+}
+
+function Get-ReparoSyslogSeverity {
+    param([AllowNull()][string]$Message)
+
+    if ($Message -match '^\[(ERROR|FAIL|FAILED)\]') { return 3 }
+    if ($Message -match '^\[WARN(ING)?\]') { return 4 }
+    if ($Message -match '^\[DEBUG\]') { return 7 }
+    return 6
+}
+
+function Send-ReparoSyslogMessage {
+    param([AllowNull()][string]$Message)
+
+    if (-not $script:ReparoSyslogEnabled) {
+        return
+    }
+
+    try {
+        if (-not (Connect-ReparoSyslog)) {
+            return
+        }
+
+        $severity = Get-ReparoSyslogSeverity -Message $Message
+        $priority = (16 * 8) + $severity # local0 + severity
+        $timestamp = Get-Date -Format 'MMM dd HH:mm:ss'
+        $hostName = if ([string]::IsNullOrWhiteSpace($env:COMPUTERNAME)) { '-' } else { $env:COMPUTERNAME }
+        $body = ([string]$Message) -replace '[\r\n]+', ' '
+        $syslogMessage = "<{0}>{1} {2} reparo[{3}]: {4}" -f $priority, $timestamp, $hostName, $PID, $body
+
+        $script:ReparoSyslogWriter.WriteLine($syslogMessage)
+    }
+    catch {
+        $script:ReparoSyslogEnabled = $false
+        Close-ReparoSyslogConnection
+
+        if (-not $script:ReparoSyslogFailureReported) {
+            $script:ReparoSyslogFailureReported = $true
+            Write-Warning ("Disabling syslog forwarding after TCP delivery failure to {0}:{1}: {2}" -f $script:ReparoSyslogHost, $script:ReparoSyslogPort, $_.Exception.Message)
+        }
+    }
+}
+
 function Write-ReparoLog {
     param(
         [AllowNull()]
@@ -1057,6 +1313,7 @@ function Write-ReparoLog {
                 $fs.Dispose()
             }
 
+            Send-ReparoSyslogMessage -Message $Message
             return
         }
         catch {
@@ -1210,6 +1467,8 @@ function Finalize-ReparoLogFile {
         Write-Host ("Final log: {0}" -f $script:ReparoLogPath) -ForegroundColor Cyan
         Write-ReparoLog ("[SUMMARY] Final log renamed to: {0}" -f $script:ReparoLogPath)
     }
+
+    Close-ReparoSyslogConnection
 }
 
 function Complete-ReparoUtilityLog {
@@ -1233,6 +1492,8 @@ trap {
 
     break
 }
+
+Initialize-ReparoSyslog -Target $Syslog -Bound:($PSBoundParameters.ContainsKey('Syslog'))
 
 function Get-ReparoRunningProcessInfo {
     param(
@@ -1607,6 +1868,55 @@ function Invoke-ReparoTailLog {
             break
         }
     }
+}
+
+function Test-ReparoOperationalModeRequested {
+    $modeParameters = @(
+        'New',
+        'Kill',
+        'Status',
+        'Sweep',
+        'DeleteStale',
+        'Tail',
+        'Update',
+        'Winget',
+        'WingetDiscover',
+        'Search',
+        'AddVersionLock',
+        'ListVersionLocks',
+        'MigrateChocoToWinget',
+        'FinalizeChocolateyRemoval',
+        'InstallSpicetify',
+        'Force',
+        'Preview',
+        'WindowsUpdate',
+        'WslApt',
+        'Include',
+        'RemainingInclude',
+        'CheckApp',
+        'LockApp'
+    )
+
+    foreach ($parameterName in $modeParameters) {
+        if ($PSBoundParameters.ContainsKey($parameterName)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+if ($PSBoundParameters.ContainsKey('Syslog') -and -not (Test-ReparoOperationalModeRequested)) {
+    if (Test-ReparoSyslogDisableValue -Target $Syslog) {
+        Write-Host 'Reparo persistent TCP syslog forwarding disabled.' -ForegroundColor Yellow
+    }
+    else {
+        Write-Host ("Reparo persistent TCP syslog target set to {0}:{1}." -f $script:ReparoSyslogHost, $script:ReparoSyslogPort) -ForegroundColor Green
+    }
+
+    Write-Host ("Settings: {0}" -f $script:ReparoSettingsPath) -ForegroundColor Cyan
+    Complete-ReparoUtilityLog -Status 'COMPLETE'
+    return
 }
 
 if ($New) {
@@ -2890,13 +3200,13 @@ function Get-ReparoChocoMigrationDefaultExcludes {
 }
 
 function Get-ReparoChocoFinalizeAllowedPackageIds {
-    return @(
-        @(Get-ReparoChocoMigrationDefaultExcludes) +
-        @(
-            # Trenton is fine with CyberChef being discarded with Chocolatey instead of preserved.
-            'cyberchef'
-        )
-    )
+    return @(Get-ReparoChocoMigrationDefaultExcludes)
+}
+
+function Test-ReparoChocoMigrationClassIsActionable {
+    param([Parameter(Mandatory)][string]$MigrationClass)
+
+    return ($MigrationClass -in @('GuiApp', 'DuplicateCluster', 'RuntimeDependency', 'PortablePayload'))
 }
 
 function Get-ReparoChocoRuntimePackageIds {
@@ -3776,7 +4086,11 @@ function Invoke-ReparoChocoToWingetMigration {
         return
     }
 
-    $candidateRows = @($plan | Where-Object { $_.WingetId -and $_.WingetAvailable })
+    $candidateRows = @($plan | Where-Object {
+        $_.WingetId -and
+        $_.WingetAvailable -and
+        (Test-ReparoChocoMigrationClassIsActionable -MigrationClass $_.MigrationClass)
+    })
     $groups = @($candidateRows | Group-Object DuplicateGroupKey)
     foreach ($group in $groups) {
         $groupRows = @($group.Group)

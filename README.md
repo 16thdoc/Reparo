@@ -33,6 +33,7 @@ reparo -Help
 reparo -Version
 reparo -Kill
 reparo -Tail
+reparo -Update -Syslog 192.168.50.31:514
 reparo -CheckApp Microsoft.VisualStudioCode -PackageManager Winget
 reparo -Preview -LockApp Microsoft.VisualStudioCode -LockVersion 1.125.0 -PackageManager Winget
 reparo -Search
@@ -236,6 +237,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-InstallSpicetify` | Installs or reinstalls Spicetify Marketplace in the logged-on user's context, then runs update and backup/apply. |
 | `-Tail` | Follows the active Reparo log when used by itself. When combined with a run mode, it prints the tail of that run's log at the end. |
 | `-TailLines <count>` | Controls how many existing log lines `-Tail` prints before following. Default: `400`. |
+| `-Syslog <host[:port]>` | Persistently sets and uses a TCP syslog listener. Default port is `514`, so `-Syslog 192.168.50.31` and `-Syslog 192.168.50.31:514` target the same port. Use `-Syslog off` or `-Syslog disable` to clear the saved target. |
 | `-Status` | Shows whether Reparo is currently running, points at the active log file, and prints the registry evidence behind any pending reboot flag. |
 | `-IgnoreTimeouts` | Disables timeout enforcement even when timeout parameters are supplied. |
 | `-AllowReboot` / `-Reboot` | Allows the Windows Update section to pass `-AutoReboot`. By default Reparo passes `-IgnoreReboot`. |
@@ -367,7 +369,7 @@ The migration pass is intentionally conservative:
 - Chocolatey cleanup is safe record deregistration with skip flags when `-ChocoDeregisterOnly` is supplied, not a blind application uninstall.
 - Runtime packages require `-AllowRuntimeDeregister`; portable/CLI payloads require non-Chocolatey command verification and may require `-AllowPortableDeregister`.
 - Packages without a map, unavailable winget targets, risky payloads, and manual-review items are reported in the final summary and optional CSV/JSON reports.
-- CyberChef is treated as disposable during the final Chocolatey removal phase; the backup-first finalizer is the recovery path instead of trying to preserve a random portable web app forever like a tiny cursed museum exhibit.
+- CyberChef and other static/portable payloads are not silently allowed through final Chocolatey removal; preserve them manually or use an explicit override after reviewing the backup/report.
 
 Always start with:
 

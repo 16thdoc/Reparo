@@ -17,6 +17,14 @@ param(
     [switch]$Winget,
     [switch]$WingetDiscover,
     [switch]$MigrateChocoToWinget,
+    [switch]$ChocoDeregisterOnly,
+    [switch]$ForceWingetReinstall,
+    [switch]$AllowRuntimeDeregister,
+    [switch]$AllowPortableDeregister,
+    [switch]$FinalizeChocolateyRemoval,
+    [switch]$AllowRemainingChocoPackages,
+    [switch]$NoChocolateyBackup,
+    [string]$MigrationReportPath,
     [string]$ChocoWingetMapPath,
     [string[]]$MigrateChocoExclude,
     [switch]$Force,
@@ -38,7 +46,8 @@ param(
     [Alias('Reboot')]
     [switch]$AllowReboot,
     [string[]]$Include,
-    [string]$LogRoot = "$env:ProgramData\Reparo\Logs"
+    [string]$LogRoot = "$env:ProgramData\Reparo\Logs",
+    [string]$Syslog
 )
 
 $ErrorActionPreference = 'Stop'
@@ -80,6 +89,14 @@ function Write-NinjaParameterBlock {
         Winget                       = $Winget
         WingetDiscover               = $WingetDiscover
         MigrateChocoToWinget         = $MigrateChocoToWinget
+        ChocoDeregisterOnly          = $ChocoDeregisterOnly
+        ForceWingetReinstall         = $ForceWingetReinstall
+        AllowRuntimeDeregister       = $AllowRuntimeDeregister
+        AllowPortableDeregister      = $AllowPortableDeregister
+        FinalizeChocolateyRemoval    = $FinalizeChocolateyRemoval
+        AllowRemainingChocoPackages  = $AllowRemainingChocoPackages
+        NoChocolateyBackup           = $NoChocolateyBackup
+        MigrationReportPath          = $MigrationReportPath
         ChocoWingetMapPath           = $ChocoWingetMapPath
         MigrateChocoExclude          = $MigrateChocoExclude
         Force                        = $Force
@@ -97,6 +114,7 @@ function Write-NinjaParameterBlock {
         AllowReboot                  = $AllowReboot
         Include                      = $Include
         LogRoot                      = $LogRoot
+        Syslog                       = $Syslog
     }
 
     Write-Host 'Parameter state:'
@@ -132,7 +150,15 @@ elseif ($MigrateChocoToWinget) {
         Write-Host '  - Chocolatey to winget migration preview; no packages will be installed or removed.'
     }
     else {
-        Write-Host '  - Chocolatey to winget migration; matched packages install with winget before Chocolatey removal.'
+        Write-Host '  - Chocolatey to winget migration; matched packages install/verify with winget before optional safe Chocolatey deregistration.'
+    }
+}
+elseif ($FinalizeChocolateyRemoval) {
+    if ($Preview) {
+        Write-Host '  - Chocolatey finalization preview; no files or environment variables will be removed.'
+    }
+    else {
+        Write-Host '  - Chocolatey finalization requested; Reparo will enforce backup-first safety checks.'
     }
 }
 elseif ($Kill) {
@@ -155,6 +181,9 @@ if ($IgnoreTimeouts) {
 }
 if ($AllowReboot) {
     Write-Host '  - Windows Update is allowed to auto-reboot if PSWindowsUpdate requires it.'
+}
+if ($PSBoundParameters.ContainsKey('Syslog')) {
+    Write-Host ("  - Reparo TCP syslog target will be configured/used: {0}" -f $Syslog)
 }
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
@@ -188,6 +217,27 @@ if ($WingetDiscover) {
 if ($MigrateChocoToWinget) {
     $arguments += '-MigrateChocoToWinget'
 }
+if ($ChocoDeregisterOnly) {
+    $arguments += '-ChocoDeregisterOnly'
+}
+if ($ForceWingetReinstall) {
+    $arguments += '-ForceWingetReinstall'
+}
+if ($AllowRuntimeDeregister) {
+    $arguments += '-AllowRuntimeDeregister'
+}
+if ($AllowPortableDeregister) {
+    $arguments += '-AllowPortableDeregister'
+}
+if ($FinalizeChocolateyRemoval) {
+    $arguments += '-FinalizeChocolateyRemoval'
+}
+if ($AllowRemainingChocoPackages) {
+    $arguments += '-AllowRemainingChocoPackages'
+}
+if ($NoChocolateyBackup) {
+    $arguments += '-NoChocolateyBackup'
+}
 if ($Force) {
     $arguments += '-Force'
 }
@@ -201,7 +251,7 @@ elseif ($Include -and $Include.Count -gt 0) {
     $arguments += '-Include'
     $arguments += $Include
 }
-elseif ($Update) {
+elseif ($Update -and -not ($MigrateChocoToWinget -or $FinalizeChocolateyRemoval)) {
     $arguments += '-Update'
 }
 
@@ -237,6 +287,10 @@ if ($PSBoundParameters.ContainsKey('ChocoWingetMapPath')) {
     $arguments += '-ChocoWingetMapPath'
     $arguments += $ChocoWingetMapPath
 }
+if ($PSBoundParameters.ContainsKey('MigrationReportPath')) {
+    $arguments += '-MigrationReportPath'
+    $arguments += $MigrationReportPath
+}
 if ($PSBoundParameters.ContainsKey('MigrateChocoExclude')) {
     $arguments += '-MigrateChocoExclude'
     $arguments += $MigrateChocoExclude
@@ -248,6 +302,10 @@ if ($Tail) {
 if ($PSBoundParameters.ContainsKey('TailLines')) {
     $arguments += '-TailLines'
     $arguments += $TailLines
+}
+if ($PSBoundParameters.ContainsKey('Syslog')) {
+    $arguments += '-Syslog'
+    $arguments += $Syslog
 }
 
 Write-Host ("Launching Reparo: powershell.exe {0}" -f ($arguments -join ' '))
