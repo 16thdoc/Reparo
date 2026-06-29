@@ -1233,6 +1233,7 @@ function Connect-ReparoSyslog {
 
     $encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
     $writer = New-Object System.IO.StreamWriter -ArgumentList ($client.GetStream()), $encoding
+    $writer.NewLine = "`n"
     $writer.AutoFlush = $true
 
     $script:ReparoSyslogClient = $client
