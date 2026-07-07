@@ -92,8 +92,10 @@ param(
     [int]$WslAptTimeoutSeconds = 1800,
     [Alias('INP')]
     [bool]$InstallNuGetProvider = $true,
-    [Alias('Reboot', 'R')]
+    [Alias('AllowRestart', 'AR')]
     [switch]$AllowReboot,
+    [Alias('Reboot', 'Restart', 'R', 'ForceRestart', 'FR', 'FS', 'FRST')]
+    [switch]$ForceReboot,
     [Alias('LR')]
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs",
     [string]$Syslog,
@@ -257,6 +259,7 @@ function Write-ReparoParameterBlock {
         WslAptTimeoutSeconds          = $WslAptTimeoutSeconds
         InstallNuGetProvider         = $InstallNuGetProvider
         AllowReboot                  = $AllowReboot
+        ForceReboot                  = $ForceReboot
         LogRoot                      = $LogRoot
         Syslog                       = $Syslog
         InstallRoot                  = $InstallRoot
@@ -434,8 +437,10 @@ Modes:
                        ChocoId/WingetId/Source fields. CSV uses ChocoId,WingetId,Source.
   -MigrateChocoExclude Extra Chocolatey package IDs to skip during migration.
   -IgnoreTimeouts      Disable command-step timeout enforcement even when timeout parameters are supplied.
-  -AllowReboot,-Reboot Allow Windows Update to auto-reboot if PSWindowsUpdate requires it.
+  -AllowReboot,-AllowRestart
+                       Allow Windows Update to auto-reboot if PSWindowsUpdate requires it.
                        Default behavior still uses -IgnoreReboot.
+  -Reboot,-Restart,-R  Reboot the computer after Reparo finishes. Honors -Preview.
   -Syslog <host[:port]> Persistently set and use a TCP syslog listener. Default port: 514.
                        Example: -Syslog 192.168.50.31:514
                        Use -Syslog off or -Syslog disable to clear the saved target.
@@ -465,6 +470,7 @@ Timeouts:
   -WslAptTimeoutSeconds          WSL apt timeout. Default: 1800 seconds.
   -InstallNuGetProvider         When true (default), bootstrap the NuGet provider before PSGallery installs.
   -AllowReboot                  Let the Windows Update section pass -AutoReboot instead of -IgnoreReboot.
+  -Reboot,-Restart              Force a computer restart after Reparo finishes. Honors -Preview.
 
 Windows Update:
   Reparo will try to install PSWindowsUpdate from PSGallery if the module is missing
@@ -1456,6 +1462,31 @@ function Test-ReparoPendingReboot {
     $evidence = @(Get-ReparoPendingRebootEvidence)
 
     return ($evidence.Count -gt 0)
+}
+
+function Invoke-ReparoForcedReboot {
+    if (-not $ForceReboot) {
+        return
+    }
+
+    if ($Preview) {
+        Write-Info 'Preview: would reboot the computer after Reparo finishes.'
+        Write-ReparoLog '[PREVIEW] ForceReboot requested; would reboot the computer after Reparo finishes.'
+        return
+    }
+
+    Write-Warning 'ForceReboot requested; restarting the computer in 30 seconds.'
+    Write-ReparoLog '[REBOOT] ForceReboot requested; restarting the computer in 30 seconds.'
+    Write-ReparoEventLog -EventId 1301 -EntryType Warning -Message @"
+Reparo forced reboot requested.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Mode: $mode
+Log: $script:ReparoLogPath
+"@
+
+    shutdown.exe /r /t 30 /c "Reparo completed and -Reboot/-Restart was requested." /d p:4:1 | Out-Null
 }
 
 function Finalize-ReparoLogFile {
@@ -5481,6 +5512,7 @@ Reparo detected a pending reboot.
 Computer: $env:COMPUTERNAME
 PID: $PID
 AllowReboot: $AllowReboot
+ForceReboot: $ForceReboot
 Mode: $mode
 Log: $script:ReparoLogPath
 "@
@@ -5544,3 +5576,5 @@ if ($Tail) {
         Write-Warning "Log file not found: $script:ReparoLogPath"
     }
 }
+
+Invoke-ReparoForcedReboot
