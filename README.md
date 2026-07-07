@@ -214,6 +214,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-KillUpdaterNames <names>` | Adds extra process base names to the `-Kill` updater sweep, for example `-Kill -KillUpdaterNames msiexec`. |
 | `-Preview` | Logs what would run without executing package manager commands. |
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, `PowerShell7`, and `WindowsUpdate`. |
+| `-11` / `-Win11` / `-Windows11` | Runs a Windows 10 to Windows 11 feature upgrade using Microsoft's Windows 11 Installation Assistant. Requires elevation. Use `-Preview -11` first to log the download URL and installer command without launching the upgrade goblin. |
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |
 | `-WingetDiscover` | Repairs/refreshes winget if needed and runs only winget discovery commands. |
 | `-Search` / `-List` / `-S` / `-L` | Inventories applications Reparo `-Force` can update and prints installed versions, available versions when known, update method, source, lock status, and a ready-to-copy `LockSpec`. Add terms after the switch to filter, for example `reparo -Search git` or `reparo -List git`. PowerShell switch names are case-insensitive, so lowercase forms work too. |
@@ -301,6 +302,18 @@ Available section names:
 - `Wsl`
 - `WslApt`
 - `WindowsUpdate`
+- `Windows11Upgrade`
+
+### Windows 11 feature upgrade
+
+`-11` is an explicit OS-upgrade mode, not part of `-Update` or `-Force`. It only runs from Windows 10, skips Windows 11 or newer builds, downloads Microsoft's Windows 11 Installation Assistant to `C:\ProgramData\Reparo\Cache`, and launches it with quiet upgrade arguments.
+
+```powershell
+reparo -Preview -11
+reparo -11
+```
+
+Use an elevated/admin or SYSTEM context and expect a long-running installer plus reboot behavior from the Windows setup stack.
 
 ### PowerShell 7
 
