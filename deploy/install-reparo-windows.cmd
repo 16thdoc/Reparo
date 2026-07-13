@@ -1,6 +1,28 @@
 @echo off
 setlocal EnableExtensions
 
+set "REPARO_QUIET_INNER=0"
+if /I "%~1"=="/__quiet_inner" (
+  set "REPARO_QUIET_INNER=1"
+  shift /1
+)
+
+set "REPARO_QUIET=%REPARO_QUIET%"
+if not defined REPARO_QUIET set "REPARO_QUIET=0"
+for %%A in (%*) do (
+  if /I "%%~A"=="/quiet" set "REPARO_QUIET=1"
+  if /I "%%~A"=="-quiet" set "REPARO_QUIET=1"
+  if /I "%%~A"=="--quiet" set "REPARO_QUIET=1"
+  if /I "%%~A"=="/silent" set "REPARO_QUIET=1"
+  if /I "%%~A"=="-silent" set "REPARO_QUIET=1"
+  if /I "%%~A"=="--silent" set "REPARO_QUIET=1"
+)
+if not defined REPARO_INSTALL_LOG set "REPARO_INSTALL_LOG=%TEMP%\reparo-install-windows.log"
+if "%REPARO_QUIET%"=="1" if not "%REPARO_QUIET_INNER%"=="1" (
+  call "%~f0" /__quiet_inner %* >"%REPARO_INSTALL_LOG%" 2>&1
+  exit /b %errorlevel%
+)
+
 set "INSTALL_ROOT=%ProgramData%\Reparo"
 set "BIN_ROOT=%INSTALL_ROOT%\bin"
 set "BOOTSTRAP=%TEMP%\Reparo.bootstrap.ps1"

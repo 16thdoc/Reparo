@@ -123,7 +123,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.1'
+$script:ReparoVersion = '1.1.2'
 
 $script:ReparoIsWindows = if (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsWindows } else { $true }
 $script:ReparoIsLinux = if (Get-Variable -Name IsLinux -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsLinux } else { $false }
@@ -195,14 +195,15 @@ function Get-ReparoVersionFlavor {
     param([string]$Version = $script:ReparoVersion)
 
     $versionFlavors = @{
-        '1.0.8.1' = [pscustomobject]@{ Quote = 'Hotfix applied. The goblin has been relocated.'; Art = '  GOBLIN: evicted from version output' }
-        '1.0.8.2' = [pscustomobject]@{ Quote = 'New quote online. Old ghosts denied boarding.'; Art = '  QUOTE BAY: temporal lint removed' }
-        '1.0.8.3' = [pscustomobject]@{ Quote = 'I cast Magic Missile at the darkness.'; Art = '  D20: quote gremlin takes 1d4+1 force damage' }
-        '1.0.8.4' = [pscustomobject]@{ Quote = "He's dead, Jim."; Art = '  ENTERPRISE: set phasers to finalize' }
-        '1.0.8.5' = [pscustomobject]@{ Quote = 'Syslog pipe online. The logs have learned to phone home.'; Art = '  TCP: tiny log goblins marching single-file' }
-        '1.0.8.6' = [pscustomobject]@{ Quote = 'Windows 11 gate opened. Bring snacks and a reboot window.'; Art = '  WIN11: feature upgrade wyrm uncoiled' }
-        '1.1'     = [pscustomobject]@{ Quote = 'Penguin maintenance wing online. Same Reparo, more habitats.'; Art = '  LINUX: tux goblin joins the patch council' }
-        '1.1.1'   = [pscustomobject]@{ Quote = 'Linux PATH goblin tagged and released somewhere inconvenient.'; Art = '  PATH: case-sensitive gremlin trap armed' }
+        '1.0.8.1' = [pscustomobject]@{ Quote = 'Hotfix applied. The goblin has been relocated.'; Source = 'Reparo maintenance log'; Art = '  GOBLIN: evicted from version output' }
+        '1.0.8.2' = [pscustomobject]@{ Quote = 'New quote online. Old ghosts denied boarding.'; Source = 'Reparo maintenance log'; Art = '  QUOTE BAY: temporal lint removed' }
+        '1.0.8.3' = [pscustomobject]@{ Quote = 'I cast Magic Missile at the darkness.'; Source = 'Dungeons & Dragons'; Art = '  D20: quote gremlin takes 1d4+1 force damage' }
+        '1.0.8.4' = [pscustomobject]@{ Quote = "He's dead, Jim."; Source = 'Star Trek'; Art = '  ENTERPRISE: set phasers to finalize' }
+        '1.0.8.5' = [pscustomobject]@{ Quote = 'Syslog pipe online. The logs have learned to phone home.'; Source = 'Reparo maintenance log'; Art = '  TCP: tiny log goblins marching single-file' }
+        '1.0.8.6' = [pscustomobject]@{ Quote = 'Windows 11 gate opened. Bring snacks and a reboot window.'; Source = 'Reparo maintenance log'; Art = '  WIN11: feature upgrade wyrm uncoiled' }
+        '1.1'     = [pscustomobject]@{ Quote = 'Penguin maintenance wing online. Same Reparo, more habitats.'; Source = 'Reparo maintenance log'; Art = '  LINUX: tux goblin joins the patch council' }
+        '1.1.1'   = [pscustomobject]@{ Quote = 'Linux PATH goblin tagged and released somewhere inconvenient.'; Source = 'Reparo maintenance log'; Art = '  PATH: case-sensitive gremlin trap armed' }
+        '1.1.2'   = [pscustomobject]@{ Quote = 'Make it so.'; Source = 'Star Trek: The Next Generation'; Art = '  ENTERPRISE: installer verbosity set to stun' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -210,22 +211,22 @@ function Get-ReparoVersionFlavor {
     }
 
     $flavors = @(
-        [pscustomobject]@{ Quote = 'Hold on to your butts.'; Art = '  /\\_ Jurassic patch detected _/\\' },
-        [pscustomobject]@{ Quote = 'Hack the planet!'; Art = '  [*] crash_override.exe loaded' },
-        [pscustomobject]@{ Quote = 'Shall we play a game?'; Art = '  .-- WOPR warming the tea --.' },
-        [pscustomobject]@{ Quote = 'The only winning move is not to play.'; Art = '  tic-tac-toe: avoided successfully' },
-        [pscustomobject]@{ Quote = 'There is no spoon.'; Art = '  ( spoon.exe has exited with code 0 )' },
-        [pscustomobject]@{ Quote = 'Do or do not. There is no try.'; Art = '  JEDI: try/catch block removed' },
-        [pscustomobject]@{ Quote = 'Open the pod bay doors.'; Art = '  HAL says: maintenance acknowledged' },
-        [pscustomobject]@{ Quote = 'Never tell me the odds.'; Art = '  <KesselRun parsecs="12" />' },
-        [pscustomobject]@{ Quote = 'Would you like to know more?'; Art = '  SERVICE GUARANTEES CITIZENSHIP' },
-        [pscustomobject]@{ Quote = 'By Grabthar''s hammer, what a savings.'; Art = '  GALAXY QUEST: thermian patch ritual complete' },
-        [pscustomobject]@{ Quote = 'I cast Magic Missile at the darkness.'; Art = '  D20: quote gremlin takes 1d4+1 force damage' },
-        [pscustomobject]@{ Quote = 'The spice must flow.'; Art = '  ARRAKIS: maintenance harvester deployed' },
-        [pscustomobject]@{ Quote = 'So say we all.'; Art = '  BSG: jump drive cooled, logs synced' },
-        [pscustomobject]@{ Quote = 'Roll for initiative.'; Art = '  D20: service encounter begins' },
-        [pscustomobject]@{ Quote = 'The cake is a lie.'; Art = '  APERTURE: morally dubious maintenance complete' },
-        [pscustomobject]@{ Quote = 'It is pitch black. You are likely to be eaten by a grue.'; Art = '  ZORK: lantern battery critically petty' }
+        [pscustomobject]@{ Quote = 'Hold on to your butts.'; Source = 'Jurassic Park'; Art = '  /\\_ Jurassic patch detected _/\\' },
+        [pscustomobject]@{ Quote = 'Hack the planet!'; Source = 'Hackers'; Art = '  [*] crash_override.exe loaded' },
+        [pscustomobject]@{ Quote = 'Shall we play a game?'; Source = 'WarGames'; Art = '  .-- WOPR warming the tea --.' },
+        [pscustomobject]@{ Quote = 'The only winning move is not to play.'; Source = 'WarGames'; Art = '  tic-tac-toe: avoided successfully' },
+        [pscustomobject]@{ Quote = 'There is no spoon.'; Source = 'The Matrix'; Art = '  ( spoon.exe has exited with code 0 )' },
+        [pscustomobject]@{ Quote = 'Do or do not. There is no try.'; Source = 'Star Wars'; Art = '  JEDI: try/catch block removed' },
+        [pscustomobject]@{ Quote = 'Open the pod bay doors.'; Source = '2001: A Space Odyssey'; Art = '  HAL says: maintenance acknowledged' },
+        [pscustomobject]@{ Quote = 'Never tell me the odds.'; Source = 'Star Wars'; Art = '  <KesselRun parsecs="12" />' },
+        [pscustomobject]@{ Quote = 'Would you like to know more?'; Source = 'Starship Troopers'; Art = '  SERVICE GUARANTEES CITIZENSHIP' },
+        [pscustomobject]@{ Quote = 'By Grabthar''s hammer, what a savings.'; Source = 'Galaxy Quest'; Art = '  GALAXY QUEST: thermian patch ritual complete' },
+        [pscustomobject]@{ Quote = 'I cast Magic Missile at the darkness.'; Source = 'Dungeons & Dragons'; Art = '  D20: quote gremlin takes 1d4+1 force damage' },
+        [pscustomobject]@{ Quote = 'The spice must flow.'; Source = 'Dune'; Art = '  ARRAKIS: maintenance harvester deployed' },
+        [pscustomobject]@{ Quote = 'So say we all.'; Source = 'Battlestar Galactica'; Art = '  BSG: jump drive cooled, logs synced' },
+        [pscustomobject]@{ Quote = 'Roll for initiative.'; Source = 'Dungeons & Dragons'; Art = '  D20: service encounter begins' },
+        [pscustomobject]@{ Quote = 'The cake is a lie.'; Source = 'Portal'; Art = '  APERTURE: morally dubious maintenance complete' },
+        [pscustomobject]@{ Quote = 'It is pitch black. You are likely to be eaten by a grue.'; Source = 'Zork'; Art = '  ZORK: lantern battery critically petty' }
     )
 
     $hash = [long]5381
@@ -257,6 +258,16 @@ if ($RemainingInclude -and $RemainingInclude.Count -gt 0 -and -not $Search) {
 
     if ($remainingModeArgs.Count -gt 0) {
         $Include = @($Include) + @($remainingModeArgs)
+    }
+}
+
+function Write-ReparoVersionOutput {
+    Write-Host "Reparo $script:ReparoVersion"
+    Write-Host "Source: $PSCommandPath"
+    $flavor = Get-ReparoVersionFlavor
+    Write-Host ('  "{0}"' -f $flavor.Quote)
+    if (-not [string]::IsNullOrWhiteSpace($flavor.Source)) {
+        Write-Host ('  - {0}' -f $flavor.Source)
     }
 }
 
@@ -582,9 +593,7 @@ if ($Help) {
 }
 
 if ($Version) {
-    Write-Host "Reparo $script:ReparoVersion"
-    Write-Host "Source: $PSCommandPath"
-    Write-Host (Get-ReparoVersionQuote)
+    Write-ReparoVersionOutput
     return
 }
 

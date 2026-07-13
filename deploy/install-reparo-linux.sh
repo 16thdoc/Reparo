@@ -2,6 +2,20 @@
 set -euo pipefail
 
 REPARO_URL="${REPARO_URL:-https://api.github.com/repos/16thdoc/Reparo/contents/Reparo.ps1?ref=main}"
+REPARO_QUIET="${REPARO_QUIET:-0}"
+REPARO_INSTALL_LOG="${REPARO_INSTALL_LOG:-${TMPDIR:-/tmp}/reparo-install-linux.log}"
+
+for arg in "$@"; do
+  case "$arg" in
+    -q|--quiet|--silent|-quiet|-silent)
+      REPARO_QUIET=1
+      ;;
+  esac
+done
+
+if [ "$REPARO_QUIET" = "1" ]; then
+  exec >"$REPARO_INSTALL_LOG" 2>&1
+fi
 
 if ! command -v pwsh >/dev/null 2>&1; then
   echo "ERROR: PowerShell 7+ is required. Install 'pwsh' first, then rerun this installer." >&2
@@ -98,3 +112,7 @@ echo "  reparo -Update"
 echo "  reparo -Status"
 echo "  reparo -Tail"
 echo
+
+if [ "$REPARO_QUIET" = "1" ]; then
+  echo "Quiet install log: $REPARO_INSTALL_LOG"
+fi
