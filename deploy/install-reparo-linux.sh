@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPARO_URL="${REPARO_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1}"
+REPARO_URL="${REPARO_URL:-https://api.github.com/repos/16thdoc/Reparo/contents/Reparo.ps1?ref=main}"
 
 if ! command -v pwsh >/dev/null 2>&1; then
   echo "ERROR: PowerShell 7+ is required. Install 'pwsh' first, then rerun this installer." >&2
@@ -33,7 +33,7 @@ case "$download_url" in
     download_url="${download_url}${sep}x=$(date +%s)"
     ;;
 esac
-curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$download_url" -o "$bootstrap"
+curl -fsSL -H 'Accept: application/vnd.github.raw' -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$download_url" -o "$bootstrap"
 
 echo "Installing/updating Reparo runtime..."
 pwsh -NoProfile -File "$bootstrap" -New -SourceUrl "$bootstrap"

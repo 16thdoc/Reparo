@@ -6,7 +6,7 @@ set "BIN_ROOT=%INSTALL_ROOT%\bin"
 set "BOOTSTRAP=%TEMP%\Reparo.bootstrap.ps1"
 set "REPARO=%INSTALL_ROOT%\Reparo.ps1"
 set "SHIM=%BIN_ROOT%\reparo.cmd"
-if not defined REPARO_URL set "REPARO_URL=https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1"
+if not defined REPARO_URL set "REPARO_URL=https://api.github.com/repos/16thdoc/Reparo/contents/Reparo.ps1?ref=main"
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent()); if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 } exit 1"
 if errorlevel 1 (
@@ -36,7 +36,7 @@ if errorlevel 1 (
 
 echo Downloading Reparo...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference = 'Stop'; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; $url = '%REPARO_URL%'; if ($url -match '^https://raw\.githubusercontent\.com/') { $sep = if ($url.Contains('?')) { '&' } else { '?' }; $url = ('{0}{1}x={2}' -f $url, $sep, [Uri]::EscapeDataString((Get-Date -Format 'yyyyMMddHHmmss'))) }; Invoke-WebRequest -Uri $url -OutFile '%BOOTSTRAP%' -UseBasicParsing; Unblock-File -LiteralPath '%BOOTSTRAP%' -ErrorAction SilentlyContinue"
+  "$ErrorActionPreference = 'Stop'; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; $url = '%REPARO_URL%'; $headers = @{}; if ($url -match '^https://api\.github\.com/repos/.+/contents/') { $headers['Accept'] = 'application/vnd.github.raw'; $headers['User-Agent'] = 'Reparo' }; if ($url -match '^https://raw\.githubusercontent\.com/') { $sep = if ($url.Contains('?')) { '&' } else { '?' }; $url = ('{0}{1}x={2}' -f $url, $sep, [Uri]::EscapeDataString((Get-Date -Format 'yyyyMMddHHmmss'))); $headers['Cache-Control'] = 'no-cache'; $headers['Pragma'] = 'no-cache' }; Invoke-WebRequest -Uri $url -Headers $headers -OutFile '%BOOTSTRAP%' -UseBasicParsing; Unblock-File -LiteralPath '%BOOTSTRAP%' -ErrorAction SilentlyContinue"
 
 if errorlevel 1 (
   echo ERROR: Download failed.

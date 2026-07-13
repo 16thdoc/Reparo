@@ -102,7 +102,7 @@ param(
     [Alias('IR')]
     [string]$InstallRoot = "$env:ProgramData\Reparo",
     [Alias('SU')]
-    [string]$SourceUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1',
+    [string]$SourceUrl = 'https://api.github.com/repos/16thdoc/Reparo/contents/Reparo.ps1?ref=main',
     [Alias('NB')]
     [switch]$NoBackup,
     [Alias('ST')]
@@ -1161,11 +1161,18 @@ Log: $script:ReparoLogPath
         }
         else {
             $downloadUrl = $Url
+            $requestHeaders = @{}
+            if ($downloadUrl -match '^https://api\.github\.com/repos/.+/contents/') {
+                $requestHeaders['Accept'] = 'application/vnd.github.raw'
+                $requestHeaders['User-Agent'] = 'Reparo'
+            }
             if ($downloadUrl -match '^https://raw\.githubusercontent\.com/') {
                 $separator = if ($downloadUrl.Contains('?')) { '&' } else { '?' }
                 $downloadUrl = '{0}{1}x={2}' -f $downloadUrl, $separator, [Uri]::EscapeDataString((Get-Date -Format 'yyyyMMddHHmmss'))
+                $requestHeaders['Cache-Control'] = 'no-cache'
+                $requestHeaders['Pragma'] = 'no-cache'
             }
-            Invoke-WebRequest -Uri $downloadUrl -OutFile $tempScript -UseBasicParsing
+            Invoke-WebRequest -Uri $downloadUrl -Headers $requestHeaders -OutFile $tempScript -UseBasicParsing
         }
         if ($script:ReparoIsWindows) {
             Unblock-File -LiteralPath $tempScript -ErrorAction SilentlyContinue
