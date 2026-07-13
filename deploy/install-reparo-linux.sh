@@ -44,6 +44,11 @@ if [ ! -x "$shim_path" ]; then
   echo "  $shim_path" >&2
 fi
 
+# Refresh bash/zsh command caches for the current installer process. This cannot
+# remove a shell function or alias from the parent interactive shell, but it does
+# make PATH checks below honest for normal command lookup.
+hash -r 2>/dev/null || true
+
 case ":$PATH:" in
   *":$HOME/.local/bin:"*)
     echo "PATH already includes $HOME/.local/bin."
@@ -54,6 +59,24 @@ case ":$PATH:" in
     echo '  export PATH="$HOME/.local/bin:$PATH"'
     ;;
 esac
+
+resolved_reparo="$(command -v reparo 2>/dev/null || true)"
+if [ "$resolved_reparo" = "$shim_path" ]; then
+  echo "Command lookup resolves 'reparo' to $shim_path."
+else
+  echo
+  echo "WARNING: Your current shell may not resolve 'reparo' to the installed shim." >&2
+  if [ -n "$resolved_reparo" ]; then
+    echo "  command -v reparo => $resolved_reparo" >&2
+  else
+    echo "  command -v reparo did not find a PATH command." >&2
+  fi
+  echo "  Expected shim: $shim_path" >&2
+  echo "  Diagnostic: type -a reparo" >&2
+  echo "  If a shell function or alias appears first, remove/rename it or run:" >&2
+  echo "    unset -f reparo 2>/dev/null || unalias reparo 2>/dev/null || true" >&2
+  echo "  Temporary bypass: command reparo -Version" >&2
+fi
 
 echo
 echo "Reparo is installed/updated."
