@@ -8,7 +8,7 @@ if /I "%~1"=="/__quiet_inner" (
 )
 
 set "REPARO_QUIET=%REPARO_QUIET%"
-if not defined REPARO_QUIET set "REPARO_QUIET=0"
+if not defined REPARO_QUIET set "REPARO_QUIET=1"
 for %%A in (%*) do (
   if /I "%%~A"=="/quiet" set "REPARO_QUIET=1"
   if /I "%%~A"=="-quiet" set "REPARO_QUIET=1"
@@ -16,6 +16,9 @@ for %%A in (%*) do (
   if /I "%%~A"=="/silent" set "REPARO_QUIET=1"
   if /I "%%~A"=="-silent" set "REPARO_QUIET=1"
   if /I "%%~A"=="--silent" set "REPARO_QUIET=1"
+  if /I "%%~A"=="/verbose" set "REPARO_QUIET=0"
+  if /I "%%~A"=="-verbose" set "REPARO_QUIET=0"
+  if /I "%%~A"=="--verbose" set "REPARO_QUIET=0"
 )
 if not defined REPARO_INSTALL_LOG set "REPARO_INSTALL_LOG=%TEMP%\reparo-install-windows.log"
 if "%REPARO_QUIET%"=="1" if not "%REPARO_QUIET_INNER%"=="1" (

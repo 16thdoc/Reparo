@@ -2,13 +2,16 @@
 set -euo pipefail
 
 REPARO_URL="${REPARO_URL:-https://api.github.com/repos/16thdoc/Reparo/contents/Reparo.ps1?ref=main}"
-REPARO_QUIET="${REPARO_QUIET:-0}"
+REPARO_QUIET="${REPARO_QUIET:-1}"
 REPARO_INSTALL_LOG="${REPARO_INSTALL_LOG:-${TMPDIR:-/tmp}/reparo-install-linux.log}"
 
 for arg in "$@"; do
   case "$arg" in
     -q|--quiet|--silent|-quiet|-silent)
       REPARO_QUIET=1
+      ;;
+    -v|--verbose|-verbose)
+      REPARO_QUIET=0
       ;;
   esac
 done
