@@ -194,6 +194,10 @@ function Get-ReparoLinuxPackageSections {
 function Get-ReparoVersionFlavor {
     param([string]$Version = $script:ReparoVersion)
 
+    # Version quotes are local Reparo metadata. CyberShell is only the output
+    # style reference: indented quoted line, then indented source attribution.
+    # On every runtime version bump, add a fresh Quote/Source pair here instead
+    # of reusing the previous version's quote.
     $versionFlavors = @{
         '1.0.8.1' = [pscustomobject]@{ Quote = 'Hotfix applied. The goblin has been relocated.'; Source = 'Reparo maintenance log'; Art = '  GOBLIN: evicted from version output' }
         '1.0.8.2' = [pscustomobject]@{ Quote = 'New quote online. Old ghosts denied boarding.'; Source = 'Reparo maintenance log'; Art = '  QUOTE BAY: temporal lint removed' }
