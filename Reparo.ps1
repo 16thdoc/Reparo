@@ -123,7 +123,73 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.0.8.6'
+$script:ReparoVersion = '1.1'
+
+$script:ReparoIsWindows = if (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsWindows } else { $true }
+$script:ReparoIsLinux = if (Get-Variable -Name IsLinux -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsLinux } else { $false }
+$script:ReparoIsMacOS = if (Get-Variable -Name IsMacOS -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsMacOS } else { $false }
+$script:ReparoHostName = if (-not [string]::IsNullOrWhiteSpace($env:COMPUTERNAME)) { $env:COMPUTERNAME } elseif (-not [string]::IsNullOrWhiteSpace($env:HOSTNAME)) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
+
+function Get-ReparoLinuxDistroInfo {
+    $result = [ordered]@{
+        Id       = ''
+        IdLike   = @()
+        Name     = ''
+        Version  = ''
+        Source   = ''
+    }
+
+    if (-not $script:ReparoIsLinux) { return [pscustomobject]$result }
+
+    $osReleasePath = '/etc/os-release'
+    if (-not (Test-Path -LiteralPath $osReleasePath)) { return [pscustomobject]$result }
+
+    try {
+        foreach ($line in @(Get-Content -LiteralPath $osReleasePath -ErrorAction Stop)) {
+            if ($line -notmatch '^([^=]+)=(.*)$') { continue }
+            $key = $matches[1].Trim()
+            $value = $matches[2].Trim().Trim('"')
+            switch ($key) {
+                'ID' { $result.Id = $value.ToLowerInvariant() }
+                'ID_LIKE' { $result.IdLike = @($value.ToLowerInvariant() -split '\s+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) }
+                'NAME' { $result.Name = $value }
+                'VERSION_ID' { $result.Version = $value }
+            }
+        }
+        $result.Source = $osReleasePath
+    }
+    catch { }
+
+    return [pscustomobject]$result
+}
+
+function Get-ReparoLinuxPackageSections {
+    $distro = Get-ReparoLinuxDistroInfo
+    $family = @($distro.Id) + @($distro.IdLike)
+    $sections = New-Object System.Collections.Generic.List[string]
+
+    if ($family | Where-Object { $_ -in @('debian', 'ubuntu', 'linuxmint', 'pop', 'kali') }) { [void]$sections.Add('Apt') }
+    if ($family | Where-Object { $_ -in @('fedora', 'rhel', 'centos', 'rocky', 'almalinux') }) { [void]$sections.Add('Dnf') }
+    if ($family | Where-Object { $_ -in @('arch', 'manjaro') }) { [void]$sections.Add('Pacman') }
+    if ($family | Where-Object { $_ -in @('suse', 'opensuse', 'sles') }) { [void]$sections.Add('Zypper') }
+
+    foreach ($fallback in @(
+        @{ Command = 'apt-get'; Section = 'Apt' },
+        @{ Command = 'dnf'; Section = 'Dnf' },
+        @{ Command = 'pacman'; Section = 'Pacman' },
+        @{ Command = 'zypper'; Section = 'Zypper' }
+    )) {
+        if ((Get-Command $fallback.Command -CommandType Application -ErrorAction SilentlyContinue) -and -not $sections.Contains($fallback.Section)) {
+            [void]$sections.Add($fallback.Section)
+        }
+    }
+
+    if ($sections.Count -eq 0) {
+        foreach ($section in @('Apt', 'Dnf', 'Pacman', 'Zypper')) { [void]$sections.Add($section) }
+    }
+
+    return $sections.ToArray()
+}
 
 function Get-ReparoVersionFlavor {
     param([string]$Version = $script:ReparoVersion)
@@ -135,6 +201,7 @@ function Get-ReparoVersionFlavor {
         '1.0.8.4' = [pscustomobject]@{ Quote = "He's dead, Jim."; Art = '  ENTERPRISE: set phasers to finalize' }
         '1.0.8.5' = [pscustomobject]@{ Quote = 'Syslog pipe online. The logs have learned to phone home.'; Art = '  TCP: tiny log goblins marching single-file' }
         '1.0.8.6' = [pscustomobject]@{ Quote = 'Windows 11 gate opened. Bring snacks and a reboot window.'; Art = '  WIN11: feature upgrade wyrm uncoiled' }
+        '1.1'     = [pscustomobject]@{ Quote = 'Penguin maintenance wing online. Same Reparo, more habitats.'; Art = '  LINUX: tux goblin joins the patch council' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -190,6 +257,18 @@ if ($RemainingInclude -and $RemainingInclude.Count -gt 0 -and -not $Search) {
     if ($remainingModeArgs.Count -gt 0) {
         $Include = @($Include) + @($remainingModeArgs)
     }
+}
+
+if ($Include -and $Include.Count -gt 0) {
+    $Include = @(
+        foreach ($includeItem in @($Include)) {
+            if ([string]::IsNullOrWhiteSpace($includeItem)) { continue }
+            foreach ($part in ([string]$includeItem -split ',')) {
+                $trimmedPart = $part.Trim()
+                if (-not [string]::IsNullOrWhiteSpace($trimmedPart)) { $trimmedPart }
+            }
+        }
+    )
 }
 
 function Format-ReparoLogValue {
@@ -485,7 +564,7 @@ After install, new PowerShell sessions can usually run:
 
 Common sections:
   Winget, Winget(msstore), Choco, PowerShell7, WindowsUpdate, Windows11Upgrade,
-  Scoop, Pip, Pipx, Npm, Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer, Spicetify,
+  Scoop, Apt, Dnf, Pacman, Zypper, Flatpak, Snap, Fwupd, Pip, Pipx, Npm, Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer, Spicetify,
   Wsl, WslApt.
 
 Logs:
@@ -508,13 +587,59 @@ if ($Version) {
     return
 }
 
-$updateSections = @(
-    'WindowsUpdate'
-    'Winget'
-    'Winget(msstore)'
-    'Choco'
-    'PowerShell7'
+if (-not $script:ReparoIsWindows) {
+    $homeRoot = if (-not [string]::IsNullOrWhiteSpace($HOME)) { $HOME } else { [Environment]::GetFolderPath('UserProfile') }
+    $stateRoot = if (-not [string]::IsNullOrWhiteSpace($env:XDG_STATE_HOME)) { $env:XDG_STATE_HOME } else { Join-Path $homeRoot '.local/state' }
+    $dataRoot = if (-not [string]::IsNullOrWhiteSpace($env:XDG_DATA_HOME)) { $env:XDG_DATA_HOME } else { Join-Path $homeRoot '.local/share' }
+    $configRoot = if (-not [string]::IsNullOrWhiteSpace($env:XDG_CONFIG_HOME)) { $env:XDG_CONFIG_HOME } else { Join-Path $homeRoot '.config' }
+
+    if (-not $PSBoundParameters.ContainsKey('LogRoot')) {
+        $LogRoot = Join-Path (Join-Path $stateRoot 'reparo') 'logs'
+    }
+
+    if (-not $PSBoundParameters.ContainsKey('InstallRoot')) {
+        $InstallRoot = Join-Path $dataRoot 'reparo'
+    }
+
+    if (-not $PSBoundParameters.ContainsKey('VersionLockPath')) {
+        $VersionLockPath = Join-Path (Join-Path $configRoot 'reparo') 'version-locks.json'
+    }
+}
+
+$linuxPackageSections = @(Get-ReparoLinuxPackageSections)
+$linuxAppSections = @(
+    'Flatpak'
+    'Snap'
+    'Fwupd'
 )
+
+$linuxForceSections = @($linuxPackageSections + $linuxAppSections + @(
+    'Pip'
+    'Pipx'
+    'Npm'
+    'Pnpm'
+    'Yarn'
+    'DotNet'
+    'Rust'
+    'CargoBins'
+    'Conda'
+    'Gem'
+    'Composer'
+    'Spicetify'
+))
+
+$updateSections = if ($script:ReparoIsWindows) {
+    @(
+        'WindowsUpdate'
+        'Winget'
+        'Winget(msstore)'
+        'Choco'
+        'PowerShell7'
+    )
+}
+else {
+    @($linuxPackageSections + $linuxAppSections + 'Npm')
+}
 
 if ($Windows11Upgrade) {
     $Include = @('Windows11Upgrade')
@@ -537,24 +662,37 @@ elseif ($WingetDiscover) {
 }
 if ($Force) {
     $Preview = $false
-    $WindowsUpdate = $true
-    $WslApt = $true
+    if ($script:ReparoIsWindows) {
+        $WindowsUpdate = $true
+        $WslApt = $true
+    }
+    else {
+        $Include = $linuxForceSections
+    }
     $IgnoreTimeouts = $true
-    $Include = $null
+    if ($script:ReparoIsWindows) {
+        $Include = $null
+    }
 }
 elseif ($Update) {
-    $WindowsUpdate = $true
+    if ($script:ReparoIsWindows) {
+        $WindowsUpdate = $true
+    }
     $Include = $updateSections
 }
 elseif ($InstallSpicetify) {
     $Include = @('Spicetify')
 }
 
+if (-not $script:ReparoIsWindows -and -not ($Update -or $Force -or $Include -or $Winget -or $WingetDiscover -or $Windows11Upgrade -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $InstallSpicetify -or $WindowsUpdate -or $WslApt)) {
+    $Include = $linuxPackageSections
+}
+
 if (-not (Test-Path -LiteralPath $LogRoot)) {
     New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
 }
 
-$script:ReparoLogBaseName = "reparo_{0}_{1}_{2}" -f $env:COMPUTERNAME, $PID, (Get-Date -Format 'yyyy-MM-dd_HHmmss')
+$script:ReparoLogBaseName = "reparo_{0}_{1}_{2}" -f $script:ReparoHostName, $PID, (Get-Date -Format 'yyyy-MM-dd_HHmmss')
 $script:ReparoLogPath = Join-Path $LogRoot ($script:ReparoLogBaseName + '_RUNNING.log')
 $script:ReparoDebug = $PSBoundParameters.ContainsKey('Debug') -or ($DebugPreference -ne 'SilentlyContinue' -and $DebugPreference -ne 'Ignore')
 # Event IDs are scoped by LogName + Source. Reparo uses Application/Reparo with local ranges:
@@ -889,9 +1027,40 @@ function Install-ReparoCommandShim {
         [switch]$WhatIfOnly
     )
 
+    $scriptPath = Join-Path $TargetRoot 'Reparo.ps1'
+
+    if (-not $script:ReparoIsWindows) {
+        $homeRoot = if (-not [string]::IsNullOrWhiteSpace($HOME)) { $HOME } else { [Environment]::GetFolderPath('UserProfile') }
+        $binRoot = if (-not [string]::IsNullOrWhiteSpace($env:REPARO_BIN_ROOT)) { $env:REPARO_BIN_ROOT } else { Join-Path (Join-Path $homeRoot '.local') 'bin' }
+        $shimPath = Join-Path $binRoot 'reparo'
+        $shimContent = @"
+#!/usr/bin/env sh
+exec pwsh -NoProfile -File "$scriptPath" "`$@"
+"@
+
+        if ($WhatIfOnly) {
+            Write-Info "Would create command shim: $shimPath"
+        }
+        else {
+            New-Item -ItemType Directory -Force -Path $binRoot | Out-Null
+            Set-Content -LiteralPath $shimPath -Value $shimContent -Encoding UTF8
+            if (Get-Command chmod -CommandType Application -ErrorAction SilentlyContinue) {
+                & chmod +x $shimPath 2>$null
+            }
+            Write-Info "Command shim installed: $shimPath"
+        }
+
+        $pathSeparator = [System.IO.Path]::PathSeparator
+        $processParts = @($env:Path -split [regex]::Escape([string]$pathSeparator) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($processParts -notcontains $binRoot) {
+            Write-Skip "PATH does not include $binRoot. Add it to your shell profile to run 'reparo' directly."
+        }
+
+        return
+    }
+
     $binRoot = Join-Path $TargetRoot 'bin'
     $shimPath = Join-Path $binRoot 'reparo.cmd'
-    $scriptPath = Join-Path $TargetRoot 'Reparo.ps1'
     $shimContent = @"
 @echo off
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$scriptPath" %*
@@ -985,7 +1154,9 @@ Log: $script:ReparoLogPath
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -Uri $Url -OutFile $tempScript -UseBasicParsing
-        Unblock-File -LiteralPath $tempScript -ErrorAction SilentlyContinue
+        if ($script:ReparoIsWindows) {
+            Unblock-File -LiteralPath $tempScript -ErrorAction SilentlyContinue
+        }
         Test-ReparoScriptParse -Path $tempScript
 
         $newHash = Get-ReparoFileHash -Path $tempScript
@@ -1426,6 +1597,41 @@ function Write-ReparoEventLog {
 }
 
 function Get-ReparoPendingRebootEvidence {
+    if (-not $script:ReparoIsWindows) {
+        try {
+            if (Test-Path -LiteralPath '/var/run/reboot-required') {
+                $detail = 'Reboot required marker exists'
+                if (Test-Path -LiteralPath '/var/run/reboot-required.pkgs') {
+                    $packages = @(Get-Content -LiteralPath '/var/run/reboot-required.pkgs' -ErrorAction SilentlyContinue | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    if ($packages.Count -gt 0) { $detail = "Packages require reboot: $($packages -join ', ')" }
+                }
+
+                [pscustomobject]@{
+                    Source = 'Linux reboot-required marker'
+                    Path   = '/var/run/reboot-required'
+                    Detail = $detail
+                }
+            }
+
+            if (Get-Command needs-restarting -CommandType Application -ErrorAction SilentlyContinue) {
+                $output = @(needs-restarting -r 2>&1)
+                $exitCode = $LASTEXITCODE
+                if ($exitCode -eq 1) {
+                    [pscustomobject]@{
+                        Source = 'needs-restarting'
+                        Path   = 'needs-restarting -r'
+                        Detail = (($output | ForEach-Object { [string]$_ }) -join '; ')
+                    }
+                }
+            }
+        }
+        catch {
+            Write-ReparoLog ("[WARN] Linux pending reboot check failed: {0}" -f $_.Exception.Message)
+        }
+
+        return
+    }
+
     $checks = @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
@@ -2073,6 +2279,18 @@ function Test-Admin {
     catch {
         return $false
     }
+}
+
+function Get-ReparoIdentityName {
+    if ($script:ReparoIsWindows) {
+        try { return [Security.Principal.WindowsIdentity]::GetCurrent().Name } catch { }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace([Environment]::UserName)) {
+        return [Environment]::UserName
+    }
+
+    return 'unknown'
 }
 
 function Test-ReparoSystemIdentity {
@@ -4950,8 +5168,8 @@ if ($CheckApp -or $LockApp) {
     $appMode = if ($LockApp) { 'LOCK APP' } else { 'CHECK APP' }
     if ($Preview) { $appMode = "$appMode + PREVIEW" }
 
-    Write-Host ("REPARO starting on {0} [{1}]" -f $env:COMPUTERNAME, $appMode) -ForegroundColor Magenta
-    Write-ReparoLog ("=== reparo start: {0} on {1} (PID {2}) ===" -f (Get-Date), $env:COMPUTERNAME, $PID)
+    Write-Host ("REPARO starting on {0} [{1}]" -f $script:ReparoHostName, $appMode) -ForegroundColor Magenta
+    Write-ReparoLog ("=== reparo start: {0} on {1} (PID {2}) ===" -f (Get-Date), $script:ReparoHostName, $PID)
     Write-ReparoLog ("[FLAGS] Bound parameters: {0}" -f ((($PSBoundParameters.Keys | Sort-Object) -join ', ')))
     Write-ReparoParameterBlock
 
@@ -5010,12 +5228,17 @@ else {
 
 if ($Preview) { $mode = "$mode + PREVIEW" }
 
-Write-Host ("REPARO starting on {0} [{1}]" -f $env:COMPUTERNAME, $mode) -ForegroundColor Magenta
-Write-ReparoLog ("=== reparo start: {0} on {1} (PID {2}) ===" -f (Get-Date), $env:COMPUTERNAME, $PID)
+Write-Host ("REPARO starting on {0} [{1}]" -f $script:ReparoHostName, $mode) -ForegroundColor Magenta
+Write-ReparoLog ("=== reparo start: {0} on {1} (PID {2}) ===" -f (Get-Date), $script:ReparoHostName, $PID)
 Write-ReparoLog ("[FLAGS] Bound parameters: {0}" -f ((($PSBoundParameters.Keys | Sort-Object) -join ', ')))
 Write-ReparoParameterBlock
 Write-ReparoDebug ("Timeouts: Winget={0}s WingetDiscovery={1}s WindowsUpdate={2}s IgnoreTimeouts={3}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds, $IgnoreTimeouts)
-Write-ReparoDebug ("Process identity: {0}" -f [Security.Principal.WindowsIdentity]::GetCurrent().Name)
+if ($script:ReparoIsWindows) {
+    Write-ReparoDebug ("Process identity: {0}" -f (Get-ReparoIdentityName))
+}
+else {
+    Write-ReparoDebug ("Process identity: {0}" -f (Get-ReparoIdentityName))
+}
 Write-ReparoDebug ("PowerShell version: {0}" -f $PSVersionTable.PSVersion)
 
 $configuredVersionLocks = @(Get-ReparoVersionLocks)
@@ -5037,7 +5260,7 @@ PID: $PID
 Version: $script:ReparoVersion
 Mode: $mode
 Preview: $Preview
-User: $([Security.Principal.WindowsIdentity]::GetCurrent().Name)
+User: $(Get-ReparoIdentityName)
 PowerShell: $($PSVersionTable.PSVersion)
 Log: $script:ReparoLogPath
 "@
@@ -5206,6 +5429,112 @@ else {
 }
 Invoke-ReparoCommandStep -Section 'Choco' -PresenceCmd 'choco' -Command $chocoCommand
 
+if (Test-ReparoSectionSelected 'Apt') {
+    if ($script:ReparoIsLinux -and (Test-Cmd 'apt-get') -and (Test-Cmd 'bash')) {
+        $aptCommand = @'
+$aptScript = 'if [ "$(id -u)" -eq 0 ]; then export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get -y upgrade && apt-get -y autoremove; else command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1 && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get -y upgrade && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get -y autoremove; fi'
+bash -lc $aptScript
+if ($LASTEXITCODE -ne 0) { throw "apt-get update/upgrade failed with exit code $LASTEXITCODE. If sudo requires a password, run elevated/root or configure passwordless sudo for maintenance." }
+'@
+        Invoke-ReparoCommandStep -Section 'Apt' -PresenceCmd '' -Command $aptCommand -TimeoutSeconds $WslAptTimeoutSeconds
+    }
+    else {
+        Write-Skip 'apt-get not found or not running on Linux; skipping Apt'
+        Write-ReparoLog '[SKIP] apt-get not found or not running on Linux; skipping Apt'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Apt' -Version '-' -Method 'apt' -Reason 'apt-get not found or not Linux'
+    }
+}
+
+if (Test-ReparoSectionSelected 'Dnf') {
+    if ($script:ReparoIsLinux -and (Test-Cmd 'dnf') -and (Test-Cmd 'bash')) {
+        $dnfCommand = @'
+$dnfScript = 'if [ "$(id -u)" -eq 0 ]; then dnf -y upgrade && dnf -y autoremove; else command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1 && sudo -n dnf -y upgrade && sudo -n dnf -y autoremove; fi'
+bash -lc $dnfScript
+if ($LASTEXITCODE -ne 0) { throw "dnf upgrade failed with exit code $LASTEXITCODE. If sudo requires a password, run elevated/root or configure passwordless sudo for maintenance." }
+'@
+        Invoke-ReparoCommandStep -Section 'Dnf' -PresenceCmd '' -Command $dnfCommand -TimeoutSeconds $WslAptTimeoutSeconds
+    }
+    else {
+        Write-Skip 'dnf not found or not running on Linux; skipping Dnf'
+        Write-ReparoLog '[SKIP] dnf not found or not running on Linux; skipping Dnf'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Dnf' -Version '-' -Method 'dnf' -Reason 'dnf not found or not Linux'
+    }
+}
+
+if (Test-ReparoSectionSelected 'Pacman') {
+    if ($script:ReparoIsLinux -and (Test-Cmd 'pacman') -and (Test-Cmd 'bash')) {
+        $pacmanCommand = @'
+$pacmanScript = 'if [ "$(id -u)" -eq 0 ]; then pacman -Syu --noconfirm; else command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1 && sudo -n pacman -Syu --noconfirm; fi'
+bash -lc $pacmanScript
+if ($LASTEXITCODE -ne 0) { throw "pacman upgrade failed with exit code $LASTEXITCODE. If sudo requires a password, run elevated/root or configure passwordless sudo for maintenance." }
+'@
+        Invoke-ReparoCommandStep -Section 'Pacman' -PresenceCmd '' -Command $pacmanCommand -TimeoutSeconds $WslAptTimeoutSeconds
+    }
+    else {
+        Write-Skip 'pacman not found or not running on Linux; skipping Pacman'
+        Write-ReparoLog '[SKIP] pacman not found or not running on Linux; skipping Pacman'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Pacman' -Version '-' -Method 'pacman' -Reason 'pacman not found or not Linux'
+    }
+}
+
+if (Test-ReparoSectionSelected 'Zypper') {
+    if ($script:ReparoIsLinux -and (Test-Cmd 'zypper') -and (Test-Cmd 'bash')) {
+        $zypperCommand = @'
+$zypperScript = 'if [ "$(id -u)" -eq 0 ]; then zypper --non-interactive refresh && zypper --non-interactive update; else command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1 && sudo -n zypper --non-interactive refresh && sudo -n zypper --non-interactive update; fi'
+bash -lc $zypperScript
+if ($LASTEXITCODE -ne 0) { throw "zypper update failed with exit code $LASTEXITCODE. If sudo requires a password, run elevated/root or configure passwordless sudo for maintenance." }
+'@
+        Invoke-ReparoCommandStep -Section 'Zypper' -PresenceCmd '' -Command $zypperCommand -TimeoutSeconds $WslAptTimeoutSeconds
+    }
+    else {
+        Write-Skip 'zypper not found or not running on Linux; skipping Zypper'
+        Write-ReparoLog '[SKIP] zypper not found or not running on Linux; skipping Zypper'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Zypper' -Version '-' -Method 'zypper' -Reason 'zypper not found or not Linux'
+    }
+}
+
+if (Test-ReparoSectionSelected 'Flatpak') {
+    if ($script:ReparoIsLinux -and (Test-Cmd 'flatpak')) {
+        Invoke-ReparoCommandStep -Section 'Flatpak' -PresenceCmd 'flatpak' -Command 'flatpak update -y' -TimeoutSeconds $WslAptTimeoutSeconds
+    }
+    else {
+        Write-Skip 'flatpak not found or not running on Linux; skipping Flatpak'
+        Write-ReparoLog '[SKIP] flatpak not found or not running on Linux; skipping Flatpak'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Flatpak' -Version '-' -Method 'flatpak' -Reason 'flatpak not found or not Linux'
+    }
+}
+
+if (Test-ReparoSectionSelected 'Snap') {
+    if ($script:ReparoIsLinux -and (Test-Cmd 'snap')) {
+        Invoke-ReparoCommandStep -Section 'Snap' -PresenceCmd 'snap' -Command 'snap refresh' -TimeoutSeconds $WslAptTimeoutSeconds
+    }
+    else {
+        Write-Skip 'snap not found or not running on Linux; skipping Snap'
+        Write-ReparoLog '[SKIP] snap not found or not running on Linux; skipping Snap'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Snap' -Version '-' -Method 'snap' -Reason 'snap not found or not Linux'
+    }
+}
+
+if (Test-ReparoSectionSelected 'Fwupd') {
+    if ($script:ReparoIsLinux -and (Test-Cmd 'fwupdmgr')) {
+        $fwupdCommand = @'
+fwupdmgr refresh --force
+if ($LASTEXITCODE -ne 0) { throw "fwupdmgr refresh failed with exit code $LASTEXITCODE" }
+fwupdmgr get-updates
+if ($LASTEXITCODE -ne 0) { throw "fwupdmgr get-updates failed with exit code $LASTEXITCODE" }
+fwupdmgr update --assume-yes
+if ($LASTEXITCODE -ne 0) { throw "fwupdmgr update failed with exit code $LASTEXITCODE" }
+'@
+        Invoke-ReparoCommandStep -Section 'Fwupd' -PresenceCmd 'fwupdmgr' -Command $fwupdCommand -TimeoutSeconds $WslAptTimeoutSeconds
+        Add-ReparoSummaryNote 'Firmware updates may require a reboot or power-cycle to complete.'
+    }
+    else {
+        Write-Skip 'fwupdmgr not found or not running on Linux; skipping Fwupd'
+        Write-ReparoLog '[SKIP] fwupdmgr not found or not running on Linux; skipping Fwupd'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Fwupd' -Version '-' -Method 'fwupd' -Reason 'fwupdmgr not found or not Linux'
+    }
+}
+
 if (Test-ReparoSectionSelected 'Pip') {
     $ranPip = $false
     $seenPipSources = @{}
@@ -5281,15 +5610,35 @@ if (-not [string]::IsNullOrWhiteSpace(`$outdated)) {
 
 Invoke-ReparoCommandStep -Section 'Pipx' -PresenceCmd 'pipx' -Command 'pipx upgrade-all'
 
-$lockedNpmIds = @(Get-ReparoLockedPackageIds -Method 'npm')
-if ($lockedNpmIds.Count -gt 0) {
-    $npmLockLiteral = '@({0})' -f ((@($lockedNpmIds | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))
-    $npmCommand = @"
+function New-ReparoNpmUpdateCommand {
+    param([string[]]$LockedPackages = @())
+
+    $npmLockLiteral = '@({0})' -f ((@($LockedPackages | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))
+
+@"
+`$ErrorActionPreference = 'Continue'
 `$lockedPackages = $npmLockLiteral
-if (-not (`$lockedPackages -contains 'npm')) {
-    npm install -g npm
-    if (`$LASTEXITCODE -ne 0) { throw 'Failed updating npm itself.' }
+function Invoke-ReparoNpmSelfUpdate {
+    if (`$lockedPackages -contains 'npm') {
+        Write-Host 'Skipping locked npm package: npm'
+        return
+    }
+
+    `$targets = @('npm@latest', 'npm@11', 'npm@10')
+    foreach (`$target in `$targets) {
+        Write-Host "Updating npm itself: `$target"
+        npm install -g `$target
+        if (`$LASTEXITCODE -eq 0 -or `$null -eq `$LASTEXITCODE) {
+            return
+        }
+
+        Write-Host "npm self-update target `$target failed with exit code `$LASTEXITCODE; trying next compatible target."
+    }
+
+    Write-Host 'npm self-update could not find a compatible target; continuing with global package updates.'
 }
+
+Invoke-ReparoNpmSelfUpdate
 `$jsonText = npm outdated -g --json 2>`$null | Out-String
 if (-not [string]::IsNullOrWhiteSpace(`$jsonText)) {
     try { `$outdated = `$jsonText | ConvertFrom-Json } catch { `$outdated = `$null }
@@ -5305,11 +5654,20 @@ if (-not [string]::IsNullOrWhiteSpace(`$jsonText)) {
         }
     }
 }
+else {
+    npm update -g
+    if (`$LASTEXITCODE -ne 0) { throw 'Failed updating global npm packages.' }
+}
 "@
+}
+
+$lockedNpmIds = @(Get-ReparoLockedPackageIds -Method 'npm')
+if ($lockedNpmIds.Count -gt 0) {
+    $npmCommand = New-ReparoNpmUpdateCommand -LockedPackages $lockedNpmIds
     Add-ReparoSummaryNote ("npm version locks active; excluding: {0}" -f ($lockedNpmIds -join ', '))
 }
 else {
-    $npmCommand = 'npm install -g npm; npm update -g'
+    $npmCommand = New-ReparoNpmUpdateCommand
 }
 Invoke-ReparoCommandStep -Section 'Npm' -PresenceCmd 'npm' -Command $npmCommand
 Invoke-ReparoCommandStep -Section 'Pnpm' -PresenceCmd 'pnpm' -Command 'pnpm add -g pnpm@latest; pnpm update -g'
@@ -5503,9 +5861,10 @@ if (-not $script:ReparoPendingRebootDetected) {
 }
 
 if ($script:ReparoPendingRebootDetected) {
-    Write-Warning 'Windows indicates a reboot is pending.'
-    Write-ReparoLog '[WARN] Windows indicates a reboot is pending.'
-    Add-ReparoSummaryNote 'Windows indicates a reboot is pending.'
+    $pendingRebootMessage = if ($script:ReparoIsWindows) { 'Windows indicates a reboot is pending.' } else { 'Linux indicates a reboot is pending.' }
+    Write-Warning $pendingRebootMessage
+    Write-ReparoLog ("[WARN] {0}" -f $pendingRebootMessage)
+    Add-ReparoSummaryNote $pendingRebootMessage
     Write-ReparoEventLog -EventId 1300 -EntryType Warning -Message @"
 Reparo detected a pending reboot.
 
