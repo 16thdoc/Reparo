@@ -123,7 +123,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.5'
+$script:ReparoVersion = '1.1.6'
 
 $script:ReparoIsWindows = if (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsWindows } else { $true }
 $script:ReparoIsLinux = if (Get-Variable -Name IsLinux -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsLinux } else { $false }
@@ -581,7 +581,7 @@ After install, new PowerShell sessions can usually run:
 
 Common sections:
   Winget, Winget(msstore), Choco, PowerShell7, WindowsUpdate, Windows11Upgrade,
-  Scoop, Apt, Dnf, Pacman, Zypper, Flatpak, Snap, Fwupd, Pip, Pipx, Npm, Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer, Spicetify,
+  Scoop, Apt, Dnf, Pacman, Zypper, Flatpak, Snap, Fwupd, Pip, Pipx, Npm, Opencode, Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer, Spicetify,
   Wsl, WslApt.
 
 Logs:
@@ -632,6 +632,7 @@ $linuxForceSections = @($linuxPackageSections + $linuxAppSections + @(
     'Pip'
     'Pipx'
     'Npm'
+    'Opencode'
     'Pnpm'
     'Yarn'
     'DotNet'
@@ -650,10 +651,11 @@ $updateSections = if ($script:ReparoIsWindows) {
         'Winget(msstore)'
         'Choco'
         'PowerShell7'
+        'Opencode'
     )
 }
 else {
-    @($linuxPackageSections + $linuxAppSections + 'Npm')
+    @($linuxPackageSections + $linuxAppSections + 'Npm', 'Opencode')
 }
 
 if ($Windows11Upgrade) {
@@ -5736,19 +5738,84 @@ function New-ReparoNpmUpdateCommand {
 @"
 `$ErrorActionPreference = 'Continue'
 `$lockedPackages = $npmLockLiteral
+function Set-ReparoProfilePathBlock {
+    param(
+        [Parameter(Mandatory)][string]`$ProfilePath,
+        [Parameter(Mandatory)][string]`$PrefixBin
+    )
+
+    `$profileParent = Split-Path -Parent `$ProfilePath
+    if (-not [string]::IsNullOrWhiteSpace(`$profileParent) -and -not (Test-Path -LiteralPath `$profileParent)) {
+        New-Item -ItemType Directory -Path `$profileParent -Force | Out-Null
+    }
+
+    `$begin = '# >>> reparo npm global bin >>>'
+    `$end = '# <<< reparo npm global bin <<<'
+    `$prefixForShell = `$PrefixBin -replace [regex]::Escape(`$HOME), '`$HOME'
+    `$block = @(
+        `$begin,
+        ('if [ -d "{0}" ]; then' -f `$prefixForShell),
+        '    case ":`$PATH:" in',
+        ('        *":{0}:"*) ;;' -f `$prefixForShell),
+        ('        *) export PATH="{0}:`$PATH" ;;' -f `$prefixForShell),
+        '    esac',
+        'fi',
+        `$end
+    ) -join [Environment]::NewLine
+
+    `$existing = if (Test-Path -LiteralPath `$ProfilePath) { Get-Content -LiteralPath `$ProfilePath -Raw } else { '' }
+    `$pattern = "(?ms)^" + [regex]::Escape(`$begin) + ".*?^" + [regex]::Escape(`$end) + "\r?\n?"
+    if (`$existing -match `$pattern) {
+        `$updated = [regex]::Replace(`$existing, `$pattern, `$block + [Environment]::NewLine)
+    }
+    else {
+        `$separator = if ([string]::IsNullOrWhiteSpace(`$existing) -or `$existing.EndsWith([Environment]::NewLine)) { '' } else { [Environment]::NewLine }
+        `$updated = `$existing + `$separator + `$block + [Environment]::NewLine
+    }
+
+    if (`$updated -ne `$existing) {
+        Set-Content -LiteralPath `$ProfilePath -Value `$updated -Encoding UTF8
+        Write-Host "Updated PATH profile entry: `$ProfilePath"
+    }
+}
+
+function Repair-ReparoNpmBuiltinConfig {
+    param([Parameter(Mandatory)][string]`$Prefix)
+
+    `$npmrcPath = Join-Path `$Prefix 'lib/node_modules/npm/npmrc'
+    if (-not (Test-Path -LiteralPath `$npmrcPath)) { return }
+
+    try { `$npmrc = Get-Content -LiteralPath `$npmrcPath -Raw -ErrorAction Stop } catch { return }
+    `$updated = (`$npmrc -split "`r?`n" | Where-Object { `$_ -notmatch '^\s*globalignorefile\s*=' }) -join [Environment]::NewLine
+    if (-not `$updated.EndsWith([Environment]::NewLine)) { `$updated += [Environment]::NewLine }
+
+    if (`$updated -ne `$npmrc) {
+        Set-Content -LiteralPath `$npmrcPath -Value `$updated -Encoding UTF8
+        Write-Host "Removed deprecated npm globalignorefile config: `$npmrcPath"
+    }
+}
+
 function Add-ReparoNpmPrefixToPath {
     `$prefix = (& npm config get prefix 2>`$null | Select-Object -First 1)
-    if ([string]::IsNullOrWhiteSpace(`$prefix)) { return }
+    if ([string]::IsNullOrWhiteSpace(`$prefix)) { return `$null }
 
     `$prefix = `$prefix.Trim()
     `$prefixBin = if (`$IsWindows) { `$prefix } else { Join-Path `$prefix 'bin' }
-    if (-not (Test-Path -LiteralPath `$prefixBin)) { return }
+    if (-not (Test-Path -LiteralPath `$prefixBin)) { return `$null }
 
     `$pathParts = @((`$env:PATH -split [IO.Path]::PathSeparator) | Where-Object { -not [string]::IsNullOrWhiteSpace(`$_) })
     if (`$pathParts -notcontains `$prefixBin) {
         `$env:PATH = (`@(`$prefixBin) + `$pathParts) -join [IO.Path]::PathSeparator
         Write-Host "Added npm global bin to PATH for this run: `$prefixBin"
     }
+
+    if (-not `$IsWindows) {
+        Set-ReparoProfilePathBlock -ProfilePath (Join-Path `$HOME '.profile') -PrefixBin `$prefixBin
+        Set-ReparoProfilePathBlock -ProfilePath (Join-Path `$HOME '.bashrc') -PrefixBin `$prefixBin
+    }
+
+    Repair-ReparoNpmBuiltinConfig -Prefix `$prefix
+    return `$prefixBin
 }
 
 function Invoke-ReparoNpmSelfUpdate {
@@ -5833,6 +5900,81 @@ exit 0
 "@
 }
 
+
+function New-ReparoOpencodeUpdateCommand {
+@"
+`$ErrorActionPreference = 'Continue'
+function Add-ReparoNpmPrefixToPathForOpencode {
+    `$npm = Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not `$npm) { return }
+
+    `$prefix = (& npm config get prefix 2>`$null | Select-Object -First 1)
+    if ([string]::IsNullOrWhiteSpace(`$prefix)) { return }
+
+    `$prefix = `$prefix.Trim()
+    `$prefixBin = if (`$IsWindows) { `$prefix } else { Join-Path `$prefix 'bin' }
+    if (-not (Test-Path -LiteralPath `$prefixBin)) { return }
+
+    `$pathParts = @((`$env:PATH -split [IO.Path]::PathSeparator) | Where-Object { -not [string]::IsNullOrWhiteSpace(`$_) })
+    if (`$pathParts -notcontains `$prefixBin) {
+        `$env:PATH = (`@(`$prefixBin) + `$pathParts) -join [IO.Path]::PathSeparator
+        Write-Host "Added npm global bin to PATH for this run: `$prefixBin"
+    }
+}
+
+Add-ReparoNpmPrefixToPathForOpencode
+`$ran = `$false
+`$npm = Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+`$opencode = Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+
+if (`$opencode) {
+    `$beforeVersion = (& opencode --version 2>`$null | Select-Object -First 1)
+    Write-Host "Active opencode before update: `$(`$opencode.Source) `$beforeVersion"
+
+    if (`$npm) {
+        opencode upgrade --method npm
+    }
+    else {
+        opencode upgrade
+    }
+
+    if (`$LASTEXITCODE -ne 0) { throw "opencode upgrade failed with exit code `$LASTEXITCODE" }
+    `$ran = `$true
+}
+elsif (`$npm) {
+    Write-Host 'opencode not found; installing/updating opencode-ai via npm.'
+    npm install -g opencode-ai@latest
+    if (`$LASTEXITCODE -ne 0) { throw "npm install -g opencode-ai@latest failed with exit code `$LASTEXITCODE" }
+    Add-ReparoNpmPrefixToPathForOpencode
+    `$ran = `$true
+}
+
+`$opencode = Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (`$opencode) {
+    `$afterVersion = (& opencode --version 2>`$null | Select-Object -First 1)
+    Write-Host "Active opencode after update: `$(`$opencode.Source) `$afterVersion"
+}
+
+`$oc = Get-Command oc -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (`$oc) {
+    Write-Host "Running opencode sync: `$(`$oc.Source) -s"
+    oc -s
+    if (`$LASTEXITCODE -ne 0) { throw "oc -s failed with exit code `$LASTEXITCODE" }
+    `$ran = `$true
+}
+else {
+    Write-Host 'oc sync command not found; skipping oc -s.'
+}
+
+if (-not `$ran) {
+    Write-Host 'Neither opencode nor npm nor oc was found; nothing to update.'
+}
+
+exit 0
+"@
+}
+
+$opencodeCommand = New-ReparoOpencodeUpdateCommand
 $lockedNpmIds = @(Get-ReparoLockedPackageIds -Method 'npm')
 if ($lockedNpmIds.Count -gt 0) {
     $npmCommand = New-ReparoNpmUpdateCommand -LockedPackages $lockedNpmIds
@@ -5842,6 +5984,7 @@ else {
     $npmCommand = New-ReparoNpmUpdateCommand
 }
 Invoke-ReparoCommandStep -Section 'Npm' -PresenceCmd 'npm' -Command $npmCommand
+Invoke-ReparoCommandStep -Section 'Opencode' -PresenceCmd '' -Command $opencodeCommand
 Invoke-ReparoCommandStep -Section 'Pnpm' -PresenceCmd 'pnpm' -Command 'pnpm add -g pnpm@latest; pnpm update -g'
 Invoke-ReparoCommandStep -Section 'Yarn' -PresenceCmd 'yarn' -Command 'yarn global upgrade'
 $lockedDotNetIds = @(Get-ReparoLockedPackageIds -Method 'dotnet')
