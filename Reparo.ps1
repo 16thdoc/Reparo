@@ -123,7 +123,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.4'
+$script:ReparoVersion = '1.1.5'
 
 $script:ReparoIsWindows = if (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsWindows } else { $true }
 $script:ReparoIsLinux = if (Get-Variable -Name IsLinux -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsLinux } else { $false }
@@ -5736,10 +5736,25 @@ function New-ReparoNpmUpdateCommand {
 @"
 `$ErrorActionPreference = 'Continue'
 `$lockedPackages = $npmLockLiteral
+function Add-ReparoNpmPrefixToPath {
+    `$prefix = (& npm config get prefix 2>`$null | Select-Object -First 1)
+    if ([string]::IsNullOrWhiteSpace(`$prefix)) { return }
+
+    `$prefix = `$prefix.Trim()
+    `$prefixBin = if (`$IsWindows) { `$prefix } else { Join-Path `$prefix 'bin' }
+    if (-not (Test-Path -LiteralPath `$prefixBin)) { return }
+
+    `$pathParts = @((`$env:PATH -split [IO.Path]::PathSeparator) | Where-Object { -not [string]::IsNullOrWhiteSpace(`$_) })
+    if (`$pathParts -notcontains `$prefixBin) {
+        `$env:PATH = (`@(`$prefixBin) + `$pathParts) -join [IO.Path]::PathSeparator
+        Write-Host "Added npm global bin to PATH for this run: `$prefixBin"
+    }
+}
+
 function Invoke-ReparoNpmSelfUpdate {
     if (`$lockedPackages -contains 'npm') {
         Write-Host 'Skipping locked npm package: npm'
-        return
+        return `$false
     }
 
     `$nodeVersionText = (& node --version 2>`$null)
@@ -5762,23 +5777,40 @@ function Invoke-ReparoNpmSelfUpdate {
         Write-Host "Updating npm itself: `$target"
         npm install -g `$target
         if (`$LASTEXITCODE -eq 0 -or `$null -eq `$LASTEXITCODE) {
-            return
+            Add-ReparoNpmPrefixToPath
+            `$activeNpm = Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            `$activeVersion = (& npm --version 2>`$null | Select-Object -First 1)
+            if (`$activeNpm) { Write-Host "Active npm for this run: `$(`$activeNpm.Source) `$activeVersion" }
+            return `$true
         }
 
         Write-Host "npm self-update target `$target failed with exit code `$LASTEXITCODE; trying next compatible target."
     }
 
     Write-Host 'npm self-update could not find a compatible target; continuing with global package updates.'
+    return `$false
 }
 
-Invoke-ReparoNpmSelfUpdate
-`$jsonText = npm outdated -g --json 2>`$null | Out-String
+Add-ReparoNpmPrefixToPath
+`$npmSelfUpdated = Invoke-ReparoNpmSelfUpdate
+`$outdatedOutput = @(npm outdated -g --json 2>`$null)
+`$outdatedExit = `$LASTEXITCODE
+`$jsonText = (`$outdatedOutput | Out-String)
+if (`$outdatedExit -notin 0, 1) {
+    throw "npm outdated failed with exit code `$outdatedExit"
+}
+
 if (-not [string]::IsNullOrWhiteSpace(`$jsonText)) {
     try { `$outdated = `$jsonText | ConvertFrom-Json } catch { `$outdated = `$null }
     if (`$outdated) {
         foreach (`$property in `$outdated.PSObject.Properties) {
             if (`$property.Name -eq 'npm') {
-                Write-Host 'Skipping npm during global package update; npm self-update already handled compatibility.'
+                if (`$npmSelfUpdated) {
+                    Write-Host 'Skipping npm during global package update; npm self-update already handled the compatible target.'
+                }
+                else {
+                    Write-Host 'Skipping npm during global package update; npm requires dedicated compatibility handling.'
+                }
                 continue
             }
 
@@ -5787,6 +5819,7 @@ if (-not [string]::IsNullOrWhiteSpace(`$jsonText)) {
                 continue
             }
 
+            Write-Host "Updating npm package: `$(`$property.Name)"
             npm update -g `$property.Name
             if (`$LASTEXITCODE -ne 0) { throw "Failed updating npm package: `$(`$property.Name)" }
         }
@@ -5795,6 +5828,8 @@ if (-not [string]::IsNullOrWhiteSpace(`$jsonText)) {
 else {
     Write-Host 'npm outdated returned no JSON; skipping broad npm update -g to avoid incompatible npm self-upgrades.'
 }
+
+exit 0
 "@
 }
 
