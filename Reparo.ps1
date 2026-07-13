@@ -123,7 +123,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.3'
+$script:ReparoVersion = '1.1.4'
 
 $script:ReparoIsWindows = if (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsWindows } else { $true }
 $script:ReparoIsLinux = if (Get-Variable -Name IsLinux -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsLinux } else { $false }
@@ -2718,12 +2718,21 @@ function Test-ReparoBenignExit {
         [object[]]$Output
     )
 
-    if ($ExitCode -eq 0 -or $Section -notlike 'Winget*') {
+    if ($ExitCode -eq 0) {
         return $false
     }
 
     $text = ($Output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
-    return ($text -match 'No installed package found matching input criteria|No applicable update found|No available upgrade found|No packages found')
+
+    if ($Section -like 'Winget*') {
+        return ($text -match 'No installed package found matching input criteria|No applicable update found|No available upgrade found|No packages found')
+    }
+
+    if ($Section -eq 'Fwupd' -and $ExitCode -eq 2) {
+        return ($text -match '(?i)No updatable devices|No devices are updatable|Nothing to do|No updates available')
+    }
+
+    return $false
 }
 
 function Get-ReparoWingetManualInterventionReason {
@@ -4590,7 +4599,7 @@ function Write-ReparoSummaryTable {
     }
 
     if ($IncludeReason) {
-        $table = $Rows | Select-Object Software, CurrentVersion, Version, Method, Reason | Format-Table -AutoSize | Out-String
+        $table = $Rows | Select-Object Software, CurrentVersion, Version, Method, Reason | Format-Table -AutoSize -Wrap | Out-String
     }
     else {
         $table = $Rows | Select-Object Software, CurrentVersion, Version, Method | Format-Table -AutoSize | Out-String
@@ -4770,6 +4779,12 @@ function Test-ReparoIgnorableCommandOutputLine {
         return $true
     }
 
+    if ($Section -eq 'Apt') {
+        if ($text -match '^\(Reading database') {
+            return $true
+        }
+    }
+
     if ($Section -eq 'Spicetify') {
         if ($text -match '^[\|/\\\-]\s+.+') {
             return $true
@@ -4936,10 +4951,13 @@ function Resolve-ReparoSpicetifyCommand {
     `$command = Get-Command spicetify -CommandType Application -ErrorAction SilentlyContinue
     if (`$command) { return `$command.Source }
 
+    `$homePath = if (-not [string]::IsNullOrWhiteSpace(`$HOME)) { `$HOME } else { `$env:USERPROFILE }
     `$candidates = @(
-        (Join-Path `$env:APPDATA 'spicetify\spicetify.exe'),
-        (Join-Path `$env:LOCALAPPDATA 'spicetify\spicetify.exe'),
-        (Join-Path `$env:USERPROFILE '.spicetify\spicetify.exe')
+        `$(if (`$env:APPDATA) { Join-Path `$env:APPDATA 'spicetify\spicetify.exe' }),
+        `$(if (`$env:LOCALAPPDATA) { Join-Path `$env:LOCALAPPDATA 'spicetify\spicetify.exe' }),
+        `$(if (`$env:USERPROFILE) { Join-Path `$env:USERPROFILE '.spicetify\spicetify.exe' }),
+        `$(if (`$homePath) { Join-Path `$homePath '.spicetify/spicetify' }),
+        `$(if (`$homePath) { Join-Path `$homePath '.local/bin/spicetify' })
     )
 
     foreach (`$candidate in `$candidates) {
@@ -4952,7 +4970,10 @@ function Resolve-ReparoSpicetifyCommand {
 }
 
 try {
-    Write-ReparoSpicetifyOutput ("[INFO] Spicetify worker identity: {0}" -f [Security.Principal.WindowsIdentity]::GetCurrent().Name)
+    `$identityName = `$null
+    try { `$identityName = [Security.Principal.WindowsIdentity]::GetCurrent().Name } catch { }
+    if ([string]::IsNullOrWhiteSpace(`$identityName)) { `$identityName = [Environment]::UserName }
+    Write-ReparoSpicetifyOutput ("[INFO] Spicetify worker identity: {0}" -f `$identityName)
     `$spicetify = Resolve-ReparoSpicetifyCommand
     if (`$installRequested) {
         Write-ReparoSpicetifyOutput '[STEP] Spicetify install/reinstall'
@@ -4980,6 +5001,14 @@ try {
     }
 
     if (-not `$spicetify) {
+        if (`$previewOnly) {
+            Write-ReparoSpicetifyOutput '[DRY-RUN] spicetify command not found; preview accepts this and skips live checks.'
+            Write-ReparoSpicetifyOutput '[DRY-RUN] spicetify update'
+            Write-ReparoSpicetifyOutput '[DRY-RUN] spicetify restore backup apply'
+            Set-Content -LiteralPath `$statusPath -Value '0' -Encoding ASCII
+            exit 0
+        }
+
         Write-ReparoSpicetifyOutput '[SKIP] spicetify was not found in the interactive user context.'
         Set-Content -LiteralPath `$statusPath -Value '42' -Encoding ASCII
         exit 42
@@ -5119,7 +5148,15 @@ function Invoke-ReparoSpicetify {
         else {
             $shell = Resolve-ReparoShell
             Write-ReparoLog ("[CMD] {0} -NoProfile -ExecutionPolicy Bypass -File {1}" -f $shell, $workerScriptPath)
-            $process = Start-Process -FilePath $shell -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $workerScriptPath) -WindowStyle Hidden -PassThru
+            $spicetifyStartArgs = @{
+                FilePath = $shell
+                ArgumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $workerScriptPath)
+                PassThru = $true
+            }
+            if ($script:ReparoIsWindows) {
+                $spicetifyStartArgs['WindowStyle'] = 'Hidden'
+            }
+            $process = Start-Process @spicetifyStartArgs
             Write-ReparoDebug ("Started Spicetify worker PID {0}" -f $process.Id)
         }
 
@@ -5540,7 +5577,32 @@ if (Test-ReparoSectionSelected 'Flatpak') {
 
 if (Test-ReparoSectionSelected 'Snap') {
     if ($script:ReparoIsLinux -and (Test-Cmd 'snap')) {
-        Invoke-ReparoCommandStep -Section 'Snap' -PresenceCmd 'snap' -Command 'snap refresh' -TimeoutSeconds $WslAptTimeoutSeconds
+        if ((Test-Cmd 'bash')) {
+            $snapCanRunOutput = @(bash -lc 'if [ "$(id -u)" -eq 0 ]; then exit 0; fi; command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1' 2>&1)
+            $snapCanRunExit = $LASTEXITCODE
+            foreach ($line in $snapCanRunOutput) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                    Write-ReparoLog ("[CHECK] snap sudo: {0}" -f [string]$line)
+                }
+            }
+
+            if ($snapCanRunExit -ne 0) {
+                Write-Skip 'snap refresh requires root or passwordless sudo; skipping Snap'
+                Write-ReparoLog '[SKIP] snap refresh requires root or passwordless sudo; skipping Snap'
+                Add-ReparoSummaryRecord -Bucket Skipped -Software 'Snap' -Version '-' -Method 'snap' -Reason 'requires root or passwordless sudo'
+            }
+            else {
+                $snapCommand = @'
+$snapScript = 'if [ "$(id -u)" -eq 0 ]; then snap refresh; else sudo -n snap refresh; fi'
+bash -lc $snapScript
+if ($LASTEXITCODE -ne 0) { throw "snap refresh failed with exit code $LASTEXITCODE" }
+'@
+                Invoke-ReparoCommandStep -Section 'Snap' -PresenceCmd 'snap' -Command $snapCommand -TimeoutSeconds $WslAptTimeoutSeconds
+            }
+        }
+        else {
+            Invoke-ReparoCommandStep -Section 'Snap' -PresenceCmd 'snap' -Command 'snap refresh' -TimeoutSeconds $WslAptTimeoutSeconds
+        }
     }
     else {
         Write-Skip 'snap not found or not running on Linux; skipping Snap'
@@ -5554,9 +5616,20 @@ if (Test-ReparoSectionSelected 'Fwupd') {
         $fwupdCommand = @'
 fwupdmgr refresh --force
 if ($LASTEXITCODE -ne 0) { throw "fwupdmgr refresh failed with exit code $LASTEXITCODE" }
-fwupdmgr get-updates
-if ($LASTEXITCODE -ne 0) { throw "fwupdmgr get-updates failed with exit code $LASTEXITCODE" }
+$getUpdatesOutput = @(fwupdmgr get-updates 2>&1)
+$getUpdatesExit = $LASTEXITCODE
+foreach ($line in $getUpdatesOutput) { Write-Host ([string]$line) }
+$getUpdatesText = $getUpdatesOutput -join [Environment]::NewLine
+if ($getUpdatesExit -eq 2 -and $getUpdatesText -match '(?i)No updatable devices|No devices are updatable|No updates available') {
+    Write-Host 'fwupd reports no updatable devices; skipping firmware update step.'
+    exit 0
+}
+if ($getUpdatesExit -ne 0) { throw "fwupdmgr get-updates failed with exit code $getUpdatesExit" }
 fwupdmgr update --assume-yes
+if ($LASTEXITCODE -eq 2) {
+    Write-Host 'fwupd reports no firmware updates to apply.'
+    exit 0
+}
 if ($LASTEXITCODE -ne 0) { throw "fwupdmgr update failed with exit code $LASTEXITCODE" }
 '@
         Invoke-ReparoCommandStep -Section 'Fwupd' -PresenceCmd 'fwupdmgr' -Command $fwupdCommand -TimeoutSeconds $WslAptTimeoutSeconds
@@ -5570,6 +5643,12 @@ if ($LASTEXITCODE -ne 0) { throw "fwupdmgr update failed with exit code $LASTEXI
 }
 
 if (Test-ReparoSectionSelected 'Pip') {
+    if ($script:ReparoIsLinux -and -not $env:VIRTUAL_ENV) {
+        Write-Skip 'system pip is externally managed on Linux; skipping Pip'
+        Write-ReparoLog '[SKIP] system pip is externally managed on Linux; skipping Pip. Use pipx or a venv for Python apps.'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Pip' -Version '-' -Method 'pip' -Reason 'externally managed system Python; use pipx or venv'
+    }
+    else {
     $ranPip = $false
     $seenPipSources = @{}
     foreach ($pipName in @('pip', 'pip3')) {
@@ -5583,6 +5662,10 @@ if (Test-ReparoSectionSelected 'Pip') {
 
             Invoke-ReparoCommandStep -Section 'Pip' -PresenceCmd '' -Command @"
 `$ErrorActionPreference = 'Continue'
+if (`$IsLinux -and -not `$env:VIRTUAL_ENV) {
+    Write-Host 'System Python is externally managed on modern Linux distros; skipping global pip upgrades. Use pipx or a venv for Python apps.'
+    exit 0
+}
 `$pipName = '$pipName'
 `$pipCommand = Get-Command `$pipName -CommandType Application -ErrorAction Stop | Select-Object -First 1
 `$pythonCommand = `$null
@@ -5640,6 +5723,7 @@ if (-not [string]::IsNullOrWhiteSpace(`$outdated)) {
         Write-ReparoLog '[SKIP] pip not found; skipping'
         Add-ReparoSummaryRecord -Bucket Skipped -Software 'Pip' -Version '-' -Method 'pip' -Reason 'pip not found'
     }
+    }
 }
 
 Invoke-ReparoCommandStep -Section 'Pipx' -PresenceCmd 'pipx' -Command 'pipx upgrade-all'
@@ -5658,7 +5742,22 @@ function Invoke-ReparoNpmSelfUpdate {
         return
     }
 
-    `$targets = @('npm@latest', 'npm@11', 'npm@10')
+    `$nodeVersionText = (& node --version 2>`$null)
+    `$nodeVersion = `$null
+    if (`$nodeVersionText -match 'v?(\d+)\.(\d+)\.(\d+)') {
+        `$nodeVersion = [version]("{0}.{1}.{2}" -f `$matches[1], `$matches[2], `$matches[3])
+    }
+
+    if (`$nodeVersion -and ((`$nodeVersion.Major -ge 26) -or (`$nodeVersion.Major -eq 24 -and `$nodeVersion -ge [version]'24.15.0') -or (`$nodeVersion.Major -eq 22 -and `$nodeVersion -ge [version]'22.22.2'))) {
+        `$targets = @('npm@latest', 'npm@12', 'npm@11', 'npm@10')
+    }
+    elseif (`$nodeVersion -and ((`$nodeVersion.Major -eq 22) -or (`$nodeVersion.Major -eq 20 -and `$nodeVersion -ge [version]'20.17.0'))) {
+        `$targets = @('npm@11', 'npm@10')
+    }
+    else {
+        `$targets = @('npm@10')
+    }
+
     foreach (`$target in `$targets) {
         Write-Host "Updating npm itself: `$target"
         npm install -g `$target
@@ -5678,6 +5777,11 @@ if (-not [string]::IsNullOrWhiteSpace(`$jsonText)) {
     try { `$outdated = `$jsonText | ConvertFrom-Json } catch { `$outdated = `$null }
     if (`$outdated) {
         foreach (`$property in `$outdated.PSObject.Properties) {
+            if (`$property.Name -eq 'npm') {
+                Write-Host 'Skipping npm during global package update; npm self-update already handled compatibility.'
+                continue
+            }
+
             if (`$lockedPackages -contains `$property.Name) {
                 Write-Host "Skipping locked npm package: `$(`$property.Name)"
                 continue
@@ -5689,8 +5793,7 @@ if (-not [string]::IsNullOrWhiteSpace(`$jsonText)) {
     }
 }
 else {
-    npm update -g
-    if (`$LASTEXITCODE -ne 0) { throw 'Failed updating global npm packages.' }
+    Write-Host 'npm outdated returned no JSON; skipping broad npm update -g to avoid incompatible npm self-upgrades.'
 }
 "@
 }
