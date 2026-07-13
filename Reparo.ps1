@@ -123,7 +123,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.2'
+$script:ReparoVersion = '1.1.3'
 
 $script:ReparoIsWindows = if (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsWindows } else { $true }
 $script:ReparoIsLinux = if (Get-Variable -Name IsLinux -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsLinux } else { $false }
@@ -204,6 +204,7 @@ function Get-ReparoVersionFlavor {
         '1.1'     = [pscustomobject]@{ Quote = 'Penguin maintenance wing online. Same Reparo, more habitats.'; Source = 'Reparo maintenance log'; Art = '  LINUX: tux goblin joins the patch council' }
         '1.1.1'   = [pscustomobject]@{ Quote = 'Linux PATH goblin tagged and released somewhere inconvenient.'; Source = 'Reparo maintenance log'; Art = '  PATH: case-sensitive gremlin trap armed' }
         '1.1.2'   = [pscustomobject]@{ Quote = 'Make it so.'; Source = 'Star Trek: The Next Generation'; Art = '  ENTERPRISE: installer verbosity set to stun' }
+        '1.1.3'   = [pscustomobject]@{ Quote = 'Never tell me the odds.'; Source = 'Star Wars: The Empire Strikes Back'; Art = '  FALCON: version quote hyperdrive recalibrated' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {

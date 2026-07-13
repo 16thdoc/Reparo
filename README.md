@@ -246,6 +246,21 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
 | `-Force` | Runs the full local-dev-tool pass, includes the per-user Spicetify update/backup/apply section, and enables Windows Update and WSL apt handling. Use carefully. |
 
+### Version quote style
+
+`reparo -Version` should keep the CyberShell-style quote structure whenever the runtime version changes. Do not reuse the previous version's quote just because the format is stable; pick a fresh quote/source pair for the new version and add it to `Get-ReparoVersionFlavor`.
+
+Expected shape:
+
+```text
+Reparo 1.1.3
+Source: C:\ProgramData\Reparo\Reparo.ps1
+  "Never tell me the odds."
+  - Star Wars: The Empire Strikes Back
+```
+
+The quote body and source can change every release. The indentation, surrounding quote marks, and `  - Source` attribution line should not.
+
 ## App version checks and locks
 
 Check an installed version:
