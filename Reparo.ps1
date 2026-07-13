@@ -123,7 +123,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1'
+$script:ReparoVersion = '1.1.1'
 
 $script:ReparoIsWindows = if (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsWindows } else { $true }
 $script:ReparoIsLinux = if (Get-Variable -Name IsLinux -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsLinux } else { $false }
@@ -202,6 +202,7 @@ function Get-ReparoVersionFlavor {
         '1.0.8.5' = [pscustomobject]@{ Quote = 'Syslog pipe online. The logs have learned to phone home.'; Art = '  TCP: tiny log goblins marching single-file' }
         '1.0.8.6' = [pscustomobject]@{ Quote = 'Windows 11 gate opened. Bring snacks and a reboot window.'; Art = '  WIN11: feature upgrade wyrm uncoiled' }
         '1.1'     = [pscustomobject]@{ Quote = 'Penguin maintenance wing online. Same Reparo, more habitats.'; Art = '  LINUX: tux goblin joins the patch council' }
+        '1.1.1'   = [pscustomobject]@{ Quote = 'Linux PATH goblin tagged and released somewhere inconvenient.'; Art = '  PATH: case-sensitive gremlin trap armed' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -1051,7 +1052,9 @@ exec pwsh -NoProfile -File "$scriptPath" "`$@"
         }
 
         $pathSeparator = [System.IO.Path]::PathSeparator
-        $processParts = @($env:Path -split [regex]::Escape([string]$pathSeparator) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $processPath = [Environment]::GetEnvironmentVariable('PATH', 'Process')
+        if ([string]::IsNullOrWhiteSpace($processPath)) { $processPath = [Environment]::GetEnvironmentVariable('Path', 'Process') }
+        $processParts = @($processPath -split [regex]::Escape([string]$pathSeparator) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         if ($processParts -notcontains $binRoot) {
             Write-Skip "PATH does not include $binRoot. Add it to your shell profile to run 'reparo' directly."
         }
