@@ -1156,7 +1156,17 @@ Log: $script:ReparoLogPath
 
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $Url -OutFile $tempScript -UseBasicParsing
+        if (Test-Path -LiteralPath $Url) {
+            Copy-Item -LiteralPath $Url -Destination $tempScript -Force
+        }
+        else {
+            $downloadUrl = $Url
+            if ($downloadUrl -match '^https://raw\.githubusercontent\.com/') {
+                $separator = if ($downloadUrl.Contains('?')) { '&' } else { '?' }
+                $downloadUrl = '{0}{1}x={2}' -f $downloadUrl, $separator, [Uri]::EscapeDataString((Get-Date -Format 'yyyyMMddHHmmss'))
+            }
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $tempScript -UseBasicParsing
+        }
         if ($script:ReparoIsWindows) {
             Unblock-File -LiteralPath $tempScript -ErrorAction SilentlyContinue
         }

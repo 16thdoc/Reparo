@@ -25,10 +25,18 @@ echo "Bootstrap: $bootstrap"
 echo
 
 echo "Downloading Reparo..."
-curl -fsSL "$REPARO_URL" -o "$bootstrap"
+download_url="$REPARO_URL"
+case "$download_url" in
+  https://raw.githubusercontent.com/*)
+    sep='?'
+    case "$download_url" in *\?*) sep='&' ;; esac
+    download_url="${download_url}${sep}x=$(date +%s)"
+    ;;
+esac
+curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$download_url" -o "$bootstrap"
 
 echo "Installing/updating Reparo runtime..."
-pwsh -NoProfile -File "$bootstrap" -New
+pwsh -NoProfile -File "$bootstrap" -New -SourceUrl "$bootstrap"
 
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 shim_path="$HOME/.local/bin/reparo"

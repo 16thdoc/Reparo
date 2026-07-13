@@ -36,7 +36,7 @@ if errorlevel 1 (
 
 echo Downloading Reparo...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference = 'Stop'; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%REPARO_URL%' -OutFile '%BOOTSTRAP%' -UseBasicParsing; Unblock-File -LiteralPath '%BOOTSTRAP%' -ErrorAction SilentlyContinue"
+  "$ErrorActionPreference = 'Stop'; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; $url = '%REPARO_URL%'; if ($url -match '^https://raw\.githubusercontent\.com/') { $sep = if ($url.Contains('?')) { '&' } else { '?' }; $url = ('{0}{1}x={2}' -f $url, $sep, [Uri]::EscapeDataString((Get-Date -Format 'yyyyMMddHHmmss'))) }; Invoke-WebRequest -Uri $url -OutFile '%BOOTSTRAP%' -UseBasicParsing; Unblock-File -LiteralPath '%BOOTSTRAP%' -ErrorAction SilentlyContinue"
 
 if errorlevel 1 (
   echo ERROR: Download failed.
@@ -44,7 +44,7 @@ if errorlevel 1 (
 )
 
 echo Installing/updating Reparo runtime...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%BOOTSTRAP%" -Install
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%BOOTSTRAP%" -Install -SourceUrl "%BOOTSTRAP%"
 
 if errorlevel 1 (
   echo ERROR: Reparo install failed.
