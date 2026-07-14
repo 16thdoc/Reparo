@@ -90,6 +90,9 @@ param(
     [ValidateRange(0, [int]::MaxValue)]
     [Alias('WATS')]
     [int]$WslAptTimeoutSeconds = 1800,
+    [ValidateRange(1, [int]::MaxValue)]
+    [Alias('STS')]
+    [int]$SnapTimeoutSeconds = 600,
     [Alias('INP')]
     [bool]$InstallNuGetProvider = $true,
     [Alias('AllowRestart', 'AR')]
@@ -123,7 +126,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.6'
+$script:ReparoVersion = '1.1.7'
 
 $script:ReparoIsWindows = if (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsWindows } else { $true }
 $script:ReparoIsLinux = if (Get-Variable -Name IsLinux -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsLinux } else { $false }
@@ -209,6 +212,7 @@ function Get-ReparoVersionFlavor {
         '1.1.1'   = [pscustomobject]@{ Quote = 'Linux PATH goblin tagged and released somewhere inconvenient.'; Source = 'Reparo maintenance log'; Art = '  PATH: case-sensitive gremlin trap armed' }
         '1.1.2'   = [pscustomobject]@{ Quote = 'Make it so.'; Source = 'Star Trek: The Next Generation'; Art = '  ENTERPRISE: installer verbosity set to stun' }
         '1.1.3'   = [pscustomobject]@{ Quote = 'Never tell me the odds.'; Source = 'Star Wars: The Empire Strikes Back'; Art = '  FALCON: version quote hyperdrive recalibrated' }
+        '1.1.7'   = [pscustomobject]@{ Quote = 'This is the way.'; Source = 'The Mandalorian'; Art = '  SNAP: timeout escape hatch armed' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -353,6 +357,7 @@ function Write-ReparoParameterBlock {
         WingetDiscoveryTimeoutSeconds = $WingetDiscoveryTimeoutSeconds
         WindowsUpdateTimeoutSeconds   = $WindowsUpdateTimeoutSeconds
         WslAptTimeoutSeconds          = $WslAptTimeoutSeconds
+        SnapTimeoutSeconds            = $SnapTimeoutSeconds
         InstallNuGetProvider         = $InstallNuGetProvider
         AllowReboot                  = $AllowReboot
         ForceReboot                  = $ForceReboot
@@ -564,6 +569,8 @@ Timeouts:
   -WingetDiscoveryTimeoutSeconds Optional discovery timeout used by -Winget.
   -WindowsUpdateTimeoutSeconds   Optional Windows Update timeout.
   -WslAptTimeoutSeconds          WSL apt timeout. Default: 1800 seconds.
+  -SnapTimeoutSeconds            Snap refresh timeout. Default: 600 seconds. On timeout,
+                                  Reparo aborts its Snap change before continuing.
   -InstallNuGetProvider         When true (default), bootstrap the NuGet provider before PSGallery installs.
   -AllowReboot                  Let the Windows Update section pass -AutoReboot instead of -IgnoreReboot.
   -Reboot,-Restart              Force a computer restart after Reparo finishes. Honors -Preview.
@@ -5305,7 +5312,7 @@ Write-Host ("REPARO starting on {0} [{1}]" -f $script:ReparoHostName, $mode) -Fo
 Write-ReparoLog ("=== reparo start: {0} on {1} (PID {2}) ===" -f (Get-Date), $script:ReparoHostName, $PID)
 Write-ReparoLog ("[FLAGS] Bound parameters: {0}" -f ((($PSBoundParameters.Keys | Sort-Object) -join ', ')))
 Write-ReparoParameterBlock
-Write-ReparoDebug ("Timeouts: Winget={0}s WingetDiscovery={1}s WindowsUpdate={2}s IgnoreTimeouts={3}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds, $IgnoreTimeouts)
+Write-ReparoDebug ("Timeouts: Winget={0}s WingetDiscovery={1}s WindowsUpdate={2}s WslApt={3}s Snap={4}s IgnoreTimeouts={5}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds, $WslAptTimeoutSeconds, $SnapTimeoutSeconds, $IgnoreTimeouts)
 if ($script:ReparoIsWindows) {
     Write-ReparoDebug ("Process identity: {0}" -f (Get-ReparoIdentityName))
 }
@@ -5594,12 +5601,60 @@ if (Test-ReparoSectionSelected 'Snap') {
                 Add-ReparoSummaryRecord -Bucket Skipped -Software 'Snap' -Version '-' -Method 'snap' -Reason 'requires root or passwordless sudo'
             }
             else {
-                $snapCommand = @'
-$snapScript = 'if [ "$(id -u)" -eq 0 ]; then snap refresh; else sudo -n snap refresh; fi'
-bash -lc $snapScript
-if ($LASTEXITCODE -ne 0) { throw "snap refresh failed with exit code $LASTEXITCODE" }
+                $snapCommand = @"
+`$snapScript = @'
+set -o pipefail
+
+if ! command -v timeout >/dev/null 2>&1; then
+    echo 'snap refresh requires the timeout command for safe change cancellation.' >&2
+    exit 127
+fi
+
+run_snap() {
+    if [ "`$(id -u)" -eq 0 ]; then
+        snap "`$@"
+    else
+        sudo -n snap "`$@"
+    fi
+}
+
+change_id="`$(run_snap refresh --no-wait)"
+refresh_exit=`$?
+printf '%s\n' "`$change_id"
+if [ `$refresh_exit -ne 0 ]; then
+    exit `$refresh_exit
+fi
+
+if ! printf '%s' "`$change_id" | grep -Eq '^[0-9]+$'; then
+    echo "Could not determine Snap change ID from refresh output: `$change_id" >&2
+    exit 1
+fi
+
+if [ "`$(id -u)" -eq 0 ]; then
+    timeout --foreground --signal=TERM --kill-after=30s ${SnapTimeoutSeconds}s snap watch "`$change_id"
+else
+    timeout --foreground --signal=TERM --kill-after=30s ${SnapTimeoutSeconds}s sudo -n snap watch "`$change_id"
+fi
+watch_exit=`$?
+
+if [ `$watch_exit -eq 124 ]; then
+    echo "Snap change `$change_id exceeded ${SnapTimeoutSeconds}s; aborting it."
+    run_snap abort "`$change_id"
+    abort_exit=`$?
+    if [ `$abort_exit -ne 0 ]; then
+        echo "snap abort `$change_id failed with exit code `$abort_exit" >&2
+    fi
+    exit 124
+fi
+
+exit `$watch_exit
 '@
-                Invoke-ReparoCommandStep -Section 'Snap' -PresenceCmd 'snap' -Command $snapCommand -TimeoutSeconds $WslAptTimeoutSeconds
+bash -lc `$snapScript
+if (`$LASTEXITCODE -ne 0) { throw "snap refresh failed with exit code `$LASTEXITCODE" }
+"@
+                # Snap owns refresh changes asynchronously, so its wrapper always enforces
+                # and cleans up this timeout even when -Force enables -IgnoreTimeouts.
+                Invoke-ReparoCommandStep -Section 'Snap' -PresenceCmd 'snap' -Command $snapCommand
             }
         }
         else {
@@ -5941,7 +5996,7 @@ if (`$opencode) {
     if (`$LASTEXITCODE -ne 0) { throw "opencode upgrade failed with exit code `$LASTEXITCODE" }
     `$ran = `$true
 }
-elsif (`$npm) {
+elseif (`$npm) {
     Write-Host 'opencode not found; installing/updating opencode-ai via npm.'
     npm install -g opencode-ai@latest
     if (`$LASTEXITCODE -ne 0) { throw "npm install -g opencode-ai@latest failed with exit code `$LASTEXITCODE" }
