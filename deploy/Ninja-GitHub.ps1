@@ -43,14 +43,22 @@ param(
     [ValidateRange(0, [int]::MaxValue)]
     [int]$WindowsUpdateTimeoutSeconds,
     [bool]$InstallNuGetProvider = $true,
-    [Alias('Reboot')]
+    [Alias('AllowRestart', 'AR')]
     [switch]$AllowReboot,
+    [Alias('Reboot', 'Restart', 'R', 'ForceRestart', 'FR', 'FS', 'FRST')]
+    [switch]$ForceReboot,
+    [Alias('Shutdown', 'PowerOff', 'ForcePowerOff', 'FSH')]
+    [switch]$ForceShutdown,
     [string[]]$Include,
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs",
     [string]$Syslog
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($ForceReboot -and $ForceShutdown) {
+    throw '-Reboot and -Shutdown cannot be used together. Choose one post-run power action.'
+}
 
 if ([Net.ServicePointManager]::SecurityProtocol -notmatch 'Tls12') {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -112,6 +120,8 @@ function Write-NinjaParameterBlock {
         WindowsUpdateTimeoutSeconds   = $WindowsUpdateTimeoutSeconds
         InstallNuGetProvider         = $InstallNuGetProvider
         AllowReboot                  = $AllowReboot
+        ForceReboot                  = $ForceReboot
+        ForceShutdown                = $ForceShutdown
         Include                      = $Include
         LogRoot                      = $LogRoot
         Syslog                       = $Syslog
@@ -133,6 +143,8 @@ Write-NinjaParameterBlock
 Write-Host ("Timeouts: Winget={0} WingetDiscovery={1} WindowsUpdate={2}" -f $WingetTimeoutSeconds, $WingetDiscoveryTimeoutSeconds, $WindowsUpdateTimeoutSeconds)
 Write-Host ("NuGet provider bootstrap: {0}" -f $InstallNuGetProvider)
 Write-Host ("Windows Update reboot opt-in: {0}" -f $AllowReboot)
+Write-Host ("Post-run reboot: {0}" -f $ForceReboot)
+Write-Host ("Post-run shutdown: {0}" -f $ForceShutdown)
 Write-Host 'Preflight:'
 if ($Winget) {
     if ($Preview) {
@@ -181,6 +193,12 @@ if ($IgnoreTimeouts) {
 }
 if ($AllowReboot) {
     Write-Host '  - Windows Update is allowed to auto-reboot if PSWindowsUpdate requires it.'
+}
+if ($ForceReboot) {
+    Write-Host '  - The computer will restart after Reparo completes.'
+}
+if ($ForceShutdown) {
+    Write-Host '  - The computer will shut down after Reparo completes.'
 }
 if ($PSBoundParameters.ContainsKey('Syslog')) {
     Write-Host ("  - Reparo TCP syslog target will be configured/used: {0}" -f $Syslog)
@@ -275,6 +293,12 @@ if ($PSBoundParameters.ContainsKey('InstallNuGetProvider')) {
 }
 if ($AllowReboot) {
     $arguments += '-AllowReboot'
+}
+if ($ForceReboot) {
+    $arguments += '-ForceReboot'
+}
+if ($ForceShutdown) {
+    $arguments += '-ForceShutdown'
 }
 if ($IgnoreTimeouts) {
     $arguments += '-IgnoreTimeouts'

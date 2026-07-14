@@ -99,6 +99,8 @@ param(
     [switch]$AllowReboot,
     [Alias('Reboot', 'Restart', 'R', 'ForceRestart', 'FR', 'FS', 'FRST')]
     [switch]$ForceReboot,
+    [Alias('Shutdown', 'PowerOff', 'ForcePowerOff', 'FSH')]
+    [switch]$ForceShutdown,
     [Alias('LR')]
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs",
     [string]$Syslog,
@@ -126,7 +128,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.7'
+$script:ReparoVersion = '1.1.8'
+
+if ($ForceReboot -and $ForceShutdown) {
+    throw '-Reboot and -Shutdown cannot be used together. Choose one post-run power action.'
+}
 
 $script:ReparoIsWindows = if (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsWindows } else { $true }
 $script:ReparoIsLinux = if (Get-Variable -Name IsLinux -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsLinux } else { $false }
@@ -213,6 +219,7 @@ function Get-ReparoVersionFlavor {
         '1.1.2'   = [pscustomobject]@{ Quote = 'Make it so.'; Source = 'Star Trek: The Next Generation'; Art = '  ENTERPRISE: installer verbosity set to stun' }
         '1.1.3'   = [pscustomobject]@{ Quote = 'Never tell me the odds.'; Source = 'Star Wars: The Empire Strikes Back'; Art = '  FALCON: version quote hyperdrive recalibrated' }
         '1.1.7'   = [pscustomobject]@{ Quote = 'This is the way.'; Source = 'The Mandalorian'; Art = '  SNAP: timeout escape hatch armed' }
+        '1.1.8'   = [pscustomobject]@{ Quote = 'Game over, man! Game over!'; Source = 'Aliens'; Art = '  POWER: post-run shutdown sequencer armed' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -361,6 +368,7 @@ function Write-ReparoParameterBlock {
         InstallNuGetProvider         = $InstallNuGetProvider
         AllowReboot                  = $AllowReboot
         ForceReboot                  = $ForceReboot
+        ForceShutdown                = $ForceShutdown
         LogRoot                      = $LogRoot
         Syslog                       = $Syslog
         InstallRoot                  = $InstallRoot
@@ -542,6 +550,8 @@ Modes:
                        Allow Windows Update to auto-reboot if PSWindowsUpdate requires it.
                        Default behavior still uses -IgnoreReboot.
   -Reboot,-Restart,-R  Reboot the computer after Reparo finishes. Honors -Preview.
+  -Shutdown            Shut down the computer after Reparo finishes. Honors -Preview.
+                        Cannot be combined with -Reboot.
   -Syslog <host[:port]> Persistently set and use a TCP syslog listener. Default port: 514.
                        Example: -Syslog 192.168.50.31:514
                        Use -Syslog off or -Syslog disable to clear the saved target.
@@ -574,6 +584,7 @@ Timeouts:
   -InstallNuGetProvider         When true (default), bootstrap the NuGet provider before PSGallery installs.
   -AllowReboot                  Let the Windows Update section pass -AutoReboot instead of -IgnoreReboot.
   -Reboot,-Restart              Force a computer restart after Reparo finishes. Honors -Preview.
+  -Shutdown                     Shut down the computer after Reparo finishes. Honors -Preview.
 
 Windows Update:
   Reparo will try to install PSWindowsUpdate from PSGallery if the module is missing
@@ -1736,6 +1747,31 @@ Log: $script:ReparoLogPath
 "@
 
     shutdown.exe /r /t 30 /c "Reparo completed and -Reboot/-Restart was requested." /d p:4:1 | Out-Null
+}
+
+function Invoke-ReparoForcedShutdown {
+    if (-not $ForceShutdown) {
+        return
+    }
+
+    if ($Preview) {
+        Write-Info 'Preview: would shut down the computer after Reparo finishes.'
+        Write-ReparoLog '[PREVIEW] ForceShutdown requested; would shut down the computer after Reparo finishes.'
+        return
+    }
+
+    Write-Warning 'ForceShutdown requested; shutting down the computer in 30 seconds.'
+    Write-ReparoLog '[SHUTDOWN] ForceShutdown requested; shutting down the computer in 30 seconds.'
+    Write-ReparoEventLog -EventId 1302 -EntryType Warning -Message @"
+Reparo forced shutdown requested.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Mode: $mode
+Log: $script:ReparoLogPath
+"@
+
+    shutdown.exe /s /t 30 /c "Reparo completed and -Shutdown was requested." /d p:4:1 | Out-Null
 }
 
 function Finalize-ReparoLogFile {
@@ -6242,6 +6278,7 @@ Computer: $env:COMPUTERNAME
 PID: $PID
 AllowReboot: $AllowReboot
 ForceReboot: $ForceReboot
+ForceShutdown: $ForceShutdown
 Mode: $mode
 Log: $script:ReparoLogPath
 "@
@@ -6307,3 +6344,4 @@ if ($Tail) {
 }
 
 Invoke-ReparoForcedReboot
+Invoke-ReparoForcedShutdown
