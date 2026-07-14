@@ -198,6 +198,70 @@ ScreenConnect-ready command files are included under `deploy\ScreenConnect`.
 
 Run these from an elevated/admin or SYSTEM context. The installer is intentionally idempotent: if Reparo is already installed, it downloads the current GitHub script and updates the existing runtime in place.
 
+### Moshi / mosh setup over SSH
+
+`deploy/Install-MoshiRemote.ps1` prepares SSH-reachable Linux hosts for the
+[Moshi mobile terminal](https://getmoshi.app). It installs `mosh`, `tmux`, and
+their prerequisites through apt, dnf/yum, pacman, or zypper, then installs
+`moshi-hook` with Moshi's official installer. Required repositories must already
+provide `mosh`; RHEL-family hosts commonly need EPEL enabled. The remote account
+must be root or have passwordless sudo when packages, firewall rules, or
+systemd lingering need changes.
+
+Preview a batch first:
+
+```powershell
+./deploy/Install-MoshiRemote.ps1 -ComputerName devbox,vps01 -Preview
+```
+
+The QR-free path is manual key provisioning. In Moshi, create an Ed25519 key
+and copy its **public** key, then pass that public key to the helper. Create the
+saved connection in Moshi with the same host, SSH user, and private key:
+
+```powershell
+$moshiPublicKey = Get-Clipboard
+./deploy/Install-MoshiRemote.ps1 -ComputerName devbox -AuthorizedKey $moshiPublicKey
+```
+
+This helper does not create the saved phone-side connection, so create that
+final connection in the app manually. `moshi-hook host setup` remains the
+easiest alternative when scanning its temporary Easy Pair QR is acceptable.
+
+Agent notification pairing is separate from SSH connection pairing. Copy the
+hook token from **Moshi -> Settings -> Hooks** and provide it as a secure value:
+
+```powershell
+$token = Read-Host 'Moshi hook pairing token' -AsSecureString
+$key = Get-Clipboard # Moshi-generated public key, not the private key
+
+./deploy/Install-MoshiRemote.ps1 -ComputerName devbox `
+    -AuthorizedKey $key `
+    -PairingToken $token `
+    -InstallAgentHooks `
+    -AgentProjectPath /home/trenton/projects/example `
+    -ConfigureService `
+    -EnableLinger
+```
+
+`-InstallAgentHooks` modifies supported agent configuration. For OpenCode its
+plugin is project-local, so use `-AgentProjectPath` for the intended repository
+or run `moshi-hook install` separately in each project. `-ConfigureService`
+creates and enables a systemd user service; `-EnableLinger` also keeps that user
+service alive after logout. Moshi's current pairing CLI accepts its token only
+as an argument, so the token is briefly visible in the remote host's process
+list; do not pair this way on an untrusted multi-user host.
+
+Mosh bootstraps over the configured SSH TCP port (normally 22) and then uses UDP
+60000-61000. Prefer Tailscale or another VPN instead of exposing those ports
+publicly. If a host firewall really needs the range, add `-OpenMoshFirewall`;
+the helper supports active ufw and firewalld and otherwise reports that a manual
+rule is required.
+
+Native Windows can be used as a plain SSH target in Moshi, but upstream
+`mosh-server` and `moshi-hook` do not provide a native Windows host build. For
+mosh and hooks, use a WSL2 Linux distribution as the actual SSH target (with
+reachability and UDP routing into WSL configured), or use a normal Linux VM.
+
 ### Private repo note
 
 For client endpoints, a public repo or Ninja-hosted script copy is usually cleaner than embedding GitHub credentials. If the repo is private, avoid hard-coding a personal access token in the Ninja script body. Use Ninja-managed secure variables only if you truly need private GitHub delivery.
