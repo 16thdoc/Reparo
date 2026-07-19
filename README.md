@@ -398,7 +398,15 @@ Use an elevated/admin or SYSTEM context and expect a long-running installer plus
 
 ### PowerShell 7
 
-The `PowerShell7` section updates or installs the official winget package ID `Microsoft.PowerShell`. It is included in `-Update` and `-Force`, and can also be run directly:
+The `PowerShell7` section installs or updates Microsoft's signed, machine-wide
+MSI at `C:\Program Files\PowerShell\7\pwsh.exe`. The stable path is suitable for
+OpenSSH Server, scheduled tasks, and other machine-level automation. Reparo
+queries the latest stable GitHub release, validates the Authenticode signature,
+and skips installation only when the signed executable and Windows Installer
+registration confirm that the machine-wide MSI is already current.
+
+The section is included in `-Update` and `-Force`, and can also be run directly
+from an elevated session:
 
 ```powershell
 reparo -Preview -Include PowerShell7
@@ -412,6 +420,9 @@ reparo -Force -VersionLock winget:Microsoft.PowerShell=7.5.2
 ```
 
 When that lock is active, Reparo skips the dedicated `PowerShell7` section.
+The general winget pass also excludes `Microsoft.PowerShell` whenever this
+dedicated section is selected, preventing an MSIX/MSI installer-technology
+knife fight.
 
 ### Spicetify
 

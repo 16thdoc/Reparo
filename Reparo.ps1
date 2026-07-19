@@ -128,7 +128,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.8'
+$script:ReparoVersion = '1.1.9'
 
 if ($ForceReboot -and $ForceShutdown) {
     throw '-Reboot and -Shutdown cannot be used together. Choose one post-run power action.'
@@ -220,6 +220,7 @@ function Get-ReparoVersionFlavor {
         '1.1.3'   = [pscustomobject]@{ Quote = 'Never tell me the odds.'; Source = 'Star Wars: The Empire Strikes Back'; Art = '  FALCON: version quote hyperdrive recalibrated' }
         '1.1.7'   = [pscustomobject]@{ Quote = 'This is the way.'; Source = 'The Mandalorian'; Art = '  SNAP: timeout escape hatch armed' }
         '1.1.8'   = [pscustomobject]@{ Quote = 'Game over, man! Game over!'; Source = 'Aliens'; Art = '  POWER: post-run shutdown sequencer armed' }
+        '1.1.9'   = [pscustomobject]@{ Quote = 'Upgrade complete.'; Source = 'The Expanse'; Art = '  PWSH: machine-wide reactor online' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -2729,27 +2730,45 @@ function Invoke-ReparoWingetDiscovery {
 
 function Resolve-ReparoShell {
     Write-ReparoDebug 'Resolving runnable PowerShell host.'
-    foreach ($shellName in @('pwsh', 'powershell')) {
-        $command = Resolve-ReparoCommand -Name $shellName
-        if (-not $command) { continue }
+    $shellCandidates = New-Object System.Collections.Generic.List[object]
+    if ($script:ReparoIsWindows) {
+        $programFilesRoot = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
+        [void]$shellCandidates.Add([pscustomobject]@{
+            Name = 'PowerShell 7 (machine)'
+            Path = (Join-Path $programFilesRoot 'PowerShell\7\pwsh.exe')
+        })
+    }
+    [void]$shellCandidates.Add([pscustomobject]@{ Name = 'pwsh'; Path = 'pwsh' })
+    [void]$shellCandidates.Add([pscustomobject]@{ Name = 'powershell'; Path = 'powershell' })
+
+    foreach ($candidate in $shellCandidates) {
+        if ([IO.Path]::IsPathRooted($candidate.Path)) {
+            if (-not (Test-Path -LiteralPath $candidate.Path -PathType Leaf)) { continue }
+            $shellPath = $candidate.Path
+        }
+        else {
+            $command = Resolve-ReparoCommand -Name $candidate.Path
+            if (-not $command) { continue }
+            $shellPath = $command.Source
+        }
 
         try {
-            $output = @(& $command.Source -NoProfile -ExecutionPolicy Bypass -Command '$PSVersionTable.PSVersion.ToString()' 2>&1)
+            $output = @(& $shellPath -NoProfile -ExecutionPolicy Bypass -Command '$PSVersionTable.PSVersion.ToString()' 2>&1)
             $exitCode = $LASTEXITCODE
-            Write-ReparoDebug ("Shell probe {0} returned exit code {1}" -f $shellName, $exitCode)
+            Write-ReparoDebug ("Shell probe {0} returned exit code {1}" -f $candidate.Name, $exitCode)
             foreach ($item in $output) {
                 $line = [string]$item
                 if (-not [string]::IsNullOrWhiteSpace($line)) {
-                    Write-ReparoLog ("[CHECK] {0}: {1}" -f $shellName, $line)
+                    Write-ReparoLog ("[CHECK] {0}: {1}" -f $candidate.Name, $line)
                 }
             }
 
             if ($exitCode -eq 0 -or $null -eq $exitCode) {
-                return $command.Source
+                return $shellPath
             }
         }
         catch {
-            Write-ReparoLog ("[CHECK] {0} is present but cannot run: {1}" -f $shellName, $_.Exception.Message)
+            Write-ReparoLog ("[CHECK] {0} is present but cannot run: {1}" -f $candidate.Name, $_.Exception.Message)
         }
     }
 
@@ -5406,8 +5425,13 @@ if ($runWingetSections) {
         if (-not $WingetDiscover) {
             $wingetCommand = 'winget upgrade --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force'
             $lockedWingetIds = @(Get-ReparoLockedPackageIds -Method 'winget')
-            foreach ($lockedWingetId in $lockedWingetIds) {
-                $wingetCommand += (' --except {0}' -f $lockedWingetId)
+            $excludedWingetIds = @($lockedWingetIds)
+            if ((Test-ReparoSectionSelected 'PowerShell7') -and $excludedWingetIds -notcontains 'Microsoft.PowerShell') {
+                $excludedWingetIds += 'Microsoft.PowerShell'
+                Add-ReparoSummaryNote 'Excluding Microsoft.PowerShell from the general winget pass; the dedicated PowerShell7 MSI section owns it.'
+            }
+            foreach ($excludedWingetId in $excludedWingetIds) {
+                $wingetCommand += (' --except {0}' -f $excludedWingetId)
             }
             if ($lockedWingetIds.Count -gt 0) {
                 Add-ReparoSummaryNote ("Winget version locks active; excluding: {0}" -f ($lockedWingetIds -join ', '))
@@ -5416,8 +5440,8 @@ if ($runWingetSections) {
             Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command $wingetCommand -TimeoutSeconds $WingetTimeoutSeconds
 
             $wingetStoreCommand = 'winget upgrade --source msstore --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force'
-            foreach ($lockedWingetId in $lockedWingetIds) {
-                $wingetStoreCommand += (' --except {0}' -f $lockedWingetId)
+            foreach ($excludedWingetId in $excludedWingetIds) {
+                $wingetStoreCommand += (' --except {0}' -f $excludedWingetId)
             }
             Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command $wingetStoreCommand -TimeoutSeconds $WingetTimeoutSeconds
         }
@@ -5441,7 +5465,7 @@ if ($lockedPowerShell7Ids.Count -gt 0) {
     Add-ReparoSummaryNote 'PowerShell 7 winget version lock active; skipping dedicated PowerShell7 section.'
 }
 
-Invoke-ReparoCommandStep -Section 'PowerShell7' -PresenceCmd 'winget' -Command @"
+Invoke-ReparoCommandStep -Section 'PowerShell7' -Command @"
 `$ErrorActionPreference = 'Stop'
 `$lockedPackages = $powerShell7LockLiteral
 if (`$lockedPackages | Where-Object { `$_ -ieq 'Microsoft.PowerShell' }) {
@@ -5449,48 +5473,120 @@ if (`$lockedPackages | Where-Object { `$_ -ieq 'Microsoft.PowerShell' }) {
     exit 0
 }
 
-`$pwshCommand = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-if (`$pwshCommand) {
-    try {
-        `$currentVersion = & `$pwshCommand.Source -NoProfile -Command '`$PSVersionTable.PSVersion.ToString()'
-    }
-    catch {
-        `$currentVersion = 'unknown'
-    }
+`$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+`$principal = New-Object Security.Principal.WindowsPrincipal(`$identity)
+if (-not `$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'The PowerShell7 MSI section requires an elevated Administrator or SYSTEM context.'
+}
 
-    Write-Host "PowerShell 7 current version: `$currentVersion"
+`$programFilesRoot = if (`$env:ProgramW6432) { `$env:ProgramW6432 } else { `$env:ProgramFiles }
+`$stablePwsh = Join-Path `$programFilesRoot 'PowerShell\7\pwsh.exe'
+if ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]::Tls12) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 }
 else {
-    Write-Host 'PowerShell 7 not found; installing Microsoft.PowerShell through winget.'
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+}
+`$release = Invoke-RestMethod -Uri 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest' -Headers @{ 'User-Agent' = 'Reparo-PowerShell7' }
+`$latestVersionText = ([string]`$release.tag_name).TrimStart('v')
+`$latestVersion = [version]`$latestVersionText
+
+`$architecture = if (`$env:PROCESSOR_ARCHITEW6432) {
+    `$env:PROCESSOR_ARCHITEW6432
+}
+else {
+    `$env:PROCESSOR_ARCHITECTURE
+}
+`$assetArchitecture = switch (`$architecture) {
+    'ARM64' { 'arm64' }
+    'AMD64' { 'x64' }
+    default { throw "Unsupported Windows architecture: `$architecture" }
+}
+`$expectedDisplayName = "PowerShell 7-`$assetArchitecture"
+
+`$currentVersion = `$null
+`$stableSignatureValid = `$false
+if (Test-Path -LiteralPath `$stablePwsh -PathType Leaf) {
+    `$stableSignature = Get-AuthenticodeSignature -FilePath `$stablePwsh
+    `$stableSignatureValid = `$stableSignature.Status -eq 'Valid' -and `$stableSignature.SignerCertificate -and `$stableSignature.SignerCertificate.Subject -match '(^|,\s*)CN=Microsoft Corporation(,|$)'
+    `$fileVersionText = [Diagnostics.FileVersionInfo]::GetVersionInfo(`$stablePwsh).ProductVersion
+    `$parsedVersion = `$null
+    if ([version]::TryParse(`$fileVersionText, [ref]`$parsedVersion)) {
+        `$currentVersion = `$parsedVersion
+    }
 }
 
-`$upgradeOutput = @(winget upgrade --id Microsoft.PowerShell --exact --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1)
-`$upgradeExit = `$LASTEXITCODE
-`$upgradeOutput | ForEach-Object { Write-Host ([string]`$_) }
-`$upgradeText = (`$upgradeOutput | ForEach-Object { [string]`$_ }) -join [Environment]::NewLine
+`$uninstallRoots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+)
+`$msiRegistration = `$uninstallRoots |
+    ForEach-Object { Get-ItemProperty -Path `$_ -ErrorAction SilentlyContinue } |
+    Where-Object {
+        `$registeredVersion = `$null
+        `$_.WindowsInstaller -eq 1 -and
+            `$_.DisplayName -eq `$expectedDisplayName -and
+            [version]::TryParse([string]`$_.DisplayVersion, [ref]`$registeredVersion) -and
+            `$registeredVersion -ge `$latestVersion
+    } |
+    Select-Object -First 1
+`$msiRegistered = `$null -ne `$msiRegistration
 
-if (`$upgradeExit -eq 0) {
+if (`$currentVersion -and `$currentVersion -ge `$latestVersion -and `$stableSignatureValid -and `$msiRegistered) {
+    Write-Host "PowerShell 7 machine-wide MSI is current: `$currentVersion"
     exit 0
 }
 
-`$nothingToUpgrade = `$upgradeText -match 'No installed package found matching input criteria|No applicable update found|No available upgrade found|No packages found'
-if (`$pwshCommand -and `$nothingToUpgrade) {
-    Write-Host 'PowerShell 7 is installed and winget reports no applicable update.'
-    exit 0
+`$assetName = "PowerShell-`$latestVersionText-win-`$assetArchitecture.msi"
+`$asset = `$release.assets | Where-Object { `$_.name -eq `$assetName } | Select-Object -First 1
+if (-not `$asset) {
+    throw "Official PowerShell MSI asset was not found in release `$(`$release.tag_name): `$assetName"
 }
 
-if ((-not `$pwshCommand) -or (`$upgradeText -match 'No installed package found matching input criteria')) {
-    `$installOutput = @(winget install --id Microsoft.PowerShell --exact --accept-source-agreements --accept-package-agreements --disable-interactivity --silent 2>&1)
-    `$installExit = `$LASTEXITCODE
-    `$installOutput | ForEach-Object { Write-Host ([string]`$_) }
-    if (`$installExit -eq 0) {
-        exit 0
+`$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('reparo-pwsh-' + [guid]::NewGuid().ToString('N'))
+`$msiPath = Join-Path `$tempRoot `$assetName
+New-Item -ItemType Directory -Path `$tempRoot -Force | Out-Null
+try {
+    Write-Host "Installing PowerShell 7 machine-wide MSI: `$latestVersionText"
+    Invoke-WebRequest -Uri `$asset.browser_download_url -OutFile `$msiPath -UseBasicParsing
+    `$signature = Get-AuthenticodeSignature -FilePath `$msiPath
+    if (`$signature.Status -ne 'Valid' -or -not `$signature.SignerCertificate -or `$signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)') {
+        throw "PowerShell MSI signature validation failed: `$(`$signature.Status) / `$(`$signature.StatusMessage)"
     }
 
-    throw "winget install Microsoft.PowerShell failed with exit code `$installExit"
+    `$msiArguments = "/package ```"`$msiPath```" /quiet /norestart ADD_PATH=1 REGISTER_MANIFEST=1 USE_MU=1 ENABLE_MU=1"
+    `$installer = Start-Process -FilePath 'msiexec.exe' -ArgumentList `$msiArguments -Wait -PassThru
+    if (`$installer.ExitCode -notin @(0, 3010)) {
+        throw "PowerShell MSI installation failed with exit code `$(`$installer.ExitCode)."
+    }
+}
+finally {
+    Remove-Item -LiteralPath `$tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-throw "winget upgrade Microsoft.PowerShell failed with exit code `$upgradeExit"
+if (-not (Test-Path -LiteralPath `$stablePwsh -PathType Leaf)) {
+    throw "PowerShell MSI completed but the stable executable was not found: `$stablePwsh"
+}
+
+`$installedSignature = Get-AuthenticodeSignature -FilePath `$stablePwsh
+if (`$installedSignature.Status -ne 'Valid' -or -not `$installedSignature.SignerCertificate -or `$installedSignature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)') {
+    throw "Installed PowerShell executable signature validation failed: `$(`$installedSignature.Status)"
+}
+`$installedMsiRegistration = `$null -ne (`$uninstallRoots |
+    ForEach-Object { Get-ItemProperty -Path `$_ -ErrorAction SilentlyContinue } |
+    Where-Object {
+        `$registeredVersion = `$null
+        `$_.WindowsInstaller -eq 1 -and
+            `$_.DisplayName -eq `$expectedDisplayName -and
+            [version]::TryParse([string]`$_.DisplayVersion, [ref]`$registeredVersion) -and
+            `$registeredVersion -ge `$latestVersion
+    } |
+    Select-Object -First 1)
+if (-not `$installedMsiRegistration) {
+    throw 'PowerShell MSI completed but Windows Installer registration was not found.'
+}
+`$installedVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo(`$stablePwsh).ProductVersion
+Write-Host "PowerShell 7 machine-wide MSI ready: `$stablePwsh (`$installedVersion)"
 "@ -TimeoutSeconds $WingetTimeoutSeconds
 $lockedScoopIds = @(Get-ReparoLockedPackageIds -Method 'scoop')
 if ($lockedScoopIds.Count -gt 0) {
@@ -6345,3 +6441,6 @@ if ($Tail) {
 
 Invoke-ReparoForcedReboot
 Invoke-ReparoForcedShutdown
+if ($script:ReparoFinalStatus -eq 'FAILED') {
+    exit 1
+}
