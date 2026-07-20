@@ -2535,6 +2535,7 @@ function Test-ReparoSectionSelected($Section) {
     if ($Section -eq 'Windows11Upgrade' -and -not $Windows11Upgrade) { return $false }
     if ($Force) { return $true }
     if ($Windows11Upgrade) { return ($Section -eq 'Windows11Upgrade') }
+    if ($WslApt) { return ($Section -eq 'WslApt' -or $Section -like 'WslApt:*') }
     if (($MigrateChocoToWinget -or $FinalizeChocolateyRemoval) -and -not ($Update -or $WindowsUpdate -or $Windows11Upgrade -or $Winget -or $WingetDiscover -or $WslApt)) {
         return $false
     }
@@ -5425,25 +5426,24 @@ if ($runWingetSections) {
         if (-not $WingetDiscover) {
             $wingetCommand = 'winget upgrade --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force'
             $lockedWingetIds = @(Get-ReparoLockedPackageIds -Method 'winget')
-            $excludedWingetIds = @($lockedWingetIds)
-            if ((Test-ReparoSectionSelected 'PowerShell7') -and $excludedWingetIds -notcontains 'Microsoft.PowerShell') {
-                $excludedWingetIds += 'Microsoft.PowerShell'
-                Add-ReparoSummaryNote 'Excluding Microsoft.PowerShell from the general winget pass; the dedicated PowerShell7 MSI section owns it.'
-            }
-            foreach ($excludedWingetId in $excludedWingetIds) {
-                $wingetCommand += (' --except {0}' -f $excludedWingetId)
-            }
             if ($lockedWingetIds.Count -gt 0) {
-                Add-ReparoSummaryNote ("Winget version locks active; excluding: {0}" -f ($lockedWingetIds -join ', '))
+                Write-Warning ("Skipping winget bulk upgrades because winget does not support exclusions for version locks: {0}" -f ($lockedWingetIds -join ', '))
+                Write-ReparoLog ("[SKIP] Winget bulk upgrades skipped; version locks require exclusions unsupported by winget: {0}" -f ($lockedWingetIds -join ', '))
+                Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget' -Version '-' -Method 'Winget' -Reason 'version locks require exclusions unsupported by winget'
             }
-
-            Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command $wingetCommand -TimeoutSeconds $WingetTimeoutSeconds
+            else {
+                Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command $wingetCommand -TimeoutSeconds $WingetTimeoutSeconds
+            }
 
             $wingetStoreCommand = 'winget upgrade --source msstore --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force'
-            foreach ($excludedWingetId in $excludedWingetIds) {
-                $wingetStoreCommand += (' --except {0}' -f $excludedWingetId)
+            if ($lockedWingetIds.Count -gt 0) {
+                Write-Warning 'Skipping Microsoft Store winget bulk upgrades because version-lock exclusions are unsupported by winget.'
+                Write-ReparoLog '[SKIP] Winget(msstore) bulk upgrades skipped; version locks require exclusions unsupported by winget'
+                Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget(msstore)' -Version '-' -Method 'Winget(msstore)' -Reason 'version locks require exclusions unsupported by winget'
             }
-            Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command $wingetStoreCommand -TimeoutSeconds $WingetTimeoutSeconds
+            else {
+                Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command $wingetStoreCommand -TimeoutSeconds $WingetTimeoutSeconds
+            }
         }
         else {
             Write-Skip 'WingetDiscover requested; skipping live winget upgrade commands.'
@@ -6292,8 +6292,9 @@ if ($WslApt -and (Test-ReparoSectionSelected 'WslApt')) {
                     }
 
                     $aptCommand = 'if [ "$(id -u)" -eq 0 ]; then DEBIAN_FRONTEND=noninteractive apt update && DEBIAN_FRONTEND=noninteractive apt -y upgrade && DEBIAN_FRONTEND=noninteractive apt -y autoremove; else sudo -n env DEBIAN_FRONTEND=noninteractive apt update && sudo -n env DEBIAN_FRONTEND=noninteractive apt -y upgrade && sudo -n env DEBIAN_FRONTEND=noninteractive apt -y autoremove; fi'
-                    $aptCommand = $aptCommand -replace '"', '\"'
-                    Invoke-ReparoCommandStep -Section ("WslApt:{0}" -f $distro) -PresenceCmd '' -Command ("wsl -d ""{0}"" -- bash -lc ""{1}""" -f $distro, $aptCommand) -TimeoutSeconds $WslAptTimeoutSeconds
+                    $distroLiteral = ConvertTo-ReparoPowerShellLiteral -Value $distro
+                    $aptCommandLiteral = ConvertTo-ReparoPowerShellLiteral -Value $aptCommand
+                    Invoke-ReparoCommandStep -Section ("WslApt:{0}" -f $distro) -PresenceCmd '' -Command ("wsl -d {0} -- bash -lc {1}" -f $distroLiteral, $aptCommandLiteral) -TimeoutSeconds $WslAptTimeoutSeconds
                 }
                 else {
                     Write-Skip "apt not present in $distro; skipping"
