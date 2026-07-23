@@ -28,6 +28,8 @@ param(
     [switch]$Windows11Upgrade,
     [Alias('7', 'PowerShell7')]
     [switch]$PowerShell7Only,
+    [Alias('7Zip', '7z')]
+    [switch]$SevenZip,
     [Alias('WSL')]
     [switch]$WslApt,
     [Alias('U')]
@@ -130,7 +132,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.11'
+$script:ReparoVersion = '1.1.12'
 
 if ($ForceReboot -and $ForceShutdown) {
     throw '-Reboot and -Shutdown cannot be used together. Choose one post-run power action.'
@@ -336,6 +338,7 @@ function Write-ReparoParameterBlock {
         WindowsUpdate                = $WindowsUpdate
         Windows11Upgrade             = $Windows11Upgrade
         PowerShell7                  = $PowerShell7Only
+        SevenZip                     = $SevenZip
         WslApt                       = $WslApt
         Update                       = $Update
         Winget                       = $Winget
@@ -502,7 +505,7 @@ Usage:
 
 Modes:
   Default              Run Windows Update only.
-  -Update              Run the managed-client pass: Winget, Winget(msstore), 7Zip, Choco, PowerShell7, WindowsUpdate.
+  -Update              Run the managed-client pass: Winget, Winget(msstore), Choco, PowerShell7, WindowsUpdate.
                         Updated package rows show current version -> target version when available.
    -11,-Win11,-Windows11
                        Run a Windows 10 -> Windows 11 feature upgrade using Microsoft's
@@ -510,6 +513,7 @@ Modes:
                         to log the download URL and installer command without launching it.
    -7,-PowerShell7      Run only the signed machine-wide PowerShell 7 MSI section. This is safe
                         to invoke from Windows PowerShell 5.1; Reparo does not replace its host.
+  -7Zip,-7z             Install 7-Zip through winget when missing, or update it when present.
   -Winget              Run a winget-focused pass. Reparo attempts to repair/register App Installer,
                        logs discovery output, then runs the Winget sections. In preview mode,
                        discovery still runs so you can refresh the visible upgrade list.
@@ -675,7 +679,6 @@ $windowsForceSections = @(
     'WindowsUpdate'
     'Winget'
     'Winget(msstore)'
-    '7Zip'
     'Choco'
     'Scoop'
     'Pip'
@@ -700,7 +703,6 @@ $updateSections = if ($script:ReparoIsWindows) {
         'WindowsUpdate'
         'Winget'
         'Winget(msstore)'
-        '7Zip'
         'Choco'
         'PowerShell7'
         'Opencode'
@@ -732,6 +734,13 @@ elseif ($WingetDiscover) {
 if ($PowerShell7Only) {
     $Include = @('PowerShell7')
 }
+elseif ($SevenZip) {
+    if (-not $script:ReparoIsWindows) {
+        throw '-7Zip is supported on Windows only because it deploys the 7zip.7zip winget package.'
+    }
+
+    $Include = @('7Zip')
+}
 elseif ($Force) {
     $Preview = $false
     if ($script:ReparoIsWindows) {
@@ -756,7 +765,7 @@ elseif ($InstallSpicetify) {
     $Include = @('Spicetify')
 }
 
-if (-not $script:ReparoIsWindows -and -not ($Update -or $Force -or $Include -or $Winget -or $WingetDiscover -or $Windows11Upgrade -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $InstallSpicetify -or $WindowsUpdate -or $WslApt)) {
+if (-not $script:ReparoIsWindows -and -not ($Update -or $Force -or $Include -or $Winget -or $WingetDiscover -or $Windows11Upgrade -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $InstallSpicetify -or $WindowsUpdate -or $WslApt -or $SevenZip)) {
     $Include = $linuxPackageSections
 }
 
@@ -2331,7 +2340,7 @@ if ($DeleteStale) {
     return
 }
 
-if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $Windows11Upgrade -or $WslApt -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
+if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $Windows11Upgrade -or $WslApt -or $SevenZip -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
