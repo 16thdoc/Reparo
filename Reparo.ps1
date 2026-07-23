@@ -130,7 +130,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.10'
+$script:ReparoVersion = '1.1.11'
 
 if ($ForceReboot -and $ForceShutdown) {
     throw '-Reboot and -Shutdown cannot be used together. Choose one post-run power action.'
@@ -502,7 +502,7 @@ Usage:
 
 Modes:
   Default              Run Windows Update only.
-  -Update              Run the managed-client pass: Winget, Winget(msstore), Choco, PowerShell7, WindowsUpdate.
+  -Update              Run the managed-client pass: Winget, Winget(msstore), 7Zip, Choco, PowerShell7, WindowsUpdate.
                         Updated package rows show current version -> target version when available.
    -11,-Win11,-Windows11
                        Run a Windows 10 -> Windows 11 feature upgrade using Microsoft's
@@ -607,7 +607,7 @@ After install, new PowerShell sessions can usually run:
   reparo -Install
 
 Common sections:
-  Winget, Winget(msstore), Choco, PowerShell7, WindowsUpdate, Windows11Upgrade,
+  Winget, Winget(msstore), 7Zip, Choco, PowerShell7, WindowsUpdate, Windows11Upgrade,
   Scoop, Apt, Dnf, Pacman, Zypper, Flatpak, Snap, Fwupd, Pip, Pipx, Npm, Opencode, Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer, Spicetify,
   Wsl, WslApt.
 
@@ -675,6 +675,7 @@ $windowsForceSections = @(
     'WindowsUpdate'
     'Winget'
     'Winget(msstore)'
+    '7Zip'
     'Choco'
     'Scoop'
     'Pip'
@@ -699,6 +700,7 @@ $updateSections = if ($script:ReparoIsWindows) {
         'WindowsUpdate'
         'Winget'
         'Winget(msstore)'
+        '7Zip'
         'Choco'
         'PowerShell7'
         'Opencode'
@@ -2823,8 +2825,8 @@ function Test-ReparoBenignExit {
 
     $text = ($Output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
 
-    if ($Section -like 'Winget*') {
-        return ($text -match 'No installed package found matching input criteria|No applicable update found|No available upgrade found|No packages found')
+    if ($Section -like 'Winget*' -or $Section -eq '7Zip') {
+        return ($text -match 'No installed package found matching input criteria|No applicable update found|No available upgrade found|No newer package versions are available|No packages found')
     }
 
     if ($Section -eq 'Fwupd' -and $ExitCode -eq 2) {
@@ -5490,6 +5492,24 @@ if ($runWingetSections) {
         Write-ReparoLog '[SKIP] winget not found or could not be repaired; skipping Winget sections'
         Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget' -Version '-' -Method 'Winget' -Reason 'winget not found or could not be repaired'
         Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget(msstore)' -Version '-' -Method 'Winget(msstore)' -Reason 'winget not found or could not be repaired'
+    }
+}
+
+if (Test-ReparoSectionSelected '7Zip') {
+    $sevenZipWingetId = '7zip.7zip'
+    $sevenZipLocked = @(Get-ReparoLockedPackageIds -Method 'winget') | Where-Object { $_ -ieq $sevenZipWingetId }
+    if ($sevenZipLocked.Count -gt 0) {
+        Write-Skip "7-Zip is version-locked: $sevenZipWingetId"
+        Write-ReparoLog "[SKIP] 7-Zip is version-locked: $sevenZipWingetId"
+        Add-ReparoSummaryRecord -Bucket Skipped -Software '7-Zip' -Version '-' -Method 'Winget' -Reason 'version lock'
+    }
+    else {
+        $sevenZipCommand = Get-Command 7z -ErrorAction SilentlyContinue
+        $sevenZipAction = if ($sevenZipCommand) { 'upgrade' } else { 'install' }
+        $sevenZipCommandText = "winget $sevenZipAction --id $sevenZipWingetId --exact --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity --silent"
+
+        Write-ReparoLog ("[CHECK] 7z present: {0}; action: {1}" -f [bool]$sevenZipCommand, $sevenZipAction)
+        Invoke-ReparoCommandStep -Section '7Zip' -PresenceCmd 'winget' -Command $sevenZipCommandText -TimeoutSeconds $WingetTimeoutSeconds
     }
 }
 

@@ -6,9 +6,9 @@ It updates common package managers and toolchains when they are already present 
 
 ## What it does
 
-By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, PowerShell 7 through Microsoft's signed machine-wide MSI, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, Spicetify, and WSL, plus a Chocolatey-to-winget migration pass.
+By default, Reparo runs Windows Update through `PSWindowsUpdate`. The managed-client `-Update` pass also ensures [7-Zip](https://www.7-zip.org/) is installed through winget when `7z` is absent, or updates it when present. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, PowerShell 7 through Microsoft's signed machine-wide MSI, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, Spicetify, and WSL, plus a Chocolatey-to-winget migration pass.
 
-Reparo does not install package managers from scratch. It only uses tools that are already present, then skips the sections that are not available.
+Reparo does not install package managers from scratch. It only uses tools that are already present, then skips the sections that are not available. The `-Update` 7-Zip check is the deliberate exception: CyberShell's encrypted ZIP support needs `7z`, so Reparo installs the `7zip.7zip` winget package when it is missing.
 
 ## Quick start
 
@@ -58,6 +58,12 @@ Run only selected sections:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Include Winget Choco
+```
+
+Ensure or update 7-Zip only:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Include 7Zip
 ```
 
 Preview Chocolatey-to-winget migration:
