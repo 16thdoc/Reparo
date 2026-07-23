@@ -6,7 +6,7 @@ It updates common package managers and toolchains when they are already present 
 
 ## What it does
 
-By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, PowerShell 7 through winget, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, Spicetify, and WSL, plus a Chocolatey-to-winget migration pass.
+By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, PowerShell 7 through Microsoft's signed machine-wide MSI, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, Spicetify, and WSL, plus a Chocolatey-to-winget migration pass.
 
 Reparo does not install package managers from scratch. It only uses tools that are already present, then skips the sections that are not available.
 
@@ -28,6 +28,7 @@ Reparo tries to add that folder to machine `PATH`, falling back to user `PATH` i
 
 ```powershell
 reparo -Update
+reparo -7
 reparo -Install
 reparo -Help
 reparo -Version
@@ -279,6 +280,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Preview` | Logs what would run without executing package manager commands. |
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, `PowerShell7`, and `WindowsUpdate`. |
 | `-11` / `-Win11` / `-Windows11` | Runs a Windows 10 to Windows 11 feature upgrade using Microsoft's Windows 11 Installation Assistant. Requires elevation. Use `-Preview -11` first to log the download URL and installer command without launching the upgrade goblin. |
+| `-7` / `-PowerShell7` | Runs only the signed, machine-wide PowerShell 7 MSI section. It is intended to be launched from Windows PowerShell 5.1 and does not update the host process. |
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |
 | `-WingetDiscover` | Repairs/refreshes winget if needed and runs only winget discovery commands. |
 | `-Search` / `-List` / `-S` / `-L` | Inventories applications Reparo `-Force` can update and prints installed versions, available versions when known, update method, source, lock status, and a ready-to-copy `LockSpec`. Add terms after the switch to filter, for example `reparo -Search git` or `reparo -List git`. PowerShell switch names are case-insensitive, so lowercase forms work too. |
@@ -310,7 +312,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Shutdown` | Shuts down the computer 30 seconds after Reparo completes. Cannot be combined with `-Reboot`. |
 | `-InstallNuGetProvider` | Bootstraps the NuGet provider before PSGallery installs when `true` (default). Set it to `false` only if you want to suppress that bootstrap attempt. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
-| `-Force` | Runs the full local-dev-tool pass, includes the per-user Spicetify update/backup/apply section, and enables Windows Update and WSL apt handling. Use carefully. |
+| `-Force` | Runs the full local-dev-tool pass, includes the per-user Spicetify update/backup/apply section, and enables Windows Update and WSL apt handling. It deliberately excludes PowerShell 7; run `-7` explicitly for that MSI update. Use carefully. |
 
 ### Version quote style
 
@@ -405,12 +407,13 @@ queries the latest stable GitHub release, validates the Authenticode signature,
 and skips installation only when the signed executable and Windows Installer
 registration confirm that the machine-wide MSI is already current.
 
-The section is included in `-Update` and `-Force`, and can also be run directly
-from an elevated session:
+The section is included in `-Update` but deliberately excluded from `-Force`, so
+an unattended full pass cannot update the PowerShell host beneath itself. Run it
+explicitly from an elevated Windows PowerShell 5.1 session:
 
 ```powershell
-reparo -Preview -Include PowerShell7
-reparo -Include PowerShell7
+reparo -Preview -7
+reparo -7
 ```
 
 If you need to freeze PowerShell 7 for a machine, use the existing winget lock format:

@@ -26,6 +26,8 @@ param(
     [switch]$WindowsUpdate,
     [Alias('Win11', 'Windows11', 'UpgradeToWindows11')]
     [switch]$Windows11Upgrade,
+    [Alias('7', 'PowerShell7')]
+    [switch]$PowerShell7Only,
     [Alias('WSL')]
     [switch]$WslApt,
     [Alias('U')]
@@ -128,7 +130,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.9'
+$script:ReparoVersion = '1.1.10'
 
 if ($ForceReboot -and $ForceShutdown) {
     throw '-Reboot and -Shutdown cannot be used together. Choose one post-run power action.'
@@ -221,6 +223,7 @@ function Get-ReparoVersionFlavor {
         '1.1.7'   = [pscustomobject]@{ Quote = 'This is the way.'; Source = 'The Mandalorian'; Art = '  SNAP: timeout escape hatch armed' }
         '1.1.8'   = [pscustomobject]@{ Quote = 'Game over, man! Game over!'; Source = 'Aliens'; Art = '  POWER: post-run shutdown sequencer armed' }
         '1.1.9'   = [pscustomobject]@{ Quote = 'Upgrade complete.'; Source = 'The Expanse'; Art = '  PWSH: machine-wide reactor online' }
+        '1.1.10'  = [pscustomobject]@{ Quote = 'This is how you get ants.'; Source = 'Archer'; Art = '  PWSH: update lane separated from the stampede' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -332,6 +335,7 @@ function Write-ReparoParameterBlock {
         Preview                      = $Preview
         WindowsUpdate                = $WindowsUpdate
         Windows11Upgrade             = $Windows11Upgrade
+        PowerShell7                  = $PowerShell7Only
         WslApt                       = $WslApt
         Update                       = $Update
         Winget                       = $Winget
@@ -477,7 +481,8 @@ Usage:
   reparo -Kill -KillUpdaterNames winget msiexec
   reparo -Update
   reparo -Install
-  reparo -11
+   reparo -11
+   reparo -7
   reparo -Preview -Update
   reparo -Winget
   reparo -WingetDiscover
@@ -499,10 +504,12 @@ Modes:
   Default              Run Windows Update only.
   -Update              Run the managed-client pass: Winget, Winget(msstore), Choco, PowerShell7, WindowsUpdate.
                         Updated package rows show current version -> target version when available.
-  -11,-Win11,-Windows11
+   -11,-Win11,-Windows11
                        Run a Windows 10 -> Windows 11 feature upgrade using Microsoft's
                        Windows 11 Installation Assistant. Requires elevation; use -Preview
-                       to log the download URL and installer command without launching it.
+                        to log the download URL and installer command without launching it.
+   -7,-PowerShell7      Run only the signed machine-wide PowerShell 7 MSI section. This is safe
+                        to invoke from Windows PowerShell 5.1; Reparo does not replace its host.
   -Winget              Run a winget-focused pass. Reparo attempts to repair/register App Installer,
                        logs discovery output, then runs the Winget sections. In preview mode,
                        discovery still runs so you can refresh the visible upgrade list.
@@ -557,7 +564,8 @@ Modes:
                        Example: -Syslog 192.168.50.31:514
                        Use -Syslog off or -Syslog disable to clear the saved target.
   -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
-  -Force               Run all sections, including developer toolchains and WSL apt handling.
+   -Force               Run all sections except PowerShell 7, including developer toolchains and WSL apt handling.
+                        Use -7 explicitly for the PowerShell 7 MSI update.
   -Kill                Stop running Reparo PowerShell processes and known updater front ends.
   -KillUpdaterNames    Additional process base names swept by -Kill after Reparo process trees stop.
                        Default: winget, choco, chocolatey, scoop, pip, pipx, npm, pnpm,
@@ -663,6 +671,29 @@ $linuxForceSections = @($linuxPackageSections + $linuxAppSections + @(
     'Spicetify'
 ))
 
+$windowsForceSections = @(
+    'WindowsUpdate'
+    'Winget'
+    'Winget(msstore)'
+    'Choco'
+    'Scoop'
+    'Pip'
+    'Pipx'
+    'Npm'
+    'Opencode'
+    'Pnpm'
+    'Yarn'
+    'DotNet'
+    'Rust'
+    'CargoBins'
+    'Conda'
+    'Gem'
+    'Composer'
+    'Spicetify'
+    'Wsl'
+    'WslApt'
+)
+
 $updateSections = if ($script:ReparoIsWindows) {
     @(
         'WindowsUpdate'
@@ -696,7 +727,10 @@ elseif ($WingetDiscover) {
         'Winget(upgrade list)'
     )
 }
-if ($Force) {
+if ($PowerShell7Only) {
+    $Include = @('PowerShell7')
+}
+elseif ($Force) {
     $Preview = $false
     if ($script:ReparoIsWindows) {
         $WindowsUpdate = $true
@@ -707,7 +741,7 @@ if ($Force) {
     }
     $IgnoreTimeouts = $true
     if ($script:ReparoIsWindows) {
-        $Include = $null
+        $Include = $windowsForceSections
     }
 }
 elseif ($Update) {
