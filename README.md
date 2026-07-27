@@ -180,7 +180,20 @@ $bootstrapUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/v1.0.0/Reparo.
 
 The same bootstrapper is also included at `deploy/Ninja-GitHub.ps1`.
 
-### Option 4: Install/update over SSH
+### Option 4: Offline-first Ninja deployment with an uploaded payload
+
+Use `deploy/Ninja-OfflineFirst.ps1` when most endpoints cannot reach GitHub. Upload
+it together with the repository-root `Reparo.ps1`. The deployer installs the uploaded
+payload first, optionally checks GitHub for a newer runtime, then runs Reparo. A
+blocked GitHub refresh is a warning rather than a failed maintenance run.
+
+The staged payload is found beside the deployer by default. If Ninja stages it
+elsewhere, pass its path with `-BundledReparoPath`. Use `-BundledSha256` with the
+payload's SHA-256 for a production deployment. Full deployment instructions and
+parameters are in `deploy/Ninja-OfflineFirst-README.md`; the click-by-click Ninja
+setup guide is `deploy/Ninja-OfflineFirst-Setup.md`.
+
+### Option 5: Install/update over SSH
 
 For personal Windows machines that are reachable over OpenSSH, use the remote helper:
 
@@ -194,7 +207,7 @@ Pass multiple SSH aliases or hosts to install the same ProgramData runtime on se
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy\Install-ReparoRemote.ps1 -ComputerName marajade,laptop
 ```
 
-### Option 5: ScreenConnect / Backstage tools
+### Option 6: ScreenConnect / Backstage tools
 
 ScreenConnect-ready command files are included under `deploy\ScreenConnect`.
 
