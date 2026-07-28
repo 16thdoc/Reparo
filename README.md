@@ -102,6 +102,9 @@ using the signed Reparo artifacts on managed endpoints. It trusts the internal r
 and approved signing publisher without distributing a private key. The signer workflow
 and certificate thumbprints are documented in `deploy/signing/README.md`.
 
+Every version bump or release-worthy change must follow `RELEASE.md` and run
+`deploy/signing/New-SignedReparoRelease.ps1` before commit.
+
 ### Ninja deployment options
 
 Use one of these patterns depending on how you want to manage updates.
