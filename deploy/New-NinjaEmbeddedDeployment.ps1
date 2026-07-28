@@ -13,6 +13,7 @@ param(
     [string]$OutputPath,
     [string]$DeploymentLabel = 'NinjaOne',
     [string]$NinjaCustomFieldName = 'Reparo',
+    [switch]$DisableNinjaCustomField,
     [ValidateSet('Dynamic', 'InstallOnly', 'OfflineInstallOnly', 'ReportOnly', 'Update')]
     [string]$FixedAction = 'InstallOnly'
 )
@@ -24,6 +25,9 @@ if ([string]::IsNullOrWhiteSpace($ReparoPath)) {
 }
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $PSScriptRoot 'Ninja-Embedded.ps1'
+}
+if ($DisableNinjaCustomField) {
+    $NinjaCustomFieldName = ''
 }
 
 $sourcePath = (Resolve-Path -LiteralPath $ReparoPath).Path

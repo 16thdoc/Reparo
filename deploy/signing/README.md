@@ -16,16 +16,21 @@ no options or arguments. It adds only public certificates: the root to
 
 ## Signing a release
 
-1. Make Reparo source changes.
-2. Generate the embedded artifacts.
-3. From the signing workstation, run Windows PowerShell 5.1:
+After any Reparo source or deployment-source change, run the complete release workflow
+from the signing workstation:
 
-   ```powershell
-   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy\signing\Sign-ReparoArtifacts.ps1
-   ```
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy\signing\New-SignedReparoRelease.ps1
+```
 
-4. Verify each artifact with `Get-AuthenticodeSignature`.
-5. Commit the signed files. Never export or commit the private key.
+It signs `Reparo.ps1`, regenerates all embedded Ninja/ScreenConnect artifacts from the
+signed source, signs those artifacts, and verifies the expected signer. It does **not**
+commit, push, or deploy; review the diff, commit it, then choose rollout deliberately.
+
+`Sign-ReparoArtifacts.ps1` remains the lower-level signer for an already-generated
+artifact set. Normal maintenance should use `New-SignedReparoRelease.ps1`.
+
+Never export or commit the private key.
 
 The trust deployment must run before endpoint verification can report `Valid`. If the
 signing workstation's local root store is policy-managed and rejects private-root
