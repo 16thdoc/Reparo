@@ -100,10 +100,11 @@ Reparo has a fleet-only internal signing identity under `deploy/signing/`. Deplo
 `deploy/signing/Install-ReparoInternalSigningTrust.ps1` through Ninja as SYSTEM before
 using the signed Reparo artifacts on managed endpoints. It trusts the internal root
 and approved signing publisher without distributing a private key. The signer workflow
-and certificate thumbprints are documented in `deploy/signing/README.md`.
+and certificate thumbprints are documented in `deploy/RMM-Operator-Guide.md`.
 
 Every version bump or release-worthy change must follow `RELEASE.md` and run
-`deploy/signing/New-SignedReparoRelease.ps1` before commit.
+`deploy/signing/New-SignedReparoRelease.ps1` before commit. The consolidated Ninja/
+ScreenConnect operator instructions are in `deploy/RMM-Operator-Guide.md`.
 
 ### Ninja deployment options
 
@@ -207,8 +208,8 @@ without installing, refreshing, or running Reparo. Use the fixed artifacts witho
 Ninja script options or arguments; Ninja can map imported options positionally and
 corrupt deployment paths.
 
-The full Ninja guide is `deploy/Ninja-Embedded-Setup.md`; the shorter version is
-`deploy/Ninja-Embedded-ELI5.md`.
+The complete Ninja/ScreenConnect operator guidance is in
+`deploy/RMM-Operator-Guide.md`.
 
 ### Option 5: Install/update over SSH
 
