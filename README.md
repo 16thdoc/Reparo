@@ -94,6 +94,14 @@ Recommended rollout pattern:
 3. Review logs and RMM output before broad deployment.
 4. Reserve `-Force` for known developer workstations or hands-on maintenance.
 
+## Internal code signing
+
+Reparo has a fleet-only internal signing identity under `deploy/signing/`. Deploy
+`deploy/signing/Install-ReparoInternalSigningTrust.ps1` through Ninja as SYSTEM before
+using the signed Reparo artifacts on managed endpoints. It trusts the internal root
+and approved signing publisher without distributing a private key. The signer workflow
+and certificate thumbprints are documented in `deploy/signing/README.md`.
+
 ### Ninja deployment options
 
 Use one of these patterns depending on how you want to manage updates.
