@@ -264,11 +264,17 @@ function Update-NinjaReparoCustomField {
         return
     }
 
-    & `$propertySetter.Name '$escapedCustomFieldName' `$version
-    if (`$null -ne `$LASTEXITCODE -and `$LASTEXITCODE -ne 0) {
-        throw "Ninja-Property-Set failed with exit code `$LASTEXITCODE."
+    try {
+        & `$propertySetter.Name -Name '$escapedCustomFieldName' -Value `$version
+        if (`$null -ne `$LASTEXITCODE -and `$LASTEXITCODE -ne 0) {
+            throw "Ninja-Property-Set failed with exit code `$LASTEXITCODE."
+        }
+        Write-Host "Ninja custom field '$escapedCustomFieldName' set to: `$version"
     }
-    Write-Host "Ninja custom field '$escapedCustomFieldName' set to: `$version"
+    catch {
+        if (`$Required) { throw }
+        Write-Warning "Reparo installed, but Ninja custom field '$escapedCustomFieldName' was not updated. `$(`$_.Exception.Message)"
+    }
 }
 
 if (`$reportOnlyRequested) {

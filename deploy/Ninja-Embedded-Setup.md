@@ -29,6 +29,9 @@ installs Reparo correctly. It intentionally does not delete unknown relative fol
 The embedded script unpacks its reviewed Reparo copy into a temporary folder,
 verifies its SHA-256, installs it in `%ProgramData%\Reparo`, tries a GitHub refresh,
 and finally runs Reparo. GitHub failure is a warning: the embedded copy still runs.
+Likewise, a normal install remains successful if Ninja rejects the version-field write;
+the output records a warning and `Ninja-Reparo-ReportOnly.ps1` remains available to
+diagnose/retry that field update directly.
 
 `Ninja-Embedded.ps1` is the normal install-only deployment. It installs/refreshes the
 runtime and updates the field, but does not run maintenance. Use the offline artifact
