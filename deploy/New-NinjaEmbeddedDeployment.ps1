@@ -32,7 +32,13 @@ if ($DisableNinjaCustomField) {
 
 $sourcePath = (Resolve-Path -LiteralPath $ReparoPath).Path
 $sourceBytes = [System.IO.File]::ReadAllBytes($sourcePath)
-$sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $sourceHash = ([System.BitConverter]::ToString($sha256.ComputeHash($sourceBytes))).Replace('-', '')
+}
+finally {
+    $sha256.Dispose()
+}
 
 $compressedStream = [System.IO.MemoryStream]::new()
 $gzip = [System.IO.Compression.GZipStream]::new(
@@ -108,6 +114,26 @@ function Resolve-DeploymentString {
     }
 
     return $Value
+}
+
+function Get-DeploymentSha256 {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    # Get-FileHash is absent from some old Windows PowerShell hosts still found in
+    # RMM execution contexts. Use the .NET primitive directly so payload integrity
+    # verification works everywhere Reparo supports.
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        return ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '')
+    }
+    finally {
+        $stream.Dispose()
+        $sha256.Dispose()
+    }
 }
 
 $InstallRoot = Resolve-DeploymentString -Value $InstallRoot -Default "$env:ProgramData\Reparo"
@@ -207,7 +233,7 @@ try {
         $input.Dispose()
     }
 
-    $actualHash = (Get-FileHash -LiteralPath $payloadPath -Algorithm SHA256).Hash
+    $actualHash = Get-DeploymentSha256 -Path $payloadPath
     if ($actualHash -ne $bundledSha256) {
         throw "Embedded Reparo SHA-256 mismatch. Expected $bundledSha256; got $actualHash."
     }
