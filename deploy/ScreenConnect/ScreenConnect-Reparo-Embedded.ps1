@@ -701,6 +701,9 @@ Remove-KnownMalformedReparoPath
 
 
 
+$installerDiagnosticRoot = Join-Path $env:ProgramData 'Reparo-Ninja-Diagnostics'
+New-Item -ItemType Directory -Path $installerDiagnosticRoot -Force | Out-Null
+
 function Invoke-ReparoInstaller {
     param(
         [Parameter(Mandatory)]
@@ -709,9 +712,32 @@ function Invoke-ReparoInstaller {
         [string]$SourceUrl
     )
 
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $BootstrapPath -New -InstallRoot $InstallRoot -LogRoot $LogRoot -SourceUrl $SourceUrl
-    if ($LASTEXITCODE -ne 0) {
-        throw "Reparo installer failed with exit code $LASTEXITCODE."
+    $attemptId = '{0}_{1}_{2}' -f $env:COMPUTERNAME, $PID, (Get-Date -Format 'yyyyMMdd_HHmmssfff')
+    $stdoutPath = Join-Path $installerDiagnosticRoot "installer_${attemptId}_stdout.log"
+    $stderrPath = Join-Path $installerDiagnosticRoot "installer_${attemptId}_stderr.log"
+    $argumentLine = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -New -InstallRoot "{1}" -LogRoot "{2}" -SourceUrl "{3}"' -f $BootstrapPath, $InstallRoot, $LogRoot, $SourceUrl
+
+    try {
+        $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $argumentLine -NoNewWindow -Wait -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    }
+    catch {
+        throw "Could not start the embedded Reparo installer. Bootstrap diagnostics: $installerDiagnosticRoot. $($_.Exception.Message)"
+    }
+
+    foreach ($stream in @(
+        [pscustomobject]@{ Label = 'stdout'; Path = $stdoutPath },
+        [pscustomobject]@{ Label = 'stderr'; Path = $stderrPath }
+    )) {
+        if (-not (Test-Path -LiteralPath $stream.Path -PathType Leaf)) { continue }
+        $text = Get-Content -LiteralPath $stream.Path -Raw -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($text)) {
+            Write-Host ("Embedded installer {0}:" -f $stream.Label)
+            Write-Host $text.TrimEnd()
+        }
+    }
+
+    if ($process.ExitCode -ne 0) {
+        throw "Reparo installer failed with exit code $($process.ExitCode). Bootstrap diagnostics: $installerDiagnosticRoot"
     }
 }
 

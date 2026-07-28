@@ -12,6 +12,7 @@ mechanism.
 | `Ninja-Embedded-Offline.ps1` | Install embedded Reparo without any GitHub request, then update the field. |
 | `Ninja-Reparo-ReportOnly.ps1` | Update only the `Reparo` custom field from the installed runtime. |
 | `Ninja-Reparo-Update.ps1` | Install/refresh Reparo, update the field, then run `-Update`. |
+| `Ninja-Reparo-Diagnostic.ps1` | Read-only runtime/log/PATH/Ninja setter inspection; use when a job result and filesystem disagree. |
 
 ## Create the Ninja automation
 
@@ -32,6 +33,10 @@ and finally runs Reparo. GitHub failure is a warning: the embedded copy still ru
 Likewise, a normal install remains successful if Ninja rejects the version-field write;
 the output records a warning and `Ninja-Reparo-ReportOnly.ps1` remains available to
 diagnose/retry that field update directly.
+
+If the embedded child installer fails before `%ProgramData%\Reparo` exists, its stdout
+and stderr are retained under `%ProgramData%\Reparo-Ninja-Diagnostics`. The parent
+automation prints those streams and the directory path in its failure output.
 
 `Ninja-Embedded.ps1` is the normal install-only deployment. It installs/refreshes the
 runtime and updates the field, but does not run maintenance. Use the offline artifact
