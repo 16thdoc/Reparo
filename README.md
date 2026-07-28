@@ -180,18 +180,22 @@ $bootstrapUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/v1.0.0/Reparo.
 
 The same bootstrapper is also included at `deploy/Ninja-GitHub.ps1`.
 
-### Option 4: Offline-first Ninja deployment with an uploaded payload
+### Option 4: Offline-first regular Ninja automation
 
-Use `deploy/Ninja-OfflineFirst.ps1` when most endpoints cannot reach GitHub. Upload
-it together with the repository-root `Reparo.ps1`. The deployer installs the uploaded
-payload first, optionally checks GitHub for a newer runtime, then runs Reparo. A
-blocked GitHub refresh is a warning rather than a failed maintenance run.
+Ninja regular scripts do not accept helper-file attachments, and Ninja Installer
+uploads accept only binary installer formats. Use the self-contained
+`deploy/Ninja-Embedded.ps1` instead. Generate it with
+`deploy/New-NinjaEmbeddedDeployment.ps1`, then import the generated file as a normal
+Ninja PowerShell script. It embeds and verifies a reviewed Reparo payload, installs
+it first, optionally checks GitHub for a newer runtime, then runs Reparo. A blocked
+GitHub refresh is a warning rather than a failed maintenance run.
 
-The staged payload is found beside the deployer by default. If Ninja stages it
-elsewhere, pass its path with `-BundledReparoPath`. Use `-BundledSha256` with the
-payload's SHA-256 for a production deployment. Full deployment instructions and
-parameters are in `deploy/Ninja-OfflineFirst-README.md`; the click-by-click Ninja
-setup guide is `deploy/Ninja-OfflineFirst-Setup.md`.
+The generated Ninja script also updates the device text custom field named `Reparo`
+with the installed runtime version. Run it with `-ReportOnly true` to refresh only
+that field without installing, refreshing, or running Reparo.
+
+The full Ninja guide is `deploy/Ninja-Embedded-Setup.md`; the shorter version is
+`deploy/Ninja-Embedded-ELI5.md`.
 
 ### Option 5: Install/update over SSH
 
@@ -216,6 +220,9 @@ ScreenConnect-ready command files are included under `deploy\ScreenConnect`.
 | `Install-Reparo.bat` | Installs or updates the ProgramData runtime from GitHub, repairs the `reparo.cmd` shim, and checks `reparo -Version`. |
 | `Run-Reparo-System.cmd` | Creates and starts a one-shot SYSTEM scheduled task that runs `C:\ProgramData\Reparo\Reparo.ps1 -Update`. |
 | `Run-Reparo-Force-System.cmd` | Creates and starts a one-shot SYSTEM scheduled task that runs `C:\ProgramData\Reparo\Reparo.ps1 -Force`. |
+| `Run-Reparo-Force-Reboot-System.cmd` | Runs `-Force -Reboot` as SYSTEM; the computer restarts after Reparo completes. |
+| `Run-Reparo-New-System.cmd` | Runs `-New` as SYSTEM to refresh the installed Reparo runtime from its configured source. |
+| `Run-Reparo-AllowReboot-System.cmd` | Runs `-AllowReboot` as SYSTEM; Windows Update may reboot if it requires one. |
 
 Run these from an elevated/admin or SYSTEM context. The installer is intentionally idempotent: if Reparo is already installed, it downloads the current GitHub script and updates the existing runtime in place.
 

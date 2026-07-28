@@ -2,11 +2,11 @@
 setlocal EnableExtensions
 
 set "INSTALL_ROOT=%ProgramData%\Reparo"
-set "BIN_ROOT=%INSTALL_ROOT%\bin"
 set "BOOTSTRAP=%TEMP%\Reparo.bootstrap.ps1"
 set "REPARO=%INSTALL_ROOT%\Reparo.ps1"
-set "SHIM=%BIN_ROOT%\reparo.cmd"
 set "URL=https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1"
+
+if /I "%~1"=="-Offline" goto :offline
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent()); if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 } exit 1"
 if errorlevel 1 (
@@ -44,7 +44,7 @@ if errorlevel 1 (
 )
 
 echo Installing/updating Reparo runtime...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%BOOTSTRAP%" -Install
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%BOOTSTRAP%" -New -InstallRoot "%INSTALL_ROOT%" -SourceUrl "%URL%"
 
 if errorlevel 1 (
   echo ERROR: Reparo install failed.
@@ -59,35 +59,11 @@ if not exist "%REPARO%" (
   exit /b 1
 )
 
-if not exist "%BIN_ROOT%" mkdir "%BIN_ROOT%"
-if errorlevel 1 (
-  echo ERROR: Could not create "%BIN_ROOT%".
-  exit /b %errorlevel%
-)
-
-echo Creating/updating reparo command shim...
-> "%SHIM%" echo @echo off
->> "%SHIM%" echo powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%REPARO%" %%*
-if errorlevel 1 (
-  echo ERROR: Could not create "%SHIM%".
-  exit /b %errorlevel%
-)
-
-echo Verifying PATH entry for reparo...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference = 'Stop'; $bin = '%BIN_ROOT%'; $sep = [IO.Path]::PathSeparator; $machine = [Environment]::GetEnvironmentVariable('Path','Machine'); $machineParts = @($machine -split [regex]::Escape([string]$sep) | Where-Object { $_ }); $user = [Environment]::GetEnvironmentVariable('Path','User'); $userParts = @($user -split [regex]::Escape([string]$sep) | Where-Object { $_ }); if (($machineParts -contains $bin) -or ($userParts -contains $bin)) { Write-Host 'PATH already includes Reparo bin.'; exit 0 }; try { [Environment]::SetEnvironmentVariable('Path', (@($machineParts) + $bin) -join $sep, 'Machine'); Write-Host 'Added Reparo bin to machine PATH.' } catch { [Environment]::SetEnvironmentVariable('Path', (@($userParts) + $bin) -join $sep, 'User'); Write-Host 'Added Reparo bin to user PATH.' }"
-
-if errorlevel 1 (
-  echo ERROR: Could not update PATH.
-  exit /b %errorlevel%
-)
-
-set "PATH=%PATH%;%BIN_ROOT%"
-
 echo.
 echo Reparo is installed/updated.
+echo Reparo owns its command shim and PATH registration.
 echo Current window test:
-call "%SHIM%" -Version
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%REPARO%" -Version
 
 echo.
 echo You can now run:
@@ -99,3 +75,16 @@ echo.
 echo If an old terminal does not recognize it yet, open a new terminal.
 
 exit /b 0
+
+:offline
+echo.
+echo === Reparo offline installer mode ===
+echo GitHub download skipped.
+if not exist "%REPARO%" (
+  echo ERROR: Reparo is not installed. Use ScreenConnect-Reparo-Embedded.ps1 for an offline first install.
+  exit /b 1
+)
+
+echo Existing Reparo runtime found:
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%REPARO%" -Version
+exit /b %errorlevel%
