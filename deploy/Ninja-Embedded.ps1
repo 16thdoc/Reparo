@@ -8,18 +8,16 @@ payload, installs that payload first, optionally refreshes it from GitHub, then 
 the requested Reparo mode. No helper-file attachment is required.
 #>
 [CmdletBinding()]
-param(
-    [string]$InstallRoot = "$env:ProgramData\Reparo",
-    [string]$LogRoot = "$env:ProgramData\Reparo\Logs",
-    [string]$InstallOnly = 'false',
-    [string]$ReportOnly = 'false',
-    [string]$Offline = 'false',
-    [string]$RefreshFromGitHub = 'true',
-    [string]$RemoteReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1',
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$ReparoArguments
-)
+param()
 
+$InstallRoot = "$env:ProgramData\Reparo"
+$LogRoot = "$env:ProgramData\Reparo\Logs"
+$InstallOnly = 'true'
+$ReportOnly = 'false'
+$Offline = 'false'
+$RefreshFromGitHub = 'true'
+$RemoteReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
+$ReparoArguments = @()
 $ErrorActionPreference = 'Stop'
 $bundledSha256 = '49C076C29FB5EE551C6997EA3B8B38A432E42B1572CBA94E79E3EEC82310F493'
 $bundledGzipBase64 = @(
@@ -673,6 +671,31 @@ $refreshRequested = Convert-DeploymentToggle -Value $RefreshFromGitHub -Default 
 if ($offlineRequested) {
     $refreshRequested = $false
 }
+
+function Remove-KnownMalformedReparoPath {
+    # Earlier imported Ninja script options could be mapped positionally, producing
+    # a literal relative machine PATH entry of ReportOnly\bin. Remove only that
+    # exact known-bad entry; do not guess at or delete working directories.
+    $badEntry = 'ReportOnly\bin'
+    $separator = [IO.Path]::PathSeparator
+    foreach ($scope in @('Machine', 'User')) {
+        try {
+            $current = [Environment]::GetEnvironmentVariable('Path', $scope)
+            if ([string]::IsNullOrWhiteSpace($current)) { continue }
+            $parts = @($current -split [regex]::Escape([string]$separator) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $updated = @($parts | Where-Object { $_ -ne $badEntry })
+            if ($updated.Count -ne $parts.Count) {
+                [Environment]::SetEnvironmentVariable('Path', ($updated -join $separator), $scope)
+                Write-Host "Removed malformed Reparo PATH entry from $scope PATH: $badEntry"
+            }
+        }
+        catch {
+            Write-Warning "Could not inspect $scope PATH for malformed Reparo entry. $($_.Exception.Message)"
+        }
+    }
+}
+
+Remove-KnownMalformedReparoPath
 
 function Update-NinjaReparoCustomField {
     param(

@@ -1,72 +1,40 @@
 # Set up Reparo in NinjaOne
 
-Use `Ninja-Embedded.ps1`. It is one self-contained PowerShell script, generated
-from the reviewed repository `Reparo.ps1`. Import it into a regular Ninja PowerShell
-automation; it needs no supporting files or Installer entry.
+Use one of the fixed self-contained PowerShell scripts below. They are generated from
+the reviewed repository `Reparo.ps1`, import into regular Ninja PowerShell automations,
+and intentionally expose **no Ninja script options or arguments**. Ninja can map
+imported options positionally and corrupt paths; fixed tools avoid that entire cursed
+mechanism.
+
+| File | Action |
+| --- | --- |
+| `Ninja-Embedded.ps1` | Install or refresh Reparo, then update the `Reparo` custom field. |
+| `Ninja-Embedded-Offline.ps1` | Install embedded Reparo without any GitHub request, then update the field. |
+| `Ninja-Reparo-ReportOnly.ps1` | Update only the `Reparo` custom field from the installed runtime. |
+| `Ninja-Reparo-Update.ps1` | Install/refresh Reparo, update the field, then run `-Update`. |
 
 ## Create the Ninja automation
 
 1. In NinjaOne, create or import a **PowerShell** script.
-2. Import `Ninja-Embedded.ps1`.
+2. Import the one fixed script matching the action you want.
 3. Name it `Reparo - Embedded Update`.
 4. Set it to run as **SYSTEM**.
-5. Use the pilot arguments below, test one device, then use the live arguments.
+5. Leave Ninja's arguments/options blank.
+
+If a prior imported-option run showed `Install root: ReportOnly` or a log path under
+`true\`, remove its Ninja options and re-import the current fixed artifact. Its first
+run removes the exact malformed `ReportOnly\bin` machine/user PATH entry before it
+installs Reparo correctly. It intentionally does not delete unknown relative folders.
 
 The embedded script unpacks its reviewed Reparo copy into a temporary folder,
 verifies its SHA-256, installs it in `%ProgramData%\Reparo`, tries a GitHub refresh,
 and finally runs Reparo. GitHub failure is a warning: the embedded copy still runs.
 
-## Arguments
-
-With no arguments, the script installs or refreshes Reparo and stops. It does not run
-maintenance until you explicitly request a Reparo mode.
-
-Pilot first:
-
-```text
--Preview -Update
-```
-
-Normal managed-client maintenance:
-
-```text
--Update
-```
-
-No GitHub connection at all:
-
-```text
--Offline true -Update
-```
-
-`-Offline true` installs the embedded payload and skips the GitHub refresh even if
-`RefreshFromGitHub` is also set to `true`.
-
-Update only the Ninja device custom field named `Reparo`; do not install, refresh, or
-run Reparo:
-
-```text
--ReportOnly true
-```
-
-Install or refresh Reparo only; do not run maintenance:
-
-```text
--InstallOnly true
-```
-
-For a completely offline install-only run:
-
-```text
--InstallOnly true -Offline true
-```
-
-The default remote refresh URL follows `main`. For a controlled deployment, use a
-reviewed commit-pinned URL instead:
-
-```text
--RemoteReparoUrl https://raw.githubusercontent.com/16thdoc/Reparo/5012a1dc68deb6e29e7ec67d86b479f518974ac8/Reparo.ps1 -Update
-```
+`Ninja-Embedded.ps1` is the normal install-only deployment. It installs/refreshes the
+runtime and updates the field, but does not run maintenance. Use the offline artifact
+when GitHub should not be contacted. For an update pilot, clone the fixed Update
+artifact and replace its generated `-Update` setting with `-Preview -Update` locally,
+then import that separate fixed artifact; never add Ninja options to the script.
 
 ## What to expect in job output
 
@@ -88,12 +56,14 @@ modified. Re-import the reviewed `Ninja-Embedded.ps1`.
 
    ```powershell
    .\deploy\New-NinjaEmbeddedDeployment.ps1
+   .\deploy\New-NinjaEmbeddedDeployment.ps1 -OutputPath .\deploy\Ninja-Embedded-Offline.ps1 -FixedAction OfflineInstallOnly
+   .\deploy\New-NinjaEmbeddedDeployment.ps1 -OutputPath .\deploy\Ninja-Reparo-ReportOnly.ps1 -FixedAction ReportOnly
+   .\deploy\New-NinjaEmbeddedDeployment.ps1 -OutputPath .\deploy\Ninja-Reparo-Update.ps1 -FixedAction Update
    ```
 
-3. Import the freshly generated `deploy\Ninja-Embedded.ps1` into Ninja, replacing
-   the prior version.
-4. Pilot `-Preview -Update` on a representative endpoint.
-5. Promote the live `-Update` automation after reviewing the output.
+3. Import the appropriate freshly generated artifact into Ninja, replacing its prior
+   version.
+4. Pilot on a representative endpoint before broad deployment.
 
 Do not make `-Force` the default fleet job. It is deliberately broader than the
 managed-client `-Update` pass and belongs in an explicit maintenance window.

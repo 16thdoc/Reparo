@@ -12,7 +12,9 @@ param(
     [string]$ReparoPath,
     [string]$OutputPath,
     [string]$DeploymentLabel = 'NinjaOne',
-    [string]$NinjaCustomFieldName = 'Reparo'
+    [string]$NinjaCustomFieldName = 'Reparo',
+    [ValidateSet('Dynamic', 'InstallOnly', 'OfflineInstallOnly', 'ReportOnly', 'Update')]
+    [string]$FixedAction = 'InstallOnly'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -114,6 +116,31 @@ $refreshRequested = Convert-DeploymentToggle -Value $RefreshFromGitHub -Default 
 if ($offlineRequested) {
     $refreshRequested = $false
 }
+
+function Remove-KnownMalformedReparoPath {
+    # Earlier imported Ninja script options could be mapped positionally, producing
+    # a literal relative machine PATH entry of ReportOnly\bin. Remove only that
+    # exact known-bad entry; do not guess at or delete working directories.
+    $badEntry = 'ReportOnly\bin'
+    $separator = [IO.Path]::PathSeparator
+    foreach ($scope in @('Machine', 'User')) {
+        try {
+            $current = [Environment]::GetEnvironmentVariable('Path', $scope)
+            if ([string]::IsNullOrWhiteSpace($current)) { continue }
+            $parts = @($current -split [regex]::Escape([string]$separator) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $updated = @($parts | Where-Object { $_ -ne $badEntry })
+            if ($updated.Count -ne $parts.Count) {
+                [Environment]::SetEnvironmentVariable('Path', ($updated -join $separator), $scope)
+                Write-Host "Removed malformed Reparo PATH entry from $scope PATH: $badEntry"
+            }
+        }
+        catch {
+            Write-Warning "Could not inspect $scope PATH for malformed Reparo entry. $($_.Exception.Message)"
+        }
+    }
+}
+
+Remove-KnownMalformedReparoPath
 
 __NINJA_CUSTOM_FIELD_BLOCK__
 
@@ -254,6 +281,63 @@ if (`$reportOnlyRequested) {
 }
 
 $script = $template.Replace('__BUNDLED_SHA256__', $sourceHash).Replace('__BUNDLED_GZIP_BASE64__', $base64Literal).Replace('__DEPLOYMENT_LABEL__', $DeploymentLabel).Replace('__NINJA_CUSTOM_FIELD_BLOCK__', $ninjaCustomFieldBlock).Replace('__NINJA_CUSTOM_FIELD_UPDATE__', $ninjaCustomFieldUpdate)
+
+if ($FixedAction -ne 'Dynamic') {
+    $fixedSettings = switch ($FixedAction) {
+        'InstallOnly' {
+            @"
+`$InstallRoot = "`$env:ProgramData\Reparo"
+`$LogRoot = "`$env:ProgramData\Reparo\Logs"
+`$InstallOnly = 'true'
+`$ReportOnly = 'false'
+`$Offline = 'false'
+`$RefreshFromGitHub = 'true'
+`$RemoteReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
+`$ReparoArguments = @()
+"@
+        }
+        'OfflineInstallOnly' {
+            @"
+`$InstallRoot = "`$env:ProgramData\Reparo"
+`$LogRoot = "`$env:ProgramData\Reparo\Logs"
+`$InstallOnly = 'true'
+`$ReportOnly = 'false'
+`$Offline = 'true'
+`$RefreshFromGitHub = 'false'
+`$RemoteReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
+`$ReparoArguments = @()
+"@
+        }
+        'ReportOnly' {
+            @"
+`$InstallRoot = "`$env:ProgramData\Reparo"
+`$LogRoot = "`$env:ProgramData\Reparo\Logs"
+`$InstallOnly = 'true'
+`$ReportOnly = 'true'
+`$Offline = 'true'
+`$RefreshFromGitHub = 'false'
+`$RemoteReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
+`$ReparoArguments = @()
+"@
+        }
+        'Update' {
+            @"
+`$InstallRoot = "`$env:ProgramData\Reparo"
+`$LogRoot = "`$env:ProgramData\Reparo\Logs"
+`$InstallOnly = 'false'
+`$ReportOnly = 'false'
+`$Offline = 'false'
+`$RefreshFromGitHub = 'true'
+`$RemoteReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
+`$ReparoArguments = @('-Update')
+"@
+        }
+    }
+
+    $script = [regex]::Replace($script, '(?s)\[CmdletBinding\(\)\]\s*param\(.*?\n\)\s*\n', "[CmdletBinding()]`nparam()`n`n", 1)
+    $script = $script.Replace("`$ErrorActionPreference = 'Stop'", "$fixedSettings`n`$ErrorActionPreference = 'Stop'")
+}
+
 $outputDirectory = Split-Path -Parent $OutputPath
 if (-not [string]::IsNullOrWhiteSpace($outputDirectory)) {
     New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
