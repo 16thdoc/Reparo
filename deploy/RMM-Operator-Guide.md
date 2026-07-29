@@ -64,6 +64,7 @@ parameters. Pick the separate script that performs the action you want.
 | `Ninja-Reparo-ReportOnly.ps1` | Reads the installed runtime and updates only the Ninja `Reparo` field. |
 | `Ninja-Reparo-Update.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Update`. |
 | `Ninja-Reparo-Force-AllowReboot.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force -AllowReboot`. Windows Update may reboot only if required. |
+| `Ninja-Reparo-Kill.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Kill` to stop stuck Reparo and known updater processes. No reboot. |
 | `Ninja-Reparo-Diagnostic.ps1` | Read-only inspection of runtime, logs, PATH, execution context, Ninja field support, and runtime signature. |
 
 All Ninja artifacts run as **SYSTEM**. They are suitable for normal RMM deployment;
