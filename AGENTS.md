@@ -16,7 +16,7 @@ the workflow instead.
 
 Then inspect `git status`, `git diff`, and signature output before committing. Commit
 the signed source, generated artifacts, and relevant documentation together. Do not
-push unless Trenton explicitly asks.
+leave generated deployment artifacts behind.
 
 The signing private key is non-exportable and must never be exported, copied, logged,
 or committed. Public trust material and workflow documentation live in
