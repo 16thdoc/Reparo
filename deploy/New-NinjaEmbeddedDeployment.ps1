@@ -386,12 +386,12 @@ if ($FixedAction -ne 'Dynamic') {
             @"
 `$InstallRoot = "`$env:ProgramData\Reparo"
 `$LogRoot = "`$env:ProgramData\Reparo\Logs"
-`$InstallOnly = 'false'
+`$InstallOnly = 'true'
 `$ReportOnly = 'false'
 `$Offline = 'false'
 `$RefreshFromGitHub = 'true'
 `$RemoteReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
-`$ReparoArguments = @('-Update')
+`$ReparoArguments = @()
 "@
         }
         'ForceAllowReboot' {

@@ -62,7 +62,7 @@ parameters. Pick the separate script that performs the action you want.
 | `Ninja-Embedded.ps1` | Installs/refreshes Reparo, then writes the installed version to the Ninja device field `Reparo`. No maintenance run. |
 | `Ninja-Embedded-Offline.ps1` | Installs the embedded signed runtime without contacting GitHub, then writes the version field. |
 | `Ninja-Reparo-ReportOnly.ps1` | Reads the installed runtime and updates only the Ninja `Reparo` field. |
-| `Ninja-Reparo-Update.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Update`. |
+| `Ninja-Reparo-Update.ps1` | Installs/refreshes Reparo and updates the version field. No machine maintenance run. |
 | `Ninja-Reparo-Force-AllowReboot.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force -AllowReboot`. Windows Update may reboot only if required. |
 | `Ninja-Reparo-Kill.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Kill` to stop stuck Reparo and known updater processes. No reboot. |
 | `Ninja-Reparo-Diagnostic.ps1` | Read-only inspection of runtime, logs, PATH, execution context, Ninja field support, and runtime signature. |
@@ -165,7 +165,7 @@ Ninja-Embedded-Offline.ps1
 It installs only the signed Reparo payload embedded in the artifact. It makes no
 GitHub request.
 
-#### Run managed-client maintenance
+#### Refresh Reparo only
 
 Use:
 
@@ -173,8 +173,8 @@ Use:
 Ninja-Reparo-Update.ps1
 ```
 
-This runs Reparo's deliberate `-Update` lane after installation/refresh. It is not
-the fleet default; pilot it before broad use.
+This refreshes only the Reparo runtime and version field. It does not run Windows
+Update, winget, or any other machine maintenance.
 
 #### Refresh only the version custom field
 
@@ -288,7 +288,8 @@ trophy.
 ### 6. Current deployment safety rules
 
 - Default RMM deployment is install-only.
-- `Ninja-Reparo-Update.ps1` is the explicit maintenance tool.
+- `Ninja-Reparo-Update.ps1` refreshes Reparo only; use the explicitly named
+  `Ninja-Reparo-Force-AllowReboot.ps1` for broad maintenance.
 - `-Force` is a maintenance-window/hands-on tool, not a fleet default.
 - `-Force -Reboot` deliberately reboots after completion.
 - Do not add Ninja parameters/options to fixed artifacts.
