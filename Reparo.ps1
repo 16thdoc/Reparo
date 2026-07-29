@@ -132,7 +132,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.14'
+$script:ReparoVersion = '1.1.15'
 
 if ($ForceReboot -and $ForceShutdown) {
     throw '-Reboot and -Shutdown cannot be used together. Choose one post-run power action.'
@@ -228,6 +228,7 @@ function Get-ReparoVersionFlavor {
         '1.1.10'  = [pscustomobject]@{ Quote = 'This is how you get ants.'; Source = 'Archer'; Art = '  PWSH: update lane separated from the stampede' }
         '1.1.13'  = [pscustomobject]@{ Quote = 'Hack the planet!'; Source = 'Hackers'; Art = '  HASH: RMM compatibility goblin removed from the airlock' }
         '1.1.14'  = [pscustomobject]@{ Quote = 'This is the way.'; Source = 'The Mandalorian'; Art = '  RMM: deployment lanes labeled before anyone touches the big red button' }
+        '1.1.15'  = [pscustomobject]@{ Quote = 'There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  WU: COM ectoplasm filtered from the console' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -4907,6 +4908,12 @@ function Test-ReparoIgnorableCommandOutputLine {
         }
     }
 
+    # PSWindowsUpdate sometimes writes raw Windows Update COM objects directly to
+    # the host. They carry no operator-useful status and render as this noise.
+    if ($Section -eq 'WindowsUpdate' -and $text -eq 'System.__ComObject') {
+        return $true
+    }
+
     return $false
 }
 
@@ -6514,8 +6521,8 @@ if ($script:ReparoFinalStatus -eq 'FAILED') {
 # SIG # Begin signature block
 # MIIdnQYJKoZIhvcNAQcCoIIdjjCCHYoCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUc8o8GIOHBsGxqhO48GfHLHXc
-# V9SggheGMIIESDCCArCgAwIBAgIQLVS+Lgx5x4dK1qeO0Fy3mDANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUSHqIrLo3/ogfqHukpWaQr0iO
+# tEOggheGMIIESDCCArCgAwIBAgIQLVS+Lgx5x4dK1qeO0Fy3mDANBgkqhkiG9w0B
 # AQsFADAiMSAwHgYDVQQDDBdSZXBhcm8gSW50ZXJuYWwgUm9vdCBDQTAeFw0yNjA3
 # MjgyMDExMTBaFw0yOTA3MjgyMDIxMTBaMCcxJTAjBgNVBAMMHFJlcGFybyBJbnRl
 # cm5hbCBDb2RlIFNpZ25pbmcwggGiMA0GCSqGSIb3DQEBAQUAA4IBjwAwggGKAoIB
@@ -6644,31 +6651,31 @@ if ($script:ReparoFinalStatus -eq 'FAILED') {
 # A1UEAwwXUmVwYXJvIEludGVybmFsIFJvb3QgQ0ECEC1Uvi4MeceHStanjtBct5gw
 # CQYFKw4DAhoFAKB4MBgGCisGAQQBgjcCAQwxCjAIoAKAAKECgAAwGQYJKoZIhvcN
 # AQkDMQwGCisGAQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUw
-# IwYJKoZIhvcNAQkEMRYEFGgOLYxolTYjDDnJfI+RAwXd+ypQMA0GCSqGSIb3DQEB
-# AQUABIIBgCXMQyR6PI018iP0Rbhsg7e3vHLj/mHGYokd5OfRX7D0Dqg/s1r8MyAx
-# dp/xKy7uDFwFcKVp95M8qeu/FHnVwxlJJeXoy7Y+2MXjTxI9AwZ1d/GPYKDrMl8O
-# leYyGeQRPB8AT7NNq7TyD+QQcTF6nDthXOR34SgkkRVLQZIxk37a2y6IgYiEntIb
-# hiD8RdAVgwFW/uDFE37efzeyg87RnCblsuxlzaAQrACrB+zHJquPmAlvnS68tOcD
-# VSBtt4OI0UbxKtI5Fa6ehp0PX3nZgmM9AFAzM/bSDfd7nzzF4h3PKhgdWML+0TlA
-# LskmJfcWXL5o/YuQuP16ie8+029djl5TGdnDgm3QrVALH/MHl9yBgsRBkKCcrU2U
-# dTzXRPaFvWBC9C3Hlmg+2kjDt92fTObEMr5KUrEQ54pP77OMZTIsMW6KMEZES6Su
-# oDK9Q08yS54eTzENtKQF/BiwGI5VTpCq47gIg2/gH2W1jFOZ6ASiU1kGpPP6rvqq
-# 6b74re0gzKGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNV
+# IwYJKoZIhvcNAQkEMRYEFJY+YYq3j01Ba23gDqcsRtaKO5gmMA0GCSqGSIb3DQEB
+# AQUABIIBgKgi9zMX4WerUKPiT+lG2o2VmiAWQ5mOkqE5+d53izEluu/SQo67pQ0u
+# 0zYRyyUH6djZIegjALUz8540mVgT00Ae0ZbJxSVLTxW6GK9uu5WKAxpuZyOWS/F4
+# wVVqu+twmddupWQ5XKHDXSnYWwbWXJ+1KcSXvQW1ejniVCEvsBPaQAw1IwpOq/Y6
+# nDrASBUYZv4zuSCyLnffqEWIv4K+V68SA7HEe3CLFMHSBIJyAYtsAcubkR4vQRDZ
+# /RdA3Gr8IGjz7hGj7NE4KVFnV5YGTb+tTXOq/m3AfsbdkvGINxvuIQPYF6NMKcX2
+# zlU1dAbLXGWaP2JnZkP9t8/XO+QZiNltIBr3fTRBA6XfcibEbPh5OJGZVeAJbF4E
+# VmstCNPyKLcphBGQWZqiWsDzncBJrWJdzBqAbhTZAEp3YM62W3J1lZldHb/FlXk0
+# ycHz7ASjamfN67AHgoKPgEd3yJo8BpYVEEvqHnL4WJcgwXp+vIDIrwHR2QfRNToT
+# RHuebm3C1aGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNV
 # BAYTAlVTMRcwFQYDVQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNl
 # cnQgVHJ1c3RlZCBHNCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBD
 # QTECEAqA7xhLjfEFgtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0B
-# CQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA3MjkwMDM0MDBaMC8G
-# CSqGSIb3DQEJBDEiBCCnUIkFl/pcqCG/GJ94H+N4cL71nlscS4BO6dZvCL2wWjAN
-# BgkqhkiG9w0BAQEFAASCAgDGcidzgYUYJsVeANVPbVUgZCweJEtJ0IpjtFeSq3Os
-# 3U/KkIQX9ERgLOlZIQ6a3THd47m3lMH2mh75IpM+jXFszxzVjKAN7YvR6R7MDa5/
-# BQ7XsWVhaWsqD+kdV5AtBKnQqUcxPNf15Ot8QBp5OXKSjLeDBpRZYt7u+oVmzu8D
-# Vx0mOjHSJB+UdZIv7grne32m+xSenr7xNq89BeOO4O2tGdGiEmuZ6HthhOrhf4G2
-# VnP+0pnTriUvEuxmm7nOcWyGXlRsF9LtJcMN6y/AKO2521JC2syUstYX+33Dxcte
-# D9hseUc3x/NdMRnaIqJ/5kt/Vte6XOLwev8tT+g0dhRRYM7hxS9/FkgGC4kEHq2B
-# yOPEh2s2iU+k9uqURBLZ8lD9ysfzZ1OxAYR7m0OTB4D10cDy+r6d5re65JgbLmwd
-# JwNc/bPx9tr3L9AbB0Y6xUGReHOf9+soY7Ga8VoWIFsKr7skkJBxOH+/D8RVYxX3
-# mbosA410s5dHgDRH9rrhEtUajBY1YGItSmhPkELTc1uIJAQfn1uEWW9XTMLqbHZY
-# 6HYyYYRCQarlef0uFbCl79L6y6giZfKQsPMBt4Ym5M9KUVa419JMSEqJlIHUAR1q
-# VoipcrIMYUa4VWRBziLeXxYZ4U1NdhsVkIPJWsJPux1c4XxKvAc238hHRevGKp3x
-# Vg==
+# CQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA3MjkwMDUxMDdaMC8G
+# CSqGSIb3DQEJBDEiBCDQYqnVcQob43lF/MbS7yjiPflnoOLHFOOEm1K0h+fmBDAN
+# BgkqhkiG9w0BAQEFAASCAgAfCzctKt2tI7rITW2+B19nNaoGP3Vww+CcCFfuhLyO
+# vTS03g7Kno8NoNTh1Hvi49MJ/7z0OxmktCE3AslorqxTNcLntqF6ZKchRHW/vjfS
+# TTRe4dCbmUtg2tG3pTHgDdpkHKcPDpWhJ2VgOkMNBGBXYYQoxNbS/eo+m6hY9g7/
+# qvEYv6BY2G16glEGUvIV1UCyZeWlpOY/uxrk+AWh2ev6oEZ5HjqlOTlvxBXfMWda
+# Xq0aXd+snCgVLgWC/PbyhpzfXRvhGZuzgACxUaCGDbQPavOexQaNnh8PyGW4mOgP
+# WFKf/MNbTk3dNQbXH+/ClvYQwZq9+kAkmp4oz9ujnoLUpKgMjOeMYnY+JhQMMvRZ
+# ILm+QcR7YcOtbatZDsXu2B3nMGfal4/EEIFl6WyIKb3PqKg0iUDADRe8ksKkNHNm
+# 7+zallh0tJR6goa4fcHEVW7z2ZRcwnVNE3XzTAlgNCKsezRhcVB6pe/Hdu6Qq5RH
+# aVnUMZmPoLDghmcF8ges8dsf6vVPrgXrLEQj63l1qwjDWIctNcye+237uI7DFcH1
+# SWkynJMqLrC5ng6k7oXfZbZK7ylsf8zEyERW6dzpWka2c1f+VawFbXyjmY42vfiP
+# 9pkElNFRoiSMr8L3IkgMvsWfNbX9vpWwrDTJb1O6JfX9BiyVR08dbbYRIYUXYwAQ
+# 1g==
 # SIG # End signature block
