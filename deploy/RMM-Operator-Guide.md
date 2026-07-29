@@ -45,6 +45,7 @@ Upload the wanted file from `ScreenConnect\` into Toolbox and run it as SYSTEM/a
 | First install / refresh with GitHub | `Install-Reparo.bat` |
 | Standard managed update | `Run-Reparo-System.cmd` |
 | Broad maintenance | `Run-Reparo-Force-System.cmd` |
+| Broad maintenance; Windows Update may reboot if required | `Run-Reparo-Force-AllowReboot-System.cmd` |
 | Broad maintenance then reboot | `Run-Reparo-Force-Reboot-System.cmd` |
 | Refresh installed runtime | `Run-Reparo-New-System.cmd` |
 | Windows Update allowed to reboot | `Run-Reparo-AllowReboot-System.cmd` |
