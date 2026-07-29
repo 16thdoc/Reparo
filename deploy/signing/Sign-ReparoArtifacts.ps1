@@ -23,6 +23,7 @@ $targets = @(
     (Join-Path $repoRoot 'deploy\Ninja-Embedded-Offline.ps1'),
     (Join-Path $repoRoot 'deploy\Ninja-Reparo-ReportOnly.ps1'),
     (Join-Path $repoRoot 'deploy\Ninja-Reparo-Update.ps1'),
+    (Join-Path $repoRoot 'deploy\Ninja-Reparo-Force-AllowReboot.ps1'),
     (Join-Path $repoRoot 'deploy\Ninja-Reparo-Diagnostic.ps1'),
     (Join-Path $repoRoot 'deploy\ScreenConnect\ScreenConnect-Reparo-Embedded.ps1'),
     (Join-Path $repoRoot 'deploy\signing\Install-ReparoInternalSigningTrust.ps1')
