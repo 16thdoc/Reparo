@@ -125,6 +125,8 @@ param(
     [ValidateRange(1, 10000)]
     [Alias('TL')]
     [int]$TailLines = 400,
+    [Alias('At')]
+    [string]$Time,
     [Alias('I')]
     [string[]]$Include,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -132,7 +134,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.15'
+$script:ReparoVersion = '1.1.16'
+$script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
     throw '-Reboot and -Shutdown cannot be used together. Choose one post-run power action.'
@@ -229,6 +232,7 @@ function Get-ReparoVersionFlavor {
         '1.1.13'  = [pscustomobject]@{ Quote = 'Hack the planet!'; Source = 'Hackers'; Art = '  HASH: RMM compatibility goblin removed from the airlock' }
         '1.1.14'  = [pscustomobject]@{ Quote = 'This is the way.'; Source = 'The Mandalorian'; Art = '  RMM: deployment lanes labeled before anyone touches the big red button' }
         '1.1.15'  = [pscustomobject]@{ Quote = 'There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  WU: COM ectoplasm filtered from the console' }
+        '1.1.16'  = [pscustomobject]@{ Quote = 'Time is an illusion. Lunchtime doubly so.'; Source = 'The Hitchhiker''s Guide to the Galaxy'; Art = '  CLOCK: one-shot maintenance ritual queued' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -390,6 +394,7 @@ function Write-ReparoParameterBlock {
         DeleteStale                  = $DeleteStale
         Tail                         = $Tail
         TailLines                    = $TailLines
+        Time                         = $Time
         Include                      = $Include
         RemainingInclude             = $RemainingInclude
         Debug                        = [bool]($PSBoundParameters.ContainsKey('Debug'))
@@ -504,6 +509,8 @@ Usage:
   reparo -Tail
   reparo -Status
   reparo -Status -Sweep
+  reparo -Force -Time 11:45pm
+  reparo -Update -Time 6hr
   reparo -Include Winget Choco
 
 Modes:
@@ -580,6 +587,11 @@ Modes:
   -Preview             Show what would run without executing update commands.
   -Tail, -Log          Follow the active log when used alone, or print this run's log tail at the end.
   -TailLines           Number of log lines to show when tailing. Default: 400.
+  -Time,-At <when>     Windows only. Schedule a one-shot SYSTEM Reparo run, then exit.
+                        Clock times: 11:45pm, 11pm, 23:00, 23:00:30. Delays: 30s,
+                        30m, 5h, 2d (long forms and decimal delays such as 1.5h work).
+                        Clock times use the next local occurrence. Cannot combine with
+                        -Preview, -Status, -Tail, -Kill, -Sweep, or -DeleteStale.
   -Status              Show running state, pending reboot state, stale logs, and last completed run.
   -Sweep,-Clean,-Prune Rename stale _RUNNING logs to _STALE logs. Use with -Status or alone.
   -DeleteStale         With -Sweep, delete stale _RUNNING logs instead of renaming them.
@@ -2257,6 +2269,195 @@ function Invoke-ReparoTailLog {
     }
 }
 
+function Resolve-ReparoScheduledTime {
+    param([Parameter(Mandatory)][string]$Value)
+
+    $text = $Value.Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        throw '-Time requires a clock time (for example 11:45pm or 23:00) or positive delay (for example 30s, 30m, or 5h).'
+    }
+
+    $durationMatch = [regex]::Match($text, '^(?<Number>(?:\d+(?:\.\d+)?|\.\d+))\s*(?<Unit>s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($durationMatch.Success) {
+        $amount = 0.0
+        if (-not [double]::TryParse($durationMatch.Groups['Number'].Value, [Globalization.NumberStyles]::AllowDecimalPoint, [Globalization.CultureInfo]::InvariantCulture, [ref]$amount) -or $amount -le 0) {
+            throw "Invalid -Time delay '$Value'. The delay must be greater than zero."
+        }
+
+        $unit = $durationMatch.Groups['Unit'].Value.ToLowerInvariant()
+        $seconds = switch -Regex ($unit) {
+            '^(s|sec|secs|second|seconds)$' { $amount; break }
+            '^(m|min|mins|minute|minutes)$' { $amount * 60; break }
+            '^(h|hr|hrs|hour|hours)$' { $amount * 3600; break }
+            '^(d|day|days)$' { $amount * 86400; break }
+        }
+
+        if ($seconds -gt [double][int]::MaxValue) {
+            throw "Invalid -Time delay '$Value'. The delay is too large."
+        }
+
+        return [pscustomobject]@{
+            At       = (Get-Date).AddSeconds($seconds)
+            Kind     = 'delay'
+            TimeSpan = [TimeSpan]::FromSeconds($seconds)
+        }
+    }
+
+    $clockMatch = [regex]::Match($text, '^(?<Hour>\d{1,2})(?::(?<Minute>\d{2})(?::(?<Second>\d{2}))?)?\s*(?<AmPm>am|pm)$', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    $isTwelveHour = $clockMatch.Success
+    if (-not $clockMatch.Success) {
+        $clockMatch = [regex]::Match($text, '^(?<Hour>\d{1,2}):(?<Minute>\d{2})(?::(?<Second>\d{2}))?$', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    }
+
+    if (-not $clockMatch.Success) {
+        throw "Invalid -Time value '$Value'. Use a clock time such as 11:45pm or 23:00, or a positive delay such as 30s, 30m, 5h, or 2d."
+    }
+
+    $hour = [int]$clockMatch.Groups['Hour'].Value
+    $minute = if ($clockMatch.Groups['Minute'].Success) { [int]$clockMatch.Groups['Minute'].Value } else { 0 }
+    $second = if ($clockMatch.Groups['Second'].Success) { [int]$clockMatch.Groups['Second'].Value } else { 0 }
+    if ($minute -gt 59 -or $second -gt 59) {
+        throw "Invalid -Time clock value '$Value'. Minutes and seconds must be between 00 and 59."
+    }
+
+    if ($isTwelveHour) {
+        if ($hour -lt 1 -or $hour -gt 12) {
+            throw "Invalid -Time clock value '$Value'. Twelve-hour clock hours must be between 1 and 12."
+        }
+
+        $meridiem = $clockMatch.Groups['AmPm'].Value.ToLowerInvariant()
+        if ($hour -eq 12) { $hour = 0 }
+        if ($meridiem -eq 'pm') { $hour += 12 }
+    }
+    elseif ($hour -gt 23) {
+        throw "Invalid -Time clock value '$Value'. Twenty-four-hour clock hours must be between 00 and 23."
+    }
+
+    $now = Get-Date
+    $scheduledAt = Get-Date -Year $now.Year -Month $now.Month -Day $now.Day -Hour $hour -Minute $minute -Second $second
+    if ($scheduledAt -le $now) {
+        $scheduledAt = $scheduledAt.AddDays(1)
+    }
+
+    return [pscustomobject]@{
+        At       = $scheduledAt
+        Kind     = 'clock'
+        TimeSpan = $scheduledAt - $now
+    }
+}
+
+function Get-ReparoScheduledArgumentTokens {
+    $tokens = New-Object System.Collections.Generic.List[string]
+    foreach ($entry in $script:ReparoBoundParameters.GetEnumerator()) {
+        if ($entry.Key -eq 'Time') { continue }
+
+        $value = $entry.Value
+        if ($value -is [System.Management.Automation.SwitchParameter]) {
+            if ($value.IsPresent) { [void]$tokens.Add(('-{0}' -f $entry.Key)) }
+            else { [void]$tokens.Add(('-{0}:$false' -f $entry.Key)) }
+            continue
+        }
+
+        if ($value -is [bool]) {
+            [void]$tokens.Add(('-{0}:${1}' -f $entry.Key, $value.ToString().ToLowerInvariant()))
+            continue
+        }
+
+        if ($value -is [System.Array]) {
+            foreach ($item in $value) {
+                [void]$tokens.Add(('-{0}' -f $entry.Key))
+                [void]$tokens.Add([string]$item)
+            }
+            continue
+        }
+
+        [void]$tokens.Add(('-{0}' -f $entry.Key))
+        [void]$tokens.Add([string]$value)
+    }
+
+    return $tokens.ToArray()
+}
+
+function Invoke-ReparoSchedule {
+    if (-not $script:ReparoBoundParameters.ContainsKey('Time')) { return $false }
+    if (-not $script:ReparoIsWindows) {
+        throw '-Time is supported on Windows only.'
+    }
+
+    $blockedParameters = @('Preview', 'Status', 'Tail', 'Kill', 'Sweep', 'DeleteStale')
+    $blocked = @($blockedParameters | Where-Object { $script:ReparoBoundParameters.ContainsKey($_) })
+    if ($blocked.Count -gt 0) {
+        throw ('-Time cannot be combined with {0}.' -f (($blocked | ForEach-Object { '-' + $_ }) -join ', '))
+    }
+
+    if (-not (Test-ReparoCurrentProcessElevated)) {
+        throw '-Time creates a SYSTEM scheduled task and requires an elevated PowerShell session.'
+    }
+
+    foreach ($commandName in @('New-ScheduledTaskAction', 'New-ScheduledTaskTrigger', 'New-ScheduledTaskPrincipal', 'New-ScheduledTaskSettingsSet', 'Register-ScheduledTask')) {
+        if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) {
+            throw "-Time requires the Windows ScheduledTasks cmdlets; '$commandName' is unavailable."
+        }
+    }
+
+    $schedule = Resolve-ReparoScheduledTime -Value $Time
+    $taskName = 'Reparo-Scheduled-{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGuid().ToString('N').Substring(0, 8))
+    $tokens = @(Get-ReparoScheduledArgumentTokens)
+    $tokenLiterals = @($tokens | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ })
+    $argumentList = if ($tokenLiterals.Count -gt 0) { '@(' + ($tokenLiterals -join ', ') + ')' } else { '@()' }
+    $taskNameLiteral = ConvertTo-ReparoPowerShellLiteral -Value $taskName
+    $scriptPathLiteral = ConvertTo-ReparoPowerShellLiteral -Value $PSCommandPath
+    $workerScript = @"
+`$ErrorActionPreference = 'Continue'
+`$exitCode = 0
+try {
+    & $scriptPathLiteral $argumentList
+    if (`$null -ne `$LASTEXITCODE) { `$exitCode = [int]`$LASTEXITCODE }
+}
+catch {
+    Write-Error (`$_.Exception.Message)
+    `$exitCode = 1
+}
+finally {
+    try { Unregister-ScheduledTask -TaskName $taskNameLiteral -Confirm:`$false -ErrorAction Stop | Out-Null } catch { Write-Warning ("Unable to remove completed Reparo scheduled task: {0}" -f `$_.Exception.Message) }
+}
+exit `$exitCode
+"@
+    $encodedWorker = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($workerScript))
+    $powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $powershellPath)) {
+        throw "Unable to locate Windows PowerShell for scheduled Reparo task: $powershellPath"
+    }
+
+    try {
+        $action = New-ScheduledTaskAction -Execute $powershellPath -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {0}' -f $encodedWorker)
+        $trigger = New-ScheduledTaskTrigger -Once -At $schedule.At
+        $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+    }
+    catch {
+        throw "Unable to create Reparo scheduled task '$taskName': $($_.Exception.Message)"
+    }
+
+    Write-Done ("Scheduled Reparo task '{0}' for {1} ({2})." -f $taskName, $schedule.At.ToString('yyyy-MM-dd HH:mm:ss zzz'), $schedule.Kind)
+    Write-Info 'The task runs as SYSTEM with highest privileges and deletes itself after it finishes.'
+    Write-ReparoLog ("[SCHEDULE] Task={0}; Requested={1}; At={2:o}; Kind={3}; Arguments={4}" -f $taskName, $Time, $schedule.At, $schedule.Kind, ($tokens -join ' '))
+    Write-ReparoEventLog -EventId 1205 -EntryType Information -Message @"
+Reparo scheduled a one-shot maintenance run.
+
+Computer: $env:COMPUTERNAME
+PID: $PID
+Task: $taskName
+RequestedTime: $Time
+ScheduledAt: $($schedule.At.ToString('o'))
+Kind: $($schedule.Kind)
+Log: $script:ReparoLogPath
+"@
+    Complete-ReparoUtilityLog -Status 'COMPLETE'
+    return $true
+}
+
 function Test-ReparoOperationalModeRequested {
     $modeParameters = @(
         'New',
@@ -2265,6 +2466,7 @@ function Test-ReparoOperationalModeRequested {
         'Sweep',
         'DeleteStale',
         'Tail',
+        'Time',
         'Update',
         'Winget',
         'WingetDiscover',
@@ -2304,6 +2506,10 @@ if ($PSBoundParameters.ContainsKey('Syslog') -and -not (Test-ReparoOperationalMo
 
     Write-Host ("Settings: {0}" -f $script:ReparoSettingsPath) -ForegroundColor Cyan
     Complete-ReparoUtilityLog -Status 'COMPLETE'
+    return
+}
+
+if (Invoke-ReparoSchedule) {
     return
 }
 
@@ -6521,8 +6727,8 @@ if ($script:ReparoFinalStatus -eq 'FAILED') {
 # SIG # Begin signature block
 # MIIdnQYJKoZIhvcNAQcCoIIdjjCCHYoCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUSHqIrLo3/ogfqHukpWaQr0iO
-# tEOggheGMIIESDCCArCgAwIBAgIQLVS+Lgx5x4dK1qeO0Fy3mDANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUaiY7IAc8grCWccyMViDunGuw
+# NryggheGMIIESDCCArCgAwIBAgIQLVS+Lgx5x4dK1qeO0Fy3mDANBgkqhkiG9w0B
 # AQsFADAiMSAwHgYDVQQDDBdSZXBhcm8gSW50ZXJuYWwgUm9vdCBDQTAeFw0yNjA3
 # MjgyMDExMTBaFw0yOTA3MjgyMDIxMTBaMCcxJTAjBgNVBAMMHFJlcGFybyBJbnRl
 # cm5hbCBDb2RlIFNpZ25pbmcwggGiMA0GCSqGSIb3DQEBAQUAA4IBjwAwggGKAoIB
@@ -6651,31 +6857,31 @@ if ($script:ReparoFinalStatus -eq 'FAILED') {
 # A1UEAwwXUmVwYXJvIEludGVybmFsIFJvb3QgQ0ECEC1Uvi4MeceHStanjtBct5gw
 # CQYFKw4DAhoFAKB4MBgGCisGAQQBgjcCAQwxCjAIoAKAAKECgAAwGQYJKoZIhvcN
 # AQkDMQwGCisGAQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUw
-# IwYJKoZIhvcNAQkEMRYEFJY+YYq3j01Ba23gDqcsRtaKO5gmMA0GCSqGSIb3DQEB
-# AQUABIIBgKgi9zMX4WerUKPiT+lG2o2VmiAWQ5mOkqE5+d53izEluu/SQo67pQ0u
-# 0zYRyyUH6djZIegjALUz8540mVgT00Ae0ZbJxSVLTxW6GK9uu5WKAxpuZyOWS/F4
-# wVVqu+twmddupWQ5XKHDXSnYWwbWXJ+1KcSXvQW1ejniVCEvsBPaQAw1IwpOq/Y6
-# nDrASBUYZv4zuSCyLnffqEWIv4K+V68SA7HEe3CLFMHSBIJyAYtsAcubkR4vQRDZ
-# /RdA3Gr8IGjz7hGj7NE4KVFnV5YGTb+tTXOq/m3AfsbdkvGINxvuIQPYF6NMKcX2
-# zlU1dAbLXGWaP2JnZkP9t8/XO+QZiNltIBr3fTRBA6XfcibEbPh5OJGZVeAJbF4E
-# VmstCNPyKLcphBGQWZqiWsDzncBJrWJdzBqAbhTZAEp3YM62W3J1lZldHb/FlXk0
-# ycHz7ASjamfN67AHgoKPgEd3yJo8BpYVEEvqHnL4WJcgwXp+vIDIrwHR2QfRNToT
-# RHuebm3C1aGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNV
+# IwYJKoZIhvcNAQkEMRYEFFxjngHr/BgHDqewGEASp2I1LEEEMA0GCSqGSIb3DQEB
+# AQUABIIBgECB/zr8alFlw/K9QTiv6s/poYjC1iTHror+Y7MNK7CiFCJltc3pxkpc
+# I12TCUHCl+gQX7UNaLIEyfoJ5CI2NHUt/B54GwGEcR4KlKb4mtnya7CXb4QwbOSq
+# cNTEixJJ6i4DqIH2csK/Ltbzke8rEsYiUl1otBpCoQ9ktCN90zAc1GPbBlwdB7y3
+# tTU5ODcDF6x/ZJ3frAtNVHZoPQOETWpJClAatjaayQW9P2sZPOon3EEE45NwaDtx
+# cl6je4HAVHZxBz/elBtL+TtBzG7MzGyC/S68p9TvrmKZFlvmGTfIglrOmMEeRLgo
+# +59lHZH6yzOSAVsNNlK65zAtQezDKDzIMR4MLv6Opu8Nj/WGLQpq26ltn3vLtD7I
+# JSMz+3Vmvi/3L3mGqcLp1ldKO27aLiMzeDY6RwG6JzO0f9p9Ilnuu1siliySjcDG
+# KpAxh4h/aCe6IWd1TrMV+CHlKzqbS59onGoYXEHzhFFtb95k80Il9ztOFciZtWzz
+# OyD5G5gnQKGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNV
 # BAYTAlVTMRcwFQYDVQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNl
 # cnQgVHJ1c3RlZCBHNCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBD
 # QTECEAqA7xhLjfEFgtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0B
-# CQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA3MjkwMDU0MjlaMC8G
-# CSqGSIb3DQEJBDEiBCDQYqnVcQob43lF/MbS7yjiPflnoOLHFOOEm1K0h+fmBDAN
-# BgkqhkiG9w0BAQEFAASCAgBzgEvmk++lOds8tli3Q5RbNnjZSbJ0h6Yes8NUIGvO
-# vDcBBcS5YQMzbJorYpQMWJHQyptb5GkTL3ld0sytkhqfLvqvpbaLiWtwh0lEzCrj
-# VoT9QBCJQ3EKV8P+u33QQImIvdOn8k6MwW4RKHuAngBracenhWbTNOEyXnUCB3+X
-# PmfdMR3sKmCk0NPiUSzXjLOPuo+ssb8h8vpeaKOMHQy9Zefg4zV1/4EMJQX8RoMZ
-# lJtpXr0A/BaZUd5JU77u7eUNoj33HX0G33hHjM3wQ+28XKBgv+BKU9tiHQ64iqEH
-# lW5yPemeQ5uk+n3McfIneJ7AW0vJzfr4mXiOe/OMQZl8rsTYmeG7iG5dclzVJdHD
-# wMEPkE5XTVGwk100qkh+wAxUEhxzv0y4CLKS5JgdAAyJN4ncPUNHC3xdrA8+hRwd
-# pSvxSuphLGfjxbtGDMlJY9HSW8mnTO1gvaxoaSUUC8fJQgR8C3VBEf3d/v/8Jr8M
-# iQs/d7WC93Bldo1zSHDzz/IWpP3Y04q3B41b8jZ2WSuxBgp7hVMeFTZJQOsJK9Ro
-# 9h85Og1yOfSCDfNAFlUpBpV/kIYIH0rAijKJLSidU4wJUz5ZDXHtZU3uKUUVrz2R
-# yg6cT3PUj9NmVyjz/WX/ilyQPZ8I8djQTeb9eNbozLFUJHsDLQfDK6Q50q/hNEfR
-# 7g==
+# CQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA3MjkwMTE5MjhaMC8G
+# CSqGSIb3DQEJBDEiBCDWuV7b6fnI7hp5LOlckP1RQQQ0442LCwnikxhRKqLTqzAN
+# BgkqhkiG9w0BAQEFAASCAgAATLNCncwG2u9eYuFrlFzZuBc92kWeqjJdmpdlzM1h
+# RGjPtla1iVD23bFipTR2kyPGmUVb5b3pq+nqwOyGNTzV/XdBXD3wOwPyctdj56Gd
+# uOhzlHuP2s3ADJDUrNo/zAgA1Yx0WGC2vC/9XAyiFss1z4O96rTuICb5aap1EKwa
+# zIL+VjqnHLD0ndAj+5FyB+LN8dxu364E8KRCwF0GRSD8GtLcSBUBJvqDtd1BLKUs
+# D59w4jaAQaCK/cQf7VmzFwHJzRfe/PvJJfuQnmQUhvS4Xfg8qk0aJkpsEYISVR1h
+# arvcxw409l8Df2K9XJr33Aa6rBLW43orB014njPLwuUu5CAs8p5a4s9jlwWu1Xy7
+# HTWYNVG9vmAos+o5T0OJL85Y8Hin/XqAN89yBFdrPC/e2Gp1BIZQ2m3pI4Fp2r7a
+# GHBHDmASV8Og+Y0jmRkdvl0HgzApHJKc3Pbz2D1rlF+El2P8EBMVgKt7c0s+1fyA
+# 3diu3qI7r0vHaLlj//3AvLY+MXi+bUfuAlw6hZr/Lc8W04UXFRlYwqu3I4GjE4wv
+# m9XkAoaZOXxsFdOQv9SCGh7pVaGLz9mBbwf95MqmDfL7b2yfy168z2iM+zSStVW0
+# CDdKsBTifBDr8ySHYTXmV6ouj0Eie3iQF16ESwJ29A+JXWqk7fGGfEUmKwfnWYWe
+# uA==
 # SIG # End signature block
