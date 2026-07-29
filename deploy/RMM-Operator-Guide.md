@@ -43,6 +43,7 @@ Upload the wanted file from `ScreenConnect\` into Toolbox and run it as SYSTEM/a
 | --- | --- |
 | First install without GitHub | `ScreenConnect-Reparo-Embedded.ps1` with `-Offline true` |
 | First install / refresh with GitHub | `Install-Reparo.bat` |
+| Remove Reparo runtime and diagnostics | `ScreenConnect-Reparo-Uninstall.ps1` |
 | Standard managed update | `Run-Reparo-System.cmd` |
 | Broad maintenance | `Run-Reparo-Force-System.cmd` |
 | Broad maintenance; Windows Update may reboot if required | `Run-Reparo-Force-AllowReboot-System.cmd` |
@@ -66,6 +67,8 @@ parameters. Pick the separate script that performs the action you want.
 | `Ninja-Reparo-Update.ps1` | Installs/refreshes Reparo and updates the version field. No machine maintenance run. |
 | `Ninja-Reparo-Force-AllowReboot.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force -AllowReboot`. Windows Update may reboot only if required. |
 | `Ninja-Reparo-Kill.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Kill` to stop stuck Reparo and known updater processes. No reboot. |
+| `Ninja-Reparo-New.ps1` | Runs native `Reparo -New` only against an existing runtime, then updates the version field. It does not bootstrap a missing install. |
+| `Ninja-Reparo-Uninstall.ps1` | Stops Reparo processes, removes its runtime/PATH/logs/diagnostics, then clears the version field. No reboot. |
 | `Ninja-Reparo-Diagnostic.ps1` | Read-only inspection of runtime, logs, PATH, execution context, Ninja field support, and runtime signature. |
 
 All Ninja artifacts run as **SYSTEM**. They are suitable for normal RMM deployment;

@@ -1,54 +1,54 @@
 <#
 .SYNOPSIS
-Trusts Reparo's internal root and code-signing certificate on this Windows endpoint.
+Refreshes an existing Reparo runtime through its native -New command.
 
 .DESCRIPTION
-Parameter-free deployment script for NinjaOne. Run as SYSTEM before enforcing
-Reparo Authenticode signatures. It installs only public certificates; private keys
-never leave the signing workstation.
+Parameter-free NinjaOne automation. It deliberately does not embed or install a
+runtime: endpoints without Reparo fail clearly instead of receiving an unexpected
+bootstrap. Run as SYSTEM with no Ninja options or arguments.
 #>
 [CmdletBinding()]
 param()
 
 $ErrorActionPreference = 'Stop'
-$expectedRootThumbprint = '1C44A46033EF4BB52695208ACF4455823A64BE57'
-$expectedSignerThumbprint = '93CE2552E5C7F90600C36BDB83541921FCC97ED1'
-$rootBase64 = 'MIIEEzCCAnugAwIBAgIQa526h8GWTIZLcgHuaNS4QzANBgkqhkiG9w0BAQsFADAiMSAwHgYDVQQDDBdSZXBhcm8gSW50ZXJuYWwgUm9vdCBDQTAeFw0yNjA3MjgyMDExMDlaFw0zNjA3MjgyMDIxMDlaMCIxIDAeBgNVBAMMF1JlcGFybyBJbnRlcm5hbCBSb290IENBMIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAvymh/Z/DY2ZGrAEtAJNGt7NLsFve2O5HlBjS75Uz9uCmdw+/wzkI/bMuimioXK2U8am1+3gQ8YmI5ExR8RlonqCWz/epJefURhaGGMdoSyobhK2hW5Pf+/2HEdmBdPsmFoz5uYNWq/Qi6Lw4gQPKIeh/a7NqLv/yv8+ceqI6fyMuG85DQeuarqkGQ7102R4ZVgtrFGCL9IE4nIRS5rK8dIbtbeXxxfyGMWKK52eGbRSaBsjPI5CRsxqwFWEKImv00s5WcLFtNHaVEcHYe4HjNDPlv2DwZo+BR1Wp0a+SkBfPkmd4cPSTL+gCmryKEYGd+M/UUnc3TlzeaO1pFlFrJyEzf2g5BPP7/gKsQiSOEOauBSYVV0jF8WPAVnFeZJdh2p+bzGuvk635i3zSZEiEfy/Q39I/AcZDewYILoEXsOXdA2iu+sBGKi4xlkDwwm6a/hyXZsu7N9Ef70H12DJ+suS3FPlU9n+SFY1hvc3AJbpypmwYyqfkt4v5TMhTFxYlAgMBAAGjRTBDMA4GA1UdDwEB/wQEAwIBhjASBgNVHRMBAf8ECDAGAQH/AgEAMB0GA1UdDgQWBBS17fCImbAAKCDMLaW7FcHaqu3dDjANBgkqhkiG9w0BAQsFAAOCAYEARjt4it9x5yklrxjopp4yZ7ASEwvzvGnPS2ZqW05QD5hWZLA5Gwkllf2qiTI9vgFXd9niUSaW4Eo6rpmVSqE/gczOnQz5/fnY3nO8b5CKl3h0cazv7bd/2se1/US9bO4GUDy2B2xJc6njcqtBBZtTcnjfvFJH5Zx7j9Yj8kzxAHAi41tZ9hnHs85VSUpEqfHC0etYln4Ck7HWly9A8e1zxWPVGMgOB2bsVumQThoPQNQtGYOVL5NwqKsKPuNcZyA830xD8xgx+jSI5bqzrkv50+Um22AvICY8hw0KNiONjY/K1jYGgV+YPXLuPRRbTaMKLijr4F8rsuSZm1ZI2t4QvddoXjQ2iW3yYuN0d8swjRPWLPxrgPQ4vxUcbTlPaZ12+/Vp/wWVAUTZZJbgAsl1LTzuw31NWy2wJX+scOujlyWsw37fIWk1reORtjdY7BHVi3PyUqNSqxvVQyoAnR3QYp2z62BbvEwKtxncXciJPZeGETfdavOI9Jw0pNTbxTzb'
-$signerBase64 = 'MIIESDCCArCgAwIBAgIQLVS+Lgx5x4dK1qeO0Fy3mDANBgkqhkiG9w0BAQsFADAiMSAwHgYDVQQDDBdSZXBhcm8gSW50ZXJuYWwgUm9vdCBDQTAeFw0yNjA3MjgyMDExMTBaFw0yOTA3MjgyMDIxMTBaMCcxJTAjBgNVBAMMHFJlcGFybyBJbnRlcm5hbCBDb2RlIFNpZ25pbmcwggGiMA0GCSqGSIb3DQEBAQUAA4IBjwAwggGKAoIBgQDDefiKuvFGkLlODev1GfWDfAxuEbPvNqXeNlMfjo8Z07gDQZSnvPP/G2P8ighPd+yL7BbEaVhVk86jZfxfSLcwvfybjEF0PljYBCAWOb8k7Kin9qxfNvv76jfsC0dx5C9U7fSa4Ghp9BrkUsK1iC1/LWiyA0RB/O8mljdiTPk2jXJqycQ9m/E90klKtrhr1sSnBKt6qYjOyfhRF249uhtlXYq4wCPmmN3ljHMWRvF71Fm9ieqlhI+rz/Iiq0zt2R9vFBxrlvwsbXOzwzT6QIHPtRU8ecHYlT48KF8BQeWsFmUTI68DDodQW1g8xWcCx9S1F/zSptgJdl+O8gOwfHVzRME4Y4j6iKqla4w15Gw0tgLpCDf6z6/LgWQv0wSc+ZUT/SZy8mu/sJBMWzSsoayV1lqeK8VD020YJI17FOgVfNNniv6jmlLgTvhXXc+1GxE+8JXtuJMqq2mAVwBoM9ab43Cemka5hrIL2/Y+ncIZtY0efPh46a4xFsxqXiz1gc0CAwEAAaN1MHMwDgYDVR0PAQH/BAQDAgeAMAwGA1UdEwEB/wQCMAAwEwYDVR0lBAwwCgYIKwYBBQUHAwMwHwYDVR0jBBgwFoAUte3wiJmwACggzC2luxXB2qrt3Q4wHQYDVR0OBBYEFGp8NVPXw0srUF6nNOdyth14axsmMA0GCSqGSIb3DQEBCwUAA4IBgQCm/9nG7ANlqpgGGDJZFI1jpoMGVOooAxJt/1oDnGi/LLnKujuQrDQuR/7E6y4tl2SZEX4QTsNhtT0mtZDOt+eZM7ndR/Ble1nqM8ubaxMdmOQVekq7dWQWRdooeys+gplzIPzijrgkIxgA4532r3a/hokcSx4E+CQV27a1+nkfNchekYjuOh2NTKfiffXoYAOHPMwLOZZjDcAQpXHGpH10L/ZifvKoM+svU1nrfOXiW2Hp6WEKHxJSZW5EhJyHaNr7iA2OjbCvFxhbCrW+R+3LwEfZV10UW03hQ08ky74v2UVR9u23EoNnGpMHXgMwEkbwRGcs6Fl1/4l+eqiip+Vm2zT1rdBAoED7bl1NtTwoNX8K1ZASIu2rogoglYCfeP12qW6fcvCCihTNYILAOujdDcRic3+Rlu4B7TWzszvgglB+Jih7jU2qhRB+IZfUzgYeIJ8MCuS8EjVKZx7MHgGYbfcvzn9MkIY4XBUv0yCK8nFtR8nPShfaP8Zurj0yWJ0='
+$runtimePath = Join-Path $env:ProgramData 'Reparo\Reparo.ps1'
 
-function Install-ReparoCertificate {
-    param([string]$Base64, [string]$StoreName, [string]$ExpectedThumbprint)
+function Set-NinjaReparoVersion {
+    param([string]$Value)
 
-    $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String($Base64))
-    if ($certificate.Thumbprint -ne $ExpectedThumbprint) {
-        throw "Unexpected certificate thumbprint for ${StoreName}: $($certificate.Thumbprint)"
+    $setter = Get-Command -Name Ninja-Property-Set -ErrorAction SilentlyContinue
+    if (-not $setter) {
+        Write-Warning 'Ninja-Property-Set is unavailable; the Reparo custom field was not updated.'
+        return
     }
 
-    $store = [Security.Cryptography.X509Certificates.X509Store]::new($StoreName, 'LocalMachine')
-    try {
-        $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-        if (-not ($store.Certificates | Where-Object { $_.Thumbprint -eq $certificate.Thumbprint })) {
-            $store.Add($certificate)
-            Write-Host "Installed $($certificate.Subject) in LocalMachine\\$StoreName"
-        }
-        else {
-            Write-Host "Certificate already trusted in LocalMachine\\$StoreName"
-        }
-    }
-    finally {
-        $store.Close()
+    & $setter.Name -Name 'Reparo' -Value $Value
+    if ($LASTEXITCODE -ne 0) {
+        throw "Ninja-Property-Set failed with exit code $LASTEXITCODE."
     }
 }
 
-Install-ReparoCertificate -Base64 $rootBase64 -StoreName 'Root' -ExpectedThumbprint $expectedRootThumbprint
-Install-ReparoCertificate -Base64 $signerBase64 -StoreName 'TrustedPublisher' -ExpectedThumbprint $expectedSignerThumbprint
-Write-Host "Reparo internal signing trust installed. Approved signer: $expectedSignerThumbprint"
+if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+    Set-NinjaReparoVersion -Value 'Not installed'
+    throw "Reparo is not installed: $runtimePath. Use Ninja-Embedded.ps1 for a first install."
+}
+
+Write-Host "Refreshing installed Reparo runtime: $runtimePath"
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runtimePath -New
+if ($LASTEXITCODE -ne 0) {
+    throw "Reparo -New failed with exit code $LASTEXITCODE."
+}
+
+$versionMatch = Select-String -LiteralPath $runtimePath -Pattern "ReparoVersion\s*=\s*'([^']+)'" | Select-Object -First 1
+$version = if ($versionMatch) { $versionMatch.Matches[0].Groups[1].Value } else { 'Installed (version unreadable)' }
+Set-NinjaReparoVersion -Value $version
+Write-Host "Reparo native refresh complete. Version: $version"
 
 # SIG # Begin signature block
 # MIIdnQYJKoZIhvcNAQcCoIIdjjCCHYoCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQU7EtckD9eypH149xU60ds2l1X
-# MIqggheGMIIESDCCArCgAwIBAgIQLVS+Lgx5x4dK1qeO0Fy3mDANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUeNFo0+h1D+Tfc/JrxDLmKg4j
+# WmmggheGMIIESDCCArCgAwIBAgIQLVS+Lgx5x4dK1qeO0Fy3mDANBgkqhkiG9w0B
 # AQsFADAiMSAwHgYDVQQDDBdSZXBhcm8gSW50ZXJuYWwgUm9vdCBDQTAeFw0yNjA3
 # MjgyMDExMTBaFw0yOTA3MjgyMDIxMTBaMCcxJTAjBgNVBAMMHFJlcGFybyBJbnRl
 # cm5hbCBDb2RlIFNpZ25pbmcwggGiMA0GCSqGSIb3DQEBAQUAA4IBjwAwggGKAoIB
@@ -177,31 +177,31 @@ Write-Host "Reparo internal signing trust installed. Approved signer: $expectedS
 # A1UEAwwXUmVwYXJvIEludGVybmFsIFJvb3QgQ0ECEC1Uvi4MeceHStanjtBct5gw
 # CQYFKw4DAhoFAKB4MBgGCisGAQQBgjcCAQwxCjAIoAKAAKECgAAwGQYJKoZIhvcN
 # AQkDMQwGCisGAQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUw
-# IwYJKoZIhvcNAQkEMRYEFNmp+1f0b5z2z7f2AoTc0+V0+lKjMA0GCSqGSIb3DQEB
-# AQUABIIBgGiWOWMI8qDc5U1Eu9Do/qIb4UZn2D4zoFqnE58O6s76tdBVAXED6OmI
-# F1ZrdBW4QnEL0C1UVP4IdYJePp30x0uC2FXXFrbysq2F+tF/CnhrO/77lg2w4x0C
-# MvZAC/cHl6TF63+ZNTOKlj3XRAEz0MP8nx6wGkAsSq6+swHglJ05Ud31mlJlYmsm
-# ckxso3J5cz5Y5C1HxYO+TIYsfpSB04b1/KRmYRLr783L8Zh8+64SD4UkdjnfN8nE
-# 7jpv4eP4SN9Nf+u3Ak6PZeQvdnGyy5qxbRmW9JmM5GXUGqMZumrjwBOe03HP+Nz1
-# KIXPOfj9QjX4GpP2jA1f7GmPARNmG4dU3al9EerVLibRNylis31swOh/oAlIKopt
-# oHbbBZ1NmmHTu7XyuYzd3NLkaIMNlD6oWTBYSCc3MgxuWAg9F9h6HqpNDc9E1Kkv
-# 5Jw/nMBvAb0Epo14955N3qsCqAcRYM5h8Y5+YOhhajLfEzk+bRdf/jO/6oEC2zGe
-# fqprZE1VtqGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNV
+# IwYJKoZIhvcNAQkEMRYEFGi+MMUIz/dDdNLjaezXQWVWqf2bMA0GCSqGSIb3DQEB
+# AQUABIIBgJ8p5WJCtfAT1Rc9qucAmTJ9Cao3/sqCNtmHq3hQcxi8270xHqIZy2R2
+# cBrW5ZwqcofP3FowtFESEyUjCcCVwXI2nkKvqlrNQprJN8Km5C87Nr+/GePfrFt/
+# 1hlTDGAfELoJkeMOdczd/5d7CSsaPBbgcZE/zANmvvG6zPCYQAXbtUzBGM9ArZsP
+# FZpgKnco2fIZgmkvBi+xrA9rjJBqVQigwlbSNSJKpWBghizn+U8RIC344OCyP+J0
+# W5dcZ6rI5tp+9EY9CIPf2fX1pOlCJtxzpVhF57+DCaJBRDtpgrYIl5SVBCfEfaT3
+# qcICBjJwPM2KlbnT6oLHeALKI7sK/Gm5kaWuz/XEpfW9iPY/M1BiweesvmwRUrwY
+# RypXRzkrwF/ddPGWVivECZST8N+9krOZqjALz+W9q4+dZu+Wnp/gpXW0xSWxFRrV
+# d1xgJx/rxIu7CBIQ/Zs0Hx8B9SZ/JCzlIAsdqWIvAKtCMtx6RuvKY8lBlKK/PEFf
+# N1Pvy/405aGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNV
 # BAYTAlVTMRcwFQYDVQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNl
 # cnQgVHJ1c3RlZCBHNCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBD
 # QTECEAqA7xhLjfEFgtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0B
 # CQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA3MjkwMDU0MzBaMC8G
-# CSqGSIb3DQEJBDEiBCA68k5zPRw6/Izhyw/LWN3kpoxg/vJ+iLpJ/LXiKtODkjAN
-# BgkqhkiG9w0BAQEFAASCAgCYic2o1AJsL1GWTLoQqS23Y4UGexHJRIQfqii40TRc
-# BoBufa48bpnRYi6SHCJ873xHZJb1UIdsZBSYnGU2ikaLll6SdDtCkyBrxKIOmW8J
-# iXXU2pv0dVeFUZOEhiXeD+IL8yfKGbSvhOFz1Dqz7TGBsDkof7adGGtj07ERCRYF
-# 6T9RcsuFcMXvgaWLP7yOXNnNTKXDWYlNvD6wJgj7hClBiGf6dluSidw/KBFSoC/1
-# g0R9P90P5+tPKHOXhJn5p7oTeOuvnvcy5Hp7hxMPM0RWNYXc9ova6n12FYa+lwLc
-# zfw33CRXXyNCGpXRFVgkjEkN2kBMreAVvOFs06Fa/Ibr+5oCyo7QhDPUzEFR6X1c
-# tRtpqd14PT0Erb6MQSw+YjUOxu4ikbKvioQ247TgLvASVorr9GDVLbmVWi5Lir2K
-# loTZnmYZt4Jt/JcnrVavWn0dARk7PqGeSqcbVROX5bBE+8UtGo8i+MRpk3/ruZFU
-# XJt/8IC+ZAWzzYkValNgRolXC65LOZfK4XPPRmebmfsn+j7sYM4jAZXCjBZeKul5
-# gMiNjj+N+eMTB3ZEZIVweY2StFRXmbsVPAGktzsOqmhFX7BsZUG79X0Z8Cuyj9Ko
-# KiIGfq+LaFH/hTRcoLRNsmyCB5fS/XU+RZqrB93HG3gL2jRkUCwHOXh7LJ9O9NvY
-# VQ==
+# CSqGSIb3DQEJBDEiBCAhlFPmCdqMDDLUsYOig8vZtcFEnNOrQIo03WO3KZf6TjAN
+# BgkqhkiG9w0BAQEFAASCAgA6aSvPEQD0YKEcuk2TAM9YHFk3ZVRB8pfkeH3w/4AE
+# gOMaehE1+ukdXyFzgL5KloziLUpUDJx4PyMPxgRK63PA/ylJzD/WfqEdApN5YUZx
+# 0eLwNutfTonW19lWqBdSy2KAdX/y4dGfdpRreWD6AoQPGMc0XeQ+JSruCNwsh6dy
+# 0ulzkuwyU3I0JtSFBtDrKZhmI2YsMIeLvOFnmRur8M7xEpPUXqMZuckGn2ZPABBC
+# U8ehlooTI8CFIin9bnot8+QurdA59sHn62bATb1cBFYQPeWsViEetV8yhms/7g+3
+# IiQtze50ntrDZ31kFZm5jkGeaFl2QiuFhQuC/LoZ26nSrtKJPnFrxbmOXtppIajc
+# M21JnDaOd0mHwxXkTnI5FDkw03Hynyg9c1QUixPiY5uqEA7amrN7IVilxrgMhLzX
+# M+sQ2wRHPjEOxeGafxNbSX2AtxqeDjy5DHSEWxp3q6dChT/iekUfxp5BU6XjDyuW
+# EU6i8sSyJOWfg3nERxPFuBAWynJldTcF1KqV5Z5GTsU/LV3QinobO0uAAYVezeMi
+# 2ZBIdYqPutstGFCcPuNfuwCInXDklIvguBYGW52He5MN+H66uRX6JCY8sc298//D
+# B+dg9hhyq4ZpTzS8UxU9dmWwcl0b/lQOrFc6ruIECkBJinEATShFqQp/jUWE1FeS
+# eA==
 # SIG # End signature block
