@@ -104,9 +104,11 @@ using the signed Reparo artifacts on managed endpoints. It trusts the internal r
 and approved signing publisher without distributing a private key. The signer workflow
 and certificate thumbprints are documented in `deploy/RMM-Operator-Guide.md`.
 
-Every version bump or release-worthy change must follow `RELEASE.md` and run
-`deploy/signing/New-SignedReparoRelease.ps1` before commit. The consolidated Ninja/
-ScreenConnect operator instructions are in `deploy/RMM-Operator-Guide.md`.
+Routine source work and Linux-only changes can be committed without the Windows
+signing identity. Before publishing or deploying a Windows fleet release, follow
+`RELEASE.md` and run `deploy/signing/New-SignedReparoRelease.ps1` on the signing
+workstation. The consolidated Ninja/ScreenConnect operator instructions are in
+`deploy/RMM-Operator-Guide.md`.
 
 ### Ninja deployment options
 

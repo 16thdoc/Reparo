@@ -261,9 +261,10 @@ Important reboot distinction:
 -AllowReboot  Windows Update may reboot only if Windows Update requires it.
 ```
 
-### 5. Future Reparo version/release workflow
+### 5. Windows fleet release workflow
 
-Every Reparo version bump or release-worthy change follows this workflow on the
+Routine source work and Linux-only changes may be committed without this workflow.
+Before publishing or deploying Windows RMM artifacts, run this workflow on the
 signing workstation:
 
 ```powershell
@@ -279,7 +280,7 @@ The workflow:
 4. Verifies each artifact carries the approved signer.
 5. Stops before commit/push/deploy.
 
-Then:
+Then commit the regenerated signed artifacts and:
 
 ```text
 Review diff → commit signed release → push intentionally → pilot → deploy
