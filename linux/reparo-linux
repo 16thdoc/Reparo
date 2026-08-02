@@ -5,7 +5,7 @@
 set -u
 umask 077
 
-REPARO_LINUX_VERSION='0.1.2'
+REPARO_LINUX_VERSION='0.1.3'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
@@ -14,6 +14,9 @@ PREVIEW=0
 FORCE=0
 INCLUDE=''
 TAIL_LINES=120
+HOST_NAME=$(hostname 2>/dev/null || printf unknown)
+RUN_ID=''
+RUN_RESULT=complete
 
 usage() {
     cat <<'EOF'
@@ -57,12 +60,35 @@ ensure_log_root() {
     if ! mkdir -p "$LOG_ROOT"; then
         die "Cannot create log directory: $LOG_ROOT"
     fi
-    LOG_FILE="$LOG_ROOT/reparo_$(hostname 2>/dev/null || printf unknown)_$$_$(date +%Y-%m-%d_%H%M%S)_RUNNING.log"
+    RUN_ID="$(printf '%s' "$HOST_NAME" | tr -cd '[:alnum:]._-')_$$_$(date +%Y%m%dT%H%M%S)"
+    LOG_FILE="$LOG_ROOT/reparo_${RUN_ID}_RUNNING.log"
     : >"$LOG_FILE" || die "Cannot write log file: $LOG_FILE"
 }
 
 log() {
     printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG_FILE"
+}
+
+syslog_value() {
+    # Graylog can extract these space-delimited key=value fields without receiving
+    # unbounded package-manager output. Keep values to one safe token per field.
+    printf '%s' "$1" | tr '[:space:]=' '__' | tr -cd '[:alnum:]_.:/-'
+}
+
+syslog_event() {
+    priority=$1
+    event=$2
+    section=${3-}
+    result=${4-}
+    detail=${5-}
+    [ -n "$section" ] || section='-'
+    [ -n "$result" ] || result='-'
+    [ -n "$detail" ] || detail='-'
+    command_exists logger || return 0
+
+    logger -p "user.$priority" -t reparo-linux -- \
+        "event=$(syslog_value "$event") run_id=$(syslog_value "$RUN_ID") version=$REPARO_LINUX_VERSION host=$(syslog_value "$HOST_NAME") action=$(syslog_value "$ACTION") preview=$PREVIEW section=$(syslog_value "$section") result=$(syslog_value "$result") detail=$(syslog_value "$detail") log=$(syslog_value "${LOG_FILE:-}")" \
+        >/dev/null 2>&1 || true
 }
 
 command_exists() {
@@ -184,8 +210,10 @@ run_command() {
     description=$2
     shift 2
     log "[CMD] $section: $description"
+    syslog_event notice command_start "$section" running "$description"
     if [ "$PREVIEW" -eq 1 ]; then
         log "[DRY-RUN] $section: $description"
+        syslog_event notice command_preview "$section" skipped "$description"
         return 0
     fi
 
@@ -202,8 +230,11 @@ run_command() {
     rm -f "$output_file"
     if [ "$status" -eq 0 ]; then
         log "[DONE] $section"
+        syslog_event notice command_complete "$section" success "$description"
     else
         log "[FAIL] $section exited $status"
+        RUN_RESULT=partial
+        syslog_event err command_complete "$section" failed "exit_$status"
     fi
     return "$status"
 }
@@ -220,6 +251,7 @@ run_privileged() {
         run_command "$section" "$description" sudo -n "$@"
     else
         log "[SKIP] $section: root or passwordless sudo is required; refusing to prompt"
+        syslog_event warning command_skipped "$section" skipped 'privilege_required'
         return 0
     fi
 }
@@ -231,6 +263,7 @@ run_optional() {
     if ! section_selected "$section"; then return 0; fi
     if ! command_exists "$executable"; then
         log "[SKIP] $section: $executable not found"
+        syslog_event notice command_skipped "$section" skipped 'tool_not_found'
         return 0
     fi
     run_command "$section" "$*" "$@" || true
@@ -241,26 +274,26 @@ run_native_manager() {
     if ! section_selected "$native_section"; then return 0; fi
     case "$native_section" in
         Apt)
-            command_exists apt-get || { log '[SKIP] Apt: apt-get not found'; return; }
+            command_exists apt-get || { log '[SKIP] Apt: apt-get not found'; syslog_event notice command_skipped Apt skipped tool_not_found; return; }
             run_privileged Apt 'apt-get update' env DEBIAN_FRONTEND=noninteractive apt-get update || return
             run_privileged Apt 'apt-get -y upgrade' env DEBIAN_FRONTEND=noninteractive apt-get -y upgrade || return
             run_privileged Apt 'apt-get -y autoremove' env DEBIAN_FRONTEND=noninteractive apt-get -y autoremove || return
             ;;
         Dnf)
-            command_exists dnf || { log '[SKIP] Dnf: dnf not found'; return; }
+            command_exists dnf || { log '[SKIP] Dnf: dnf not found'; syslog_event notice command_skipped Dnf skipped tool_not_found; return; }
             run_privileged Dnf 'dnf -y upgrade' dnf -y upgrade || return
             run_privileged Dnf 'dnf -y autoremove' dnf -y autoremove || return
             ;;
         Pacman)
-            command_exists pacman || { log '[SKIP] Pacman: pacman not found'; return; }
+            command_exists pacman || { log '[SKIP] Pacman: pacman not found'; syslog_event notice command_skipped Pacman skipped tool_not_found; return; }
             run_privileged Pacman 'pacman -Syu --noconfirm' pacman -Syu --noconfirm || return
             ;;
         Zypper)
-            command_exists zypper || { log '[SKIP] Zypper: zypper not found'; return; }
+            command_exists zypper || { log '[SKIP] Zypper: zypper not found'; syslog_event notice command_skipped Zypper skipped tool_not_found; return; }
             run_privileged Zypper 'zypper --non-interactive refresh' zypper --non-interactive refresh || return
             run_privileged Zypper 'zypper --non-interactive update' zypper --non-interactive update || return
             ;;
-        *) log '[SKIP] Native: no supported package manager detected' ;;
+        *) log '[SKIP] Native: no supported package manager detected'; syslog_event warning command_skipped Native skipped no_supported_manager ;;
     esac
 }
 
@@ -279,7 +312,11 @@ list_reparo_processes() {
         pid=${proc#/proc/}
         process_is_current_tree "$pid" && continue
         cmdline=$({ tr '\000' ' ' <"$cmdline_path"; } 2>/dev/null || true)
-        case "$cmdline" in *'/reparo-linux'*) printf '%s\t%s\n' "$pid" "$cmdline" ;; esac
+        # The command line may merely mention Reparo (for example a shellcheck
+        # invocation). The runtime script must be argv[1], as it is for both the
+        # executable script and the installed sh shim.
+        script_path=$({ tr '\000' '\n' <"$cmdline_path" | awk 'NR == 2 { print; exit }'; } 2>/dev/null || true)
+        case "$script_path" in */reparo-linux|reparo-linux) printf '%s\t%s\n' "$pid" "$cmdline" ;; esac
     done
 }
 
@@ -309,6 +346,7 @@ process_is_current_tree() {
 show_status() {
     ensure_log_root
     log "Reparo Linux $REPARO_LINUX_VERSION status"
+    syslog_event notice status -- success requested
     log "Log root: $LOG_ROOT"
     processes=$(list_reparo_processes)
     if [ -n "$processes" ]; then
@@ -323,14 +361,16 @@ show_status() {
 
 kill_reparo_processes() {
     ensure_log_root
+    syslog_event notice kill -- requested requested
     processes=$(list_reparo_processes)
     if [ -z "$processes" ]; then
         log 'No other Reparo Linux process found.'
+        syslog_event notice kill -- success none_found
         return 0
     fi
     printf '%s\n' "$processes" | while IFS="$(printf '\t')" read -r pid cmdline; do
         log "[KILL] SIGTERM PID $pid: $cmdline"
-        if kill -TERM "$pid" 2>/dev/null; then log "[DONE] stopped PID $pid"; else log "[FAIL] could not stop PID $pid"; fi
+        if kill -TERM "$pid" 2>/dev/null; then log "[DONE] stopped PID $pid"; syslog_event warning kill Reparo success "pid_$pid"; else log "[FAIL] could not stop PID $pid"; syslog_event err kill Reparo failed "pid_$pid"; fi
     done
 }
 
@@ -394,6 +434,7 @@ esac
 ensure_log_root
 log "Reparo Linux $REPARO_LINUX_VERSION starting"
 log "Mode: update force=$FORCE preview=$PREVIEW include=${INCLUDE:-auto} native=$(detect_native_section)"
+syslog_event notice run_start -- running "native_$(detect_native_section)"
 run_native_manager
 run_optional Flatpak flatpak flatpak update -y
 if section_selected Snap && command_exists snap; then run_privileged Snap 'snap refresh' snap refresh || true; fi
@@ -412,6 +453,8 @@ run_optional Conda conda conda update -n base -c defaults conda -y
 run_optional Gem gem gem update
 run_optional Composer composer composer global update
 log "Reparo Linux complete. Log: $LOG_FILE"
+if [ "$PREVIEW" -eq 1 ]; then final_state=preview; else final_state=$RUN_RESULT; fi
+syslog_event notice run_complete -- "$final_state" "force_$FORCE"
 final_log="${LOG_FILE%_RUNNING.log}_$( [ "$PREVIEW" -eq 1 ] && printf PREVIEW || printf COMPLETE ).log"
 mv "$LOG_FILE" "$final_log"
 printf '%s\n' "Final log: $final_log"

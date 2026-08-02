@@ -38,6 +38,18 @@ Pop!_OS, Kali), Dnf (Fedora/RHEL-family), Pacman (Arch/Manjaro), or Zypper
 `--force` adds installed pipx, pnpm, Yarn, .NET tools, Rust, Conda, gems, and
 Composer. Logs live under `~/.local/state/reparo/logs` (respecting `XDG_STATE_HOME`).
 
+Reparo also emits concise lifecycle events to the local syslog/journal facility with
+the `reparo-linux` tag. Events are key-value messages (`event`, `run_id`, `version`,
+`section`, `result`, `log`, and so on), deliberately excluding the full package-tool
+output. Forward that tag from rsyslog, syslog-ng, or Graylog Sidecar to Graylog; do
+not put a Graylog credential or collector address in the runner. For a local check:
+
+```sh
+journalctl -t reparo-linux -n 50 --no-pager
+```
+
+Use `run_id` to correlate the Graylog event stream with the complete local logfile.
+
 Native package operations require root or passwordless `sudo -n`; Reparo skips them
 rather than summon an unattended password prompt from the abyss. `--kill` sends
 SIGTERM only to other Reparo Linux processes, never a broad updater-process sweep.
