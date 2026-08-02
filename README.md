@@ -44,12 +44,15 @@ SIGTERM only to other Reparo Linux processes, never a broad updater-process swee
 
 ### Linux command lexicon
 
-`Version`, `New`, and `Install` accept the full familiar spelling set: double-dash,
-single-dash, and bare long names in normal, lower, or upper case; their one-letter
-forms also work with or without a dash. In other words, `-Version`, `version`, `-V`,
-and `v` are equivalent; so are `-New`/`n` and `-Install`/`i`. `New` and `Install`
-both run the native installer, so they update Reparo itself; `--update` updates the
-machine's installed packages and tools instead.
+Every native Linux command accepts double-dash, single-dash, and bare long forms in
+any casing, plus an unambiguous short form with or without a dash. The short forms
+are Update/U, Force/F, Preview/P, Include/C, Status/S, Kill/K, Tail/T,
+TailLines/TL, Version/V, New/N, Install/I, and Help/H; `Log` is another name for
+Tail. Thus `-Version`, `version`, `-V`, and `v` are equivalent, as are mixed-case
+forms such as `--VeRsIoN`. `New` and `Install` both run the native installer, so they
+update Reparo itself; `--update` updates the machine's installed packages and tools
+instead. Windows-only commands are identified plainly rather than pretending they
+work on Linux.
 
 ## Windows quick start
 

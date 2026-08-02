@@ -5,7 +5,7 @@
 set -u
 umask 077
 
-REPARO_LINUX_VERSION='0.1.1'
+REPARO_LINUX_VERSION='0.1.2'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
@@ -38,10 +38,10 @@ Modes:
   --tail                   Follow the newest Reparo Linux log.
   --new / --install        Download and run the native Linux installer.
 
-Version, New, and Install use the full lexicon: `--name`, `-Name`, `name`,
-their all-upper/all-lower variants, and short forms with or without a dash.
-Examples: `-Version`, `version`, `-V`, `v`; `-New`, `new`, `-N`, `n`; and
-`-Install`, `install`, `-I`, `i`.
+Every native command uses the full lexicon: `--name`, `-Name`, and `name` in
+any casing, plus short forms with or without a dash. Short forms are Update/U,
+Force/F, Preview/P, Include/C, Status/S, Kill/K, Tail/T, TailLines/TL,
+Version/V, New/N, Install/I, and Help/H. `Log` is an alias for Tail.
 
 Native package operations require root or passwordless sudo (sudo -n). Reparo
 will skip rather than hang on a password prompt.
@@ -67,6 +67,24 @@ log() {
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+normalize_option() {
+    option=$1
+    case "$option" in
+        --*) option=${option#--} ;;
+        -*) option=${option#-} ;;
+    esac
+    printf '%s' "$option" | tr '[:upper:]' '[:lower:]'
+}
+
+windows_only_option() {
+    case "$1" in
+        windowsupdate|wu|windows11upgrade|win11|windows11|upgradetowindows11|powershell7only|7|powershell7|sevenzip|7zip|7z|wslapt|wsl|winget|wg|wingetdiscover|wd|search|s|list|versionlock|vl|addversionlock|saveversionlock|avl|versionlockpath|vlp|listversionlocks|lvl|migratechocotowinget|mcw|chocoderegisteronly|cdo|forcewingetreinstall|fwr|allowruntimederegister|ard|allowportablederegister|apd|finalizechocolateyremoval|fcr|allowremainingchocopackages|nochocolateybackup|migrationreportpath|chocowingetmappath|cwm|migratechocoexclude|mce|checkapp|lockapp|lockversion|packagemanager|installspicetify|is|ignoretimeouts|it|wingettimeoutseconds|wts|wingetdiscoverytimeoutseconds|wdts|windowsupdatetimeoutseconds|wuts|wslapttimeoutseconds|wats|snaptimeoutseconds|sts|installnugetprovider|inp|allowreboot|allowrestart|ar|forcereboot|reboot|restart|r|forcerestart|fr|fs|frst|forceshutdown|shutdown|poweroff|forcepoweroff|fsh|logroot|lr|syslog|installroot|ir|sourceurl|su|nobackup|nb|sweep|sweepstale|clean|prune|sw|deletestale|ds|time|at)
+            return 0
+            ;;
+        *) return 1 ;;
+    esac
 }
 
 run_native_installer() {
@@ -326,28 +344,34 @@ tail_log() {
 
 parse_args() {
     while [ "$#" -gt 0 ]; do
-        case "$1" in
-            --update|-Update|-update) ;;
-            --force|-Force|-force) FORCE=1 ;;
-            --preview|-Preview|-preview) PREVIEW=1 ;;
-            --status|-Status|-status) ACTION=status ;;
-            --kill|-Kill|-kill) ACTION=kill ;;
-            --tail|-Tail|-tail|-Log|-log) ACTION=tail ;;
-            --version|--Version|--VERSION|-version|-Version|-VERSION|version|Version|VERSION|-v|-V|v|V) ACTION=version ;;
-            --new|--New|--NEW|-new|-New|-NEW|new|New|NEW|-n|-N|n|N) ACTION=install ;;
-            --install|--Install|--INSTALL|-install|-Install|-INSTALL|install|Install|INSTALL|-i|-I|i|I) ACTION=install ;;
-            --help|-Help|-help|-H|-h) ACTION=help ;;
-            --tail-lines|-TailLines)
+        original_option=$1
+        option=$(normalize_option "$original_option")
+        case "$option" in
+            update|u) ;;
+            force|f) FORCE=1 ;;
+            preview|p) PREVIEW=1 ;;
+            status|s) ACTION=status ;;
+            kill|k) ACTION=kill ;;
+            tail|t|log) ACTION=tail ;;
+            version|v) ACTION=version ;;
+            new|n|install|i) ACTION=install ;;
+            help|h) ACTION=help ;;
+            tail-lines|taillines|tl)
                 shift; [ "$#" -gt 0 ] || die '--tail-lines needs a positive number'
                 TAIL_LINES=$1 ;;
-            --include|-Include|-include)
+            include|c)
                 shift
                 [ "$#" -gt 0 ] || die '--include needs at least one section'
                 while [ "$#" -gt 0 ]; do
                     case "$1" in -*) break ;; *) add_include "$1"; shift ;; esac
                 done
                 continue ;;
-            *) die "Unknown option: $1" ;;
+            *)
+                if windows_only_option "$option"; then
+                    die "$original_option is currently Windows-only; Linux does not pretend otherwise"
+                fi
+                die "Unknown option: $original_option"
+                ;;
         esac
         shift
     done
