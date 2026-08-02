@@ -6,9 +6,9 @@ set -u
 umask 077
 
 # Native and Windows runners share one Reparo release number and version flavor.
-REPARO_LINUX_VERSION='1.2.2.1'
-REPARO_VERSION_QUOTE="It's a trap!"
-REPARO_VERSION_SOURCE='Star Wars: Return of the Jedi'
+REPARO_LINUX_VERSION='1.2.2.2'
+REPARO_VERSION_QUOTE='No disintegrations.'
+REPARO_VERSION_SOURCE='Star Wars: The Empire Strikes Back'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
@@ -42,7 +42,10 @@ Modes:
   --status                 Show other running Reparo Linux instances and logs.
   --kill                   Send SIGTERM only to other Reparo Linux instances.
   --tail                   Follow the newest Reparo Linux log.
+  --tail-lines COUNT       Print this many lines before following a log. Default: 120.
   --new / --install        Download and run the native Linux installer.
+  --version                Show the shared Reparo release identity.
+  --help                   Show this help.
 
 Every native command uses the full lexicon: `--name`, `-Name`, and `name` in
 any casing, plus short forms with or without a dash. Short forms are Update/U,
@@ -53,6 +56,9 @@ Native package operations require root or passwordless sudo (sudo -n). Reparo
 will skip rather than hang on a password prompt. Global npm installs under a system
 prefix such as /usr/local use that same privilege path; user-owned npm prefixes do
 not.
+
+Native --new validates POSIX shell syntax. Windows Authenticode validation applies
+only to the elevated PowerShell -New path.
 EOF
 }
 
