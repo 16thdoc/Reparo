@@ -55,6 +55,11 @@ fi
 install -d -m 700 "$install_root"
 mkdir -p "$shim_dir"
 install -m 755 "$runtime_download" "$runtime_path"
+legacy_runtime="$install_root/Reparo.ps1"
+if [ -f "$legacy_runtime" ]; then
+    rm -f "$legacy_runtime"
+    printf '%s\n' "Removed legacy PowerShell runtime: $legacy_runtime"
+fi
 cat >"$shim_path" <<EOF
 #!/usr/bin/env sh
 exec "$runtime_path" "\$@"
