@@ -8,7 +8,7 @@ must run on the signing workstation under the account that owns that key.
 #>
 [CmdletBinding()]
 param(
-    [string]$Thumbprint = '93CE2552E5C7F90600C36BDB83541921FCC97ED1',
+    [string]$Thumbprint = '081400500D9EBC932690D277D95D8F1097CB5A88',
     [string]$TimestampServer = 'http://timestamp.digicert.com'
 )
 

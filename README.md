@@ -397,7 +397,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | Mode | Behavior |
 | --- | --- |
 | Default | Runs `WindowsUpdate` only. |
-| `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` from GitHub, with parse validation and backup handling. |
+| `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` from GitHub, with parse validation and backup handling. On elevated Windows it also installs only the pinned `The Technologist` root and code-signing publisher trust before replacing the runtime; it does not alter execution policy or accept arbitrary certificates. |
 | `-Help` / `-H` / `-h` | Prints Reparo usage and exits without running updates. |
 | `-Version` / `-V` / `-v` | Prints the Reparo version, script source path, and version-specific quote, then exits without running updates. |
 | `-Kill` | Stops running Reparo PowerShell processes, then sweeps known updater front-end processes such as `winget`, `choco`, `npm`, `pip`, and related package managers. |
@@ -442,12 +442,12 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 
 ### Version quote style
 
-`reparo -Version` should keep the CyberShell-style quote structure whenever the runtime version changes. Do not reuse the previous version's quote just because the format is stable; pick a fresh quote/source pair for the new version and add it to `Get-ReparoVersionFlavor`.
+`reparo -Version` should keep the CyberShell-style quote structure whenever the runtime version changes. Runtime releases use `major.feature.minor.hotfix`: routine fixes increment `hotfix`; a planned capability release increments `minor` and resets `hotfix` to zero. Do not reuse the previous version's quote just because the format is stable; pick a fresh quote/source pair for the new version and add it to `Get-ReparoVersionFlavor`.
 
 Expected shape:
 
 ```text
-Reparo 1.1.3
+Reparo 1.2.1.0
 Source: C:\ProgramData\Reparo\Reparo.ps1
   "Never tell me the odds."
   - Star Wars: The Empire Strikes Back

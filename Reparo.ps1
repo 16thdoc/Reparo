@@ -134,7 +134,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.1.16'
+$script:ReparoVersion = '1.2.1.0'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -233,6 +233,8 @@ function Get-ReparoVersionFlavor {
         '1.1.14'  = [pscustomobject]@{ Quote = 'This is the way.'; Source = 'The Mandalorian'; Art = '  RMM: deployment lanes labeled before anyone touches the big red button' }
         '1.1.15'  = [pscustomobject]@{ Quote = 'There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  WU: COM ectoplasm filtered from the console' }
         '1.1.16'  = [pscustomobject]@{ Quote = 'Time is an illusion. Lunchtime doubly so.'; Source = 'The Hitchhiker''s Guide to the Galaxy'; Art = '  CLOCK: one-shot maintenance ritual queued' }
+        '1.2.0.0' = [pscustomobject]@{ Quote = 'There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  REPARO: four-part release machine awakened' }
+        '1.2.1.0' = [pscustomobject]@{ Quote = 'Trust, but verify.'; Source = 'Russian proverb'; Art = '  SIGNER: pinned trust chain brought inside the bootstrap' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -577,7 +579,9 @@ Modes:
   -Syslog <host[:port]> Persistently set and use a TCP syslog listener. Default port: 514.
                        Example: -Syslog 192.168.50.31:514
                        Use -Syslog off or -Syslog disable to clear the saved target.
-  -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
+   -Install, -New       Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
+                        Elevated Windows installs also trust the pinned The Technologist
+                        signing root and publisher before replacing the runtime.
    -Force               Run all sections except PowerShell 7, including developer toolchains and WSL apt handling.
                         Use -7 explicitly for the PowerShell 7 MSI update.
   -Kill                Stop running Reparo PowerShell processes and known updater front ends.
@@ -1117,6 +1121,50 @@ function Get-ReparoFileHash {
     }
 }
 
+function Install-ReparoPinnedSigningTrust {
+    param([switch]$WhatIfOnly)
+
+    if (-not $script:ReparoIsWindows) { return }
+    if (-not (Test-ReparoCurrentProcessElevated)) {
+        throw 'Reparo -New requires elevation to install the pinned The Technologist signing trust.'
+    }
+
+    $expectedRootThumbprint = '9F63BD0268BE2E8D4A61F14FB8B90343540AC179'
+    $expectedSignerThumbprint = '081400500D9EBC932690D277D95D8F1097CB5A88'
+    $rootBase64 = 'MIIFJzCCAw+gAwIBAgIQaRDSrlFchKFP9u9j9Ay0RjANBgkqhkiG9w0BAQsFADAsMSowKAYDVQQDDCFUaGUgVGVjaG5vbG9naXN0IEludGVybmFsIFJvb3QgQ0EwHhcNMjYwODAyMDYzNTIxWhcNMzYwODAyMDY0NTIwWjAsMSowKAYDVQQDDCFUaGUgVGVjaG5vbG9naXN0IEludGVybmFsIFJvb3QgQ0EwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQC2XIlRU3ikhFCI9ia++s1e1dEUik/FboA/63K/Rhm8kp9vfsOl0g8W/lHnDg4NPS/FTTIr1O4QB50kx/EpNxT6+nsxgoEjAzC5jiXrLFQ67F2bdKfADdEYFKMyuRDpULwOf9wPS/6rqyJY65CGzNvht8fdNpZxh8ak4SgUIXE96xFFMbFi6z3kaAOc3LInN177reFe2UqQLVV8b8GFbFsxb3nCUi0ymFzBB2m76noscvHaZjt93kY093Ot/cjuJ1UWLIdTYOgidCK/sP4eTR1fZbzzPsKLhNc66ItFw22hbIYJRgsA+WwxggySl2TnhxIxmjtXQspVtoi1iFdbijjZe8cGVhgyy04zl6kniLK6Dv47ss+cWLQoPqt7YiiidDtFDV09rlen47jBxm5rPAiz4CReP6/+nZ71JaTS0lNF5fF1jkOMo2K61a/sosj0Vj8ph2XH2ttDknU+e5W7l9MjB7n/KXKxda7tEeR/++a8QQOoCvb3o/pHLv2xyo+miWp1TVwab1nmLNJ0fk+sN2mYSIL1ixTQSliCG2hLw16faGB9lTcR+gZ2CZumjhz2l3FJS90lNJVsSe0L2larhiVwZkG/ZTH+MICLN/mqaCdofQlHfhNrZHEZes8uNuuZogsWyW85QLgvMF8EOXDxhn6vOHWe/baY90iBpa9S1g3BsQIDAQABo0UwQzAOBgNVHQ8BAf8EBAMCAYYwEgYDVR0TAQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQULb+uiCqPcP381IWOPzUuoxPOziswDQYJKoZIhvcNAQELBQADggIBACV35+UPbJtJEKV+RsrDwYfxNXZALVEsllHwzLI9a/iL54WuQ4SmPJWFjAWUM1+RyjrjfW956TSJ2bXt1FVA2kvno3IvGUN7IRfd6BKAwMLaqPiSIjtx3IxHh4ekiKeBQidvQd48VSw+5MFcQ/H+gxllAeR23ISzXSIdSYjTDJVSKW2gbKN4tsjg5+yi2SGuddUKatZHg7+UFfeyTQelD2K4UIx9/dQl96lRX3uP1TsIfK4tCkxMWwhFpNgbZcqHyHNqSpLGyrTpuXfVjZDgO3E8OvUZVL/rxWoaQw77/HQTXABNtGMl+HovfW/AM38EYD9B8qGyRPaDhyovgvwr8Tp1B7BEkWTdE9ev/vqlTh91tw2eTGlI5TFf83OEKRTn3QdMUxE1burNb8FmMqWK2Mj9XtxL/baCiX04m+GWU58MupFMZCwJALD3z54XoLm0Q8P/cvu/oeMaqnpU2vE9/+D0jE2YKkRKlkxYnPUbmgla+6XKtftYb7PzYQoJOKHjn5/LauOmFcvqt2zBe+fpmuGVMiqGvzQp9Zy00CctPgrFCYb3VgpOnIYTwS1z2uG7TEpgHKI22RRe/QSywMxLGsR47FPKbLwFN4cWVtq3o9AtXgnkG+LwfVL96rWlIZNk/NhtfAbbDaZMdGVq5iAzVXj93+1/JVu3PaygqMPBomhn'
+    $rootCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String($rootBase64))
+    if ($rootCertificate.Thumbprint -ne $expectedRootThumbprint) { throw "Pinned root certificate thumbprint mismatch: $($rootCertificate.Thumbprint)" }
+
+    $signature = Get-AuthenticodeSignature -FilePath $PSCommandPath
+    if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $expectedSignerThumbprint) {
+        throw "Reparo bootstrap signer is not the pinned The Technologist certificate: $($signature.SignerCertificate.Thumbprint)"
+    }
+
+    foreach ($entry in @(
+        [pscustomobject]@{ Certificate = $rootCertificate; StoreName = 'Root'; Thumbprint = $expectedRootThumbprint },
+        [pscustomobject]@{ Certificate = $signature.SignerCertificate; StoreName = 'TrustedPublisher'; Thumbprint = $expectedSignerThumbprint }
+    )) {
+        $store = [Security.Cryptography.X509Certificates.X509Store]::new($entry.StoreName, 'LocalMachine')
+        try {
+            $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            if ($store.Certificates | Where-Object { $_.Thumbprint -eq $entry.Thumbprint }) {
+                Write-ReparoLog "[SIGNING] $($entry.Certificate.Subject) is already trusted in LocalMachine\$($entry.StoreName)."
+            }
+            elseif ($WhatIfOnly) {
+                Write-Info "Would trust $($entry.Certificate.Subject) in LocalMachine\$($entry.StoreName)."
+            }
+            else {
+                $store.Add($entry.Certificate)
+                Write-Done "Trusted $($entry.Certificate.Subject) in LocalMachine\$($entry.StoreName)."
+                Write-ReparoLog "[SIGNING] Trusted pinned $($entry.Certificate.Subject) ($($entry.Thumbprint)) in LocalMachine\$($entry.StoreName)."
+            }
+        }
+        finally {
+            $store.Close()
+        }
+    }
+}
+
 function Install-ReparoCommandShim {
     param(
         [Parameter(Mandatory)][string]$TargetRoot,
@@ -1242,6 +1290,8 @@ Preview: $WhatIfOnly
 SkipBackup: $SkipBackup
 Log: $script:ReparoLogPath
 "@
+
+    Install-ReparoPinnedSigningTrust -WhatIfOnly:$WhatIfOnly
 
     if ($WhatIfOnly) {
         Write-Info 'Preview only. No files will be replaced.'
@@ -6725,33 +6775,38 @@ if ($script:ReparoFinalStatus -eq 'FAILED') {
 }
 
 # SIG # Begin signature block
-# MIIdnQYJKoZIhvcNAQcCoIIdjjCCHYoCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
+# MIIfFwYJKoZIhvcNAQcCoIIfCDCCHwQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUaiY7IAc8grCWccyMViDunGuw
-# NryggheGMIIESDCCArCgAwIBAgIQLVS+Lgx5x4dK1qeO0Fy3mDANBgkqhkiG9w0B
-# AQsFADAiMSAwHgYDVQQDDBdSZXBhcm8gSW50ZXJuYWwgUm9vdCBDQTAeFw0yNjA3
-# MjgyMDExMTBaFw0yOTA3MjgyMDIxMTBaMCcxJTAjBgNVBAMMHFJlcGFybyBJbnRl
-# cm5hbCBDb2RlIFNpZ25pbmcwggGiMA0GCSqGSIb3DQEBAQUAA4IBjwAwggGKAoIB
-# gQDDefiKuvFGkLlODev1GfWDfAxuEbPvNqXeNlMfjo8Z07gDQZSnvPP/G2P8ighP
-# d+yL7BbEaVhVk86jZfxfSLcwvfybjEF0PljYBCAWOb8k7Kin9qxfNvv76jfsC0dx
-# 5C9U7fSa4Ghp9BrkUsK1iC1/LWiyA0RB/O8mljdiTPk2jXJqycQ9m/E90klKtrhr
-# 1sSnBKt6qYjOyfhRF249uhtlXYq4wCPmmN3ljHMWRvF71Fm9ieqlhI+rz/Iiq0zt
-# 2R9vFBxrlvwsbXOzwzT6QIHPtRU8ecHYlT48KF8BQeWsFmUTI68DDodQW1g8xWcC
-# x9S1F/zSptgJdl+O8gOwfHVzRME4Y4j6iKqla4w15Gw0tgLpCDf6z6/LgWQv0wSc
-# +ZUT/SZy8mu/sJBMWzSsoayV1lqeK8VD020YJI17FOgVfNNniv6jmlLgTvhXXc+1
-# GxE+8JXtuJMqq2mAVwBoM9ab43Cemka5hrIL2/Y+ncIZtY0efPh46a4xFsxqXiz1
-# gc0CAwEAAaN1MHMwDgYDVR0PAQH/BAQDAgeAMAwGA1UdEwEB/wQCMAAwEwYDVR0l
-# BAwwCgYIKwYBBQUHAwMwHwYDVR0jBBgwFoAUte3wiJmwACggzC2luxXB2qrt3Q4w
-# HQYDVR0OBBYEFGp8NVPXw0srUF6nNOdyth14axsmMA0GCSqGSIb3DQEBCwUAA4IB
-# gQCm/9nG7ANlqpgGGDJZFI1jpoMGVOooAxJt/1oDnGi/LLnKujuQrDQuR/7E6y4t
-# l2SZEX4QTsNhtT0mtZDOt+eZM7ndR/Ble1nqM8ubaxMdmOQVekq7dWQWRdooeys+
-# gplzIPzijrgkIxgA4532r3a/hokcSx4E+CQV27a1+nkfNchekYjuOh2NTKfiffXo
-# YAOHPMwLOZZjDcAQpXHGpH10L/ZifvKoM+svU1nrfOXiW2Hp6WEKHxJSZW5EhJyH
-# aNr7iA2OjbCvFxhbCrW+R+3LwEfZV10UW03hQ08ky74v2UVR9u23EoNnGpMHXgMw
-# EkbwRGcs6Fl1/4l+eqiip+Vm2zT1rdBAoED7bl1NtTwoNX8K1ZASIu2rogoglYCf
-# eP12qW6fcvCCihTNYILAOujdDcRic3+Rlu4B7TWzszvgglB+Jih7jU2qhRB+IZfU
-# zgYeIJ8MCuS8EjVKZx7MHgGYbfcvzn9MkIY4XBUv0yCK8nFtR8nPShfaP8Zurj0y
-# WJ0wggWNMIIEdaADAgECAhAOmxiO+dAt5+/bUOIIQBhaMA0GCSqGSIb3DQEBDAUA
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUZLGl5d24rbqljWiTueUJx2sd
+# zx6gghh2MIIFODCCAyCgAwIBAgIQRAnY3+h+m7ZGhdt+bpKDhTANBgkqhkiG9w0B
+# AQsFADAsMSowKAYDVQQDDCFUaGUgVGVjaG5vbG9naXN0IEludGVybmFsIFJvb3Qg
+# Q0EwHhcNMjYwODAyMDYzNTIyWhcNMzYwODAxMDY0NTIwWjAbMRkwFwYDVQQDDBBU
+# aGUgVGVjaG5vbG9naXN0MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA
+# lNNhdFAcHc7pXrTpI9GZ4wGRATk5nCBjKBB/M9WKokYnDIr073y59dRUaXETnzl/
+# kKdorprHwvmSX8k6StiVCl8zAEi94w7CLYB5rqMXFmKm3VFX6s6X615gnoEL2sZX
+# Ff9Nof+zIH+2TqVof7kYnSjUcpcDabadRxg4tpEfONLWKtRmgGMFI/AgfJKZrQgG
+# oGoSZK8ba+Oo+HsrrsPAmgJCbSNInBn9cuOCqbyGenaFA+MYzUQ41GsFdlrWKP/k
+# UIye+0OqsABabOq2y18k9zTfivgF1Vq5/raUDwjMDQPT/FwX7+vESWPdiDBCjlxw
+# udll03kF1dfz9cF9zOV6UAWce8nxWl/jtaix4dIX+SyEPjKtOPMm7SYBERVWeTYG
+# oGFOzyWNnxKm9YQ+2k7eYHEmlOdWI8KvcIXZwTG/o/XKOuh1CaV2Hbhfw4QFg4FU
+# 32JjNYMid7hJBhAtLf5yCMGO0VSdcVyJrC+xQKR7UGobwFqGTRImIp3V9QffGxXh
+# we+HU5qNzkhzA9mrg7XKgCxXbyz1HmwOH1+4v+cHB1AD/d91vnBnydg4Az2IDmC9
+# AlmJwMaEMdkhpHzutSmQ0wbktu/I/3d6Ww2M7KKWHdQeqiMEFR/tZ6W5yt8oYipo
+# LcTGbl87MdBYykI2iF8yeyCIBlAoozk0/FnBQqVsEZUCAwEAAaNnMGUwDgYDVR0P
+# AQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMDMB8GA1UdIwQYMBaAFC2/rogq
+# j3D9/NSFjj81LqMTzs4rMB0GA1UdDgQWBBRXUJHYAZIY2TOUNjqBVrsf0xlVjjAN
+# BgkqhkiG9w0BAQsFAAOCAgEABDrlrZlG0CHzdeCegE53n1s1U5xebwC77FdXTM9I
+# 4vKRrtROYog0HssZ4JFTXXgAuoIv7SwpyNQUf7HtxSzp99qLnMJ7/uusclQOEGb0
+# 8hWGCSp+KT8Jw5ltKUyygYdjAs5epHxAT6EA4XNbJ5DCox+ZyFhHo7XjoFGEbZGo
+# XWcUhpVYl/XP4+7iUa+fVRaETHg/uJYtdoCMi5bdy5lcubIFwb9d1VI3JwbuhYMa
+# xh8+yWMeRz2IRcVt/Xw4DxlC12HOqico8kDY86l8GGH8VSPvwW1SLwepf3/iVr8/
+# bA5QiTb38eMOkYcFrXcw3FNV2MYuVXB1CYRCHog60cJ52u9iZBVKnZjiHtc4wnWW
+# QcaLjKjD/4ZuyK0yw3TjXdGwO9+rEpWLFjsUSkVBltH7/Ont1/9Tvjer0poauyxq
+# zOu4dZmaK6DU9jAygU9UhTiT2PP0ji8sec9XGDkC/P8YcihrDkERKrqQAt4r3Q9k
+# eEAq92NccsmuC9/zwt2/jpJCt566Tg9U1Yohy/qdwVbzNIgHyuIOtfPEtYlhleur
+# GR4/fkb1Oqqwome7AlEy6L/1IHKXn/A/cScN0BnswLkg8yVhsoZK++0KXAHZHFjW
+# pv9PV0pPFkyS0Zh1XPoRroJT0ENsS+SvHQube2rJc+WPjmPV2CSMNqjFJ3dIlz8X
+# tvMwggWNMIIEdaADAgECAhAOmxiO+dAt5+/bUOIIQBhaMA0GCSqGSIb3DQEBDAUA
 # MGUxCzAJBgNVBAYTAlVTMRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsT
 # EHd3dy5kaWdpY2VydC5jb20xJDAiBgNVBAMTG0RpZ2lDZXJ0IEFzc3VyZWQgSUQg
 # Um9vdCBDQTAeFw0yMjA4MDEwMDAwMDBaFw0zMTExMDkyMzU5NTlaMGIxCzAJBgNV
@@ -6853,35 +6908,37 @@ if ($script:ReparoFinalStatus -eq 'FAILED') {
 # +8Hggt8l2Yv7roancJIFcbojBcxlRcGG0LIhp6GvReQGgMgYxQbV1S3CrWqZzBt1
 # R9xJgKf47CdxVRd/ndUlQ05oxYy2zRWVFjF7mcr4C34Mj3ocCVccAvlKV9jEnstr
 # niLvUxxVZE/rptb7IRE2lskKPIJgbaP5t2nGj/ULLi49xTcBZU8atufk+EMF/cWu
-# iC7POGT75qaL6vdCvHlshtjdNXOCIUjsarfNZzGCBYEwggV9AgEBMDYwIjEgMB4G
-# A1UEAwwXUmVwYXJvIEludGVybmFsIFJvb3QgQ0ECEC1Uvi4MeceHStanjtBct5gw
-# CQYFKw4DAhoFAKB4MBgGCisGAQQBgjcCAQwxCjAIoAKAAKECgAAwGQYJKoZIhvcN
-# AQkDMQwGCisGAQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUw
-# IwYJKoZIhvcNAQkEMRYEFFxjngHr/BgHDqewGEASp2I1LEEEMA0GCSqGSIb3DQEB
-# AQUABIIBgECB/zr8alFlw/K9QTiv6s/poYjC1iTHror+Y7MNK7CiFCJltc3pxkpc
-# I12TCUHCl+gQX7UNaLIEyfoJ5CI2NHUt/B54GwGEcR4KlKb4mtnya7CXb4QwbOSq
-# cNTEixJJ6i4DqIH2csK/Ltbzke8rEsYiUl1otBpCoQ9ktCN90zAc1GPbBlwdB7y3
-# tTU5ODcDF6x/ZJ3frAtNVHZoPQOETWpJClAatjaayQW9P2sZPOon3EEE45NwaDtx
-# cl6je4HAVHZxBz/elBtL+TtBzG7MzGyC/S68p9TvrmKZFlvmGTfIglrOmMEeRLgo
-# +59lHZH6yzOSAVsNNlK65zAtQezDKDzIMR4MLv6Opu8Nj/WGLQpq26ltn3vLtD7I
-# JSMz+3Vmvi/3L3mGqcLp1ldKO27aLiMzeDY6RwG6JzO0f9p9Ilnuu1siliySjcDG
-# KpAxh4h/aCe6IWd1TrMV+CHlKzqbS59onGoYXEHzhFFtb95k80Il9ztOFciZtWzz
-# OyD5G5gnQKGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNV
-# BAYTAlVTMRcwFQYDVQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNl
-# cnQgVHJ1c3RlZCBHNCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBD
-# QTECEAqA7xhLjfEFgtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0B
-# CQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA3MjkwMTE5MjhaMC8G
-# CSqGSIb3DQEJBDEiBCDWuV7b6fnI7hp5LOlckP1RQQQ0442LCwnikxhRKqLTqzAN
-# BgkqhkiG9w0BAQEFAASCAgAATLNCncwG2u9eYuFrlFzZuBc92kWeqjJdmpdlzM1h
-# RGjPtla1iVD23bFipTR2kyPGmUVb5b3pq+nqwOyGNTzV/XdBXD3wOwPyctdj56Gd
-# uOhzlHuP2s3ADJDUrNo/zAgA1Yx0WGC2vC/9XAyiFss1z4O96rTuICb5aap1EKwa
-# zIL+VjqnHLD0ndAj+5FyB+LN8dxu364E8KRCwF0GRSD8GtLcSBUBJvqDtd1BLKUs
-# D59w4jaAQaCK/cQf7VmzFwHJzRfe/PvJJfuQnmQUhvS4Xfg8qk0aJkpsEYISVR1h
-# arvcxw409l8Df2K9XJr33Aa6rBLW43orB014njPLwuUu5CAs8p5a4s9jlwWu1Xy7
-# HTWYNVG9vmAos+o5T0OJL85Y8Hin/XqAN89yBFdrPC/e2Gp1BIZQ2m3pI4Fp2r7a
-# GHBHDmASV8Og+Y0jmRkdvl0HgzApHJKc3Pbz2D1rlF+El2P8EBMVgKt7c0s+1fyA
-# 3diu3qI7r0vHaLlj//3AvLY+MXi+bUfuAlw6hZr/Lc8W04UXFRlYwqu3I4GjE4wv
-# m9XkAoaZOXxsFdOQv9SCGh7pVaGLz9mBbwf95MqmDfL7b2yfy168z2iM+zSStVW0
-# CDdKsBTifBDr8ySHYTXmV6ouj0Eie3iQF16ESwJ29A+JXWqk7fGGfEUmKwfnWYWe
-# uA==
+# iC7POGT75qaL6vdCvHlshtjdNXOCIUjsarfNZzGCBgswggYHAgEBMEAwLDEqMCgG
+# A1UEAwwhVGhlIFRlY2hub2xvZ2lzdCBJbnRlcm5hbCBSb290IENBAhBECdjf6H6b
+# tkaF235ukoOFMAkGBSsOAwIaBQCgeDAYBgorBgEEAYI3AgEMMQowCKACgAChAoAA
+# MBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisGAQQBgjcCAQsxDjAMBgor
+# BgEEAYI3AgEVMCMGCSqGSIb3DQEJBDEWBBR1GmqRUZmgFPE52r9Duzx6axEMvTAN
+# BgkqhkiG9w0BAQEFAASCAgAHIgjXrsmDta4urFnQAu9jABke7PypZvB/dnXRhz4z
+# dn71USifW9665rYVnPQST42TVwXoipfRkIpiDsG0fdVIcbjSWte0QA+8JkfXyWA6
+# bTFSpOldl7Lrk0q2bAzm8AK8xB7UZY+pXPwJ1vnEas6bsxXaHfxl1J4KP4GjtITC
+# pyJNvo4m/Nfk7dLXzE2nx+owE1LYEI2d8Ljyw9x+QqCFUAIwwPGu9F4kHm67WCs1
+# orpC3Ss38CLxnhCevz+YhS6rRAx8MSX3EN0MMTiWat3Uf414YiLVBZY32jEHTAfz
+# +ww+asgmj5Zv959bZBYl+pG22vz0Af1LbIEmGN8Ch1epQjqDykMcGdWkJ4UU+oML
+# 8DLw1sJjct3S1K4L1p/nWLxMGeVcIG8xDJLC8e7WcNOs7WQBZ2a9CqwQ+6KHrAAe
+# rzNiXWlB0WVeKUpsP3rpQ5qk9XwQ8qbIbI/RhGfU7yy89Do/TpV+4A1GWHFiinWr
+# LHbdkeJOaYw+FQdkcaYDAF/dZKJvY3W3dAlN3FmN6fLlBwUOIsJI7rkF1ZaIQ5X5
+# BgpjjcjCHzNwo1fMik4fXg/xsi5nemyGRZaq+mAb+kepcoG59lHolDJAvW52Iuq6
+# mcLtLc4LrFBybx6H5s9kttPmBnyjZr1iTtBS6g1is40heQgpa9gqHn2+0jULEoy/
+# EqGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVT
+# MRcwFQYDVQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1
+# c3RlZCBHNCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTECEAqA
+# 7xhLjfEFgtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJ
+# KoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA4MDIwNjU0MTJaMC8GCSqGSIb3
+# DQEJBDEiBCDP53P5stjn5dzyMUR8roz3+TziM1daHYAW9TWzrSod9DANBgkqhkiG
+# 9w0BAQEFAASCAgBus8Po9c1elW5tMV2ujJ+HZhEX/pmhdxhos29xUisP3Kj5UADF
+# C6tlk4XjcD23a8YjDuz+U9mDFvTMLXOkjJ50LpLI+aaLOUuALyQfealXZFuY4q8q
+# Drl+2UEkV2/Gnao3+tRN1VbHnU7o7gnEUHAN3j7UOHoEDmcM7efCJMCRAPrnFcS5
+# 3xFXff7ltDSSmGSPecSKGvDdzZbDX7SzW5WVNXJTcO2yM4TIkKbIu8905IAij2q+
+# /dpIwulr9tkk1pLu+m/VopPyWvv8QGeJ1nQ1Hi45R1xn/4RM2Fo3/GWl8dkMbHm7
+# lD837QeOQUsNUtf2na+dK540M62CL7oFooWJp4ppoVDmc9XA0NBxU4r3Ui0ecLrp
+# hSfunM2XIpDyHScmYcOsUQ8WkmFtlRxDQ3z7mZD7bmTmfiuuuCpBpSGkoJoS1tuh
+# BuLEdT/+dNpAbmLCEUy7kDI5Eleb9VH9Et8TrrUe7zG7PO/nk/HOM3y1GxGem3By
+# jf6QX5l5nZ47D3WwIbnq83HZ9bFgd9bRxEHtZoaQ0y0daJ8na/aFbE9EpJ8ODXK9
+# IdbiImCbbfWrhabnbDPNMRveC8qM/wQx95oWNWzSQeD5XJ6Vxlx6nGy88Z1+WCgv
+# fIOt/RJAfDOuoEUZMoge+XrGsTFI6mr9uJuDaWi8mseKgE5akqlTiCuPKw==
 # SIG # End signature block
