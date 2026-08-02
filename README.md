@@ -448,7 +448,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 Expected shape:
 
 ```text
-Reparo 1.2.1.0
+Reparo 1.2.1.1
 Source: C:\ProgramData\Reparo\Reparo.ps1
   "Never tell me the odds."
   - Star Wars: The Empire Strikes Back
