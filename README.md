@@ -64,7 +64,8 @@ Tail. Thus `-Version`, `version`, `-V`, and `v` are equivalent, as are mixed-cas
 forms such as `--VeRsIoN`. `New` and `Install` both run the native installer, so they
 update Reparo itself; `--update` updates the machine's installed packages and tools
 instead. Windows-only commands are identified plainly rather than pretending they
-work on Linux.
+work on Linux. The native and Windows runners share the Reparo release number and
+the same CyberShell-style version quote/source flavor.
 
 ## Windows quick start
 

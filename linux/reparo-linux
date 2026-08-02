@@ -5,7 +5,10 @@
 set -u
 umask 077
 
-REPARO_LINUX_VERSION='0.1.3'
+# Native and Windows runners share one Reparo release number and version flavor.
+REPARO_LINUX_VERSION='1.1.16'
+REPARO_VERSION_QUOTE='Time is an illusion. Lunchtime doubly so.'
+REPARO_VERSION_SOURCE="The Hitchhiker's Guide to the Galaxy"
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
@@ -424,7 +427,13 @@ parse_args "$@"
 build_protected_processes
 case "$ACTION" in
     help) usage; exit 0 ;;
-    version) printf '%s\n' "Reparo Linux $REPARO_LINUX_VERSION"; printf '%s\n' "Runtime: $0"; exit 0 ;;
+    version)
+        printf '%s\n' "Reparo Linux $REPARO_LINUX_VERSION"
+        printf '%s\n' "Runtime: $0"
+        printf '  "%s"\n' "$REPARO_VERSION_QUOTE"
+        printf '  - %s\n' "$REPARO_VERSION_SOURCE"
+        exit 0
+        ;;
     install) run_native_installer; exit $? ;;
     status) show_status; exit 0 ;;
     kill) kill_reparo_processes; exit 0 ;;
