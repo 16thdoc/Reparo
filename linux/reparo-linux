@@ -313,6 +313,42 @@ run_npm_global_update() {
     fi
 }
 
+run_opencode_update() {
+    section_selected Opencode || return 0
+    if ! command_exists opencode; then
+        log '[SKIP] Opencode: opencode not found'
+        syslog_event notice command_skipped Opencode skipped tool_not_found
+        return 0
+    fi
+    if ! command_exists npm; then
+        log '[SKIP] Opencode: npm not found; cannot update npm-managed installation'
+        syslog_event notice command_skipped Opencode skipped npm_not_found
+        return 0
+    fi
+
+    opencode_path=$(command -v opencode)
+    opencode_prefix=$(dirname "$(dirname "$opencode_path")")
+    opencode_package="$opencode_prefix/lib/node_modules/opencode-ai"
+    if [ ! -d "$opencode_package" ]; then
+        log "[SKIP] Opencode: $opencode_path is not a standard npm global installation"
+        syslog_event notice command_skipped Opencode skipped unsupported_installation
+        return 0
+    fi
+
+    npm_executable=$(command -v npm)
+    # Do not invoke `opencode upgrade`: it prompts before modifying an npm-owned
+    # executable, and its npm method follows npm's configured prefix rather than the
+    # prefix that owns the active OpenCode command. Update that owning prefix directly.
+    case "$opencode_prefix" in
+        /usr|/usr/*|/opt|/opt/*)
+            run_privileged Opencode 'npm install --global opencode-ai@latest (owning prefix)' "$npm_executable" install --global --prefix "$opencode_prefix" opencode-ai@latest || true
+            ;;
+        *)
+            run_command Opencode 'npm install --global opencode-ai@latest (owning prefix)' "$npm_executable" install --global --prefix "$opencode_prefix" opencode-ai@latest || true
+            ;;
+    esac
+}
+
 run_native_manager() {
     native_section=$(detect_native_section)
     if ! section_selected "$native_section"; then return 0; fi
@@ -493,7 +529,7 @@ if section_selected Fwupd && command_exists fwupdmgr; then
     run_privileged Fwupd 'fwupdmgr update --assume-yes' fwupdmgr update --assume-yes || true
 fi
 run_npm_global_update
-run_optional Opencode opencode opencode upgrade
+run_opencode_update
 run_optional Pipx pipx pipx upgrade-all
 run_optional Pnpm pnpm pnpm update -g
 run_optional Yarn yarn yarn global upgrade
