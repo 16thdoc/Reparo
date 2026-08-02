@@ -398,6 +398,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | --- | --- |
 | Default | Runs `WindowsUpdate` only. |
 | `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` from GitHub, with parse validation and backup handling. On elevated Windows it installs only the pinned `The Technologist` root and publisher trust, then rejects a downloaded runtime unless its Authenticode signature is `Valid` and from that pinned signer. It does not alter execution policy or accept arbitrary certificates. Native Linux retains POSIX syntax validation; Authenticode is a Windows-specific format. |
+| `-SkipSignatureValidation` / `-SkipSig` | Windows `-New` escape hatch: skips only the downloaded-runtime Authenticode check for this invocation. It remains loud, non-persistent, and unsafe; pinned trust bootstrap still runs. |
 | `-Help` / `-H` / `-h` | Prints Reparo usage and exits without running updates. |
 | `-Version` / `-V` / `-v` | Prints the Reparo version, script source path, and version-specific quote, then exits without running updates. |
 | Linux `--version` | Native Linux reports the same release number, quote, and source as the Windows PowerShell runner. |
@@ -448,7 +449,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 Expected shape:
 
 ```text
-Reparo 1.2.2.0
+Reparo 1.2.2.1
 Source: C:\ProgramData\Reparo\Reparo.ps1
   "Never tell me the odds."
   - Star Wars: The Empire Strikes Back
