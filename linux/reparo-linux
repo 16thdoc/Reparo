@@ -50,7 +50,9 @@ Force/F, Preview/P, Include/C, Status/S, Kill/K, Tail/T, TailLines/TL,
 Version/V, New/N, Install/I, and Help/H. `Log` is an alias for Tail.
 
 Native package operations require root or passwordless sudo (sudo -n). Reparo
-will skip rather than hang on a password prompt.
+will skip rather than hang on a password prompt. Global npm installs under a system
+prefix such as /usr/local use that same privilege path; user-owned npm prefixes do
+not.
 EOF
 }
 
@@ -272,6 +274,39 @@ run_optional() {
     run_command "$section" "$*" "$@" || true
 }
 
+npm_system_scope() {
+    npm_root=$("$npm_executable" root -g 2>/dev/null || true)
+    npm_prefix=$("$npm_executable" config get prefix 2>/dev/null || true)
+    case "$npm_root" in
+        /usr/*|/opt/*) return 0 ;;
+    esac
+    case "$npm_prefix" in
+        /usr|/usr/*|/opt|/opt/*) return 0 ;;
+    esac
+    [ -n "$npm_root" ] && [ -e "$npm_root" ] && [ ! -w "$npm_root" ]
+}
+
+run_npm_global_update() {
+    section_selected Npm || return 0
+    if ! command_exists npm; then
+        log '[SKIP] Npm: npm not found'
+        syslog_event notice command_skipped Npm skipped tool_not_found
+        return 0
+    fi
+    npm_executable=$(command -v npm)
+
+    # Preview is a strict non-executing mode: do not even query npm configuration.
+    if [ "$PREVIEW" -eq 1 ]; then
+        run_command Npm 'npm update -g' "$npm_executable" update -g || true
+    elif npm_system_scope; then
+        log '[INFO] Npm: detected system global prefix; using root or passwordless sudo'
+        syslog_event notice npm_scope Npm detected system_global
+        run_privileged Npm 'npm update -g (system global prefix)' "$npm_executable" update -g || true
+    else
+        run_command Npm 'npm update -g' "$npm_executable" update -g || true
+    fi
+}
+
 run_native_manager() {
     native_section=$(detect_native_section)
     if ! section_selected "$native_section"; then return 0; fi
@@ -451,7 +486,7 @@ if section_selected Fwupd && command_exists fwupdmgr; then
     run_privileged Fwupd 'fwupdmgr refresh --force' fwupdmgr refresh --force || true
     run_privileged Fwupd 'fwupdmgr update --assume-yes' fwupdmgr update --assume-yes || true
 fi
-run_optional Npm npm npm update -g
+run_npm_global_update
 run_optional Opencode opencode opencode upgrade
 run_optional Pipx pipx pipx upgrade-all
 run_optional Pnpm pnpm pnpm update -g

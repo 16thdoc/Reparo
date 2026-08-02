@@ -53,6 +53,10 @@ Use `run_id` to correlate the Graylog event stream with the complete local logfi
 Native package operations require root or passwordless `sudo -n`; Reparo skips them
 rather than summon an unattended password prompt from the abyss. `--kill` sends
 SIGTERM only to other Reparo Linux processes, never a broad updater-process sweep.
+When npm's global prefix is system-owned (for example `/usr/local`), Reparo runs
+`npm update -g` through that same root/passwordless-sudo path instead of detonating
+on `EACCES` during a package rename. User-owned npm prefixes still update as the
+calling user.
 
 ### Linux host scope
 
