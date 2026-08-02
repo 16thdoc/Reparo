@@ -31,6 +31,10 @@ function Assert-ReparoSigner {
 }
 
 $sourcePath = Join-Path $repoRoot 'Reparo.ps1'
+$parityTest = Join-Path $repoRoot 'Tests\Test-ReparoReleaseParity.ps1'
+& $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File $parityTest
+if ($LASTEXITCODE -ne 0) { throw "Windows/native Linux release parity validation failed with exit code $LASTEXITCODE." }
+
 $sourceSignature = Set-AuthenticodeSignature -FilePath $sourcePath -Certificate $certificate -TimestampServer $TimestampServer
 if (-not $sourceSignature.SignerCertificate -or $sourceSignature.SignerCertificate.Thumbprint -ne $Thumbprint) {
     throw "Could not sign Reparo source with $Thumbprint."
