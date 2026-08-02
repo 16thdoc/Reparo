@@ -54,6 +54,19 @@ Native package operations require root or passwordless `sudo -n`; Reparo skips t
 rather than summon an unattended password prompt from the abyss. `--kill` sends
 SIGTERM only to other Reparo Linux processes, never a broad updater-process sweep.
 
+### Linux host scope
+
+Reparo is supported on ordinary GNU/Linux hosts with one of its native managers:
+Debian/Ubuntu-family systems (including **Proxmox VE**), Fedora/RHEL-family systems,
+Arch/Manjaro, and openSUSE/SLES. On Proxmox, run `reparo --preview` first and use the
+native Proxmox subscription/repository policy before an Apt pass; Reparo must never be
+used to “fix” a deliberately managed appliance repo.
+
+**QNAP QTS/QuTS hero and UniFi OS are appliance operating systems, not supported
+package-manager targets.** Their vendor update mechanisms own the base OS. Do not run
+Reparo package maintenance or CyberShell deployment there; use the vendor UI/CLI and
+run Reparo on a normal VM, container, or supported host adjacent to the appliance.
+
 ### Linux command lexicon
 
 Every native Linux command accepts double-dash, single-dash, and bare long forms in

@@ -1,5 +1,14 @@
 # Reparo Repository Workflow
 
+## Cross-platform parity
+
+Treat Windows and native Linux as peers. For every user-visible behavior, command,
+release/lifecycle change, logging contract, or documentation change in either runner,
+assess the equivalent path in the other runner before closing the work. Implement the
+same useful outcome where the platform supports it; otherwise record and test a clear
+intentional boundary. Do not let one platform silently drift, and keep shared release
+identity and version-output flavor synchronized.
+
 ## Versioned releases
 
 Source and Linux-only changes may be reviewed and committed without the internal

@@ -5,6 +5,8 @@ source work and Linux-only changes do not require the Windows signing identity t
 be committed.
 
 1. Finish, review, and commit source and deployment changes.
+   For every user-visible change, assess and update both the Windows and native Linux
+   runners, or document a tested intentional platform boundary before proceeding.
 2. On the Windows signing workstation, run the signed release workflow:
 
    ```powershell
