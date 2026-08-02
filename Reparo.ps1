@@ -134,7 +134,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.1.1'
+$script:ReparoVersion = '1.2.2.0'
+$script:ReparoSigningRootThumbprint = '9F63BD0268BE2E8D4A61F14FB8B90343540AC179'
+$script:ReparoSigningSignerThumbprint = '081400500D9EBC932690D277D95D8F1097CB5A88'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -236,6 +238,7 @@ function Get-ReparoVersionFlavor {
         '1.2.0.0' = [pscustomobject]@{ Quote = 'There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  REPARO: four-part release machine awakened' }
         '1.2.1.0' = [pscustomobject]@{ Quote = 'Trust, but verify.'; Source = 'Russian proverb'; Art = '  SIGNER: pinned trust chain brought inside the bootstrap' }
         '1.2.1.1' = [pscustomobject]@{ Quote = 'The needs of the many outweigh the needs of the few.'; Source = 'Star Trek II: The Wrath of Khan'; Art = '  ENTERPRISE: trust bootstrap set to warp factor sensible' }
+        '1.2.2.0' = [pscustomobject]@{ Quote = 'The sleeper must awaken.'; Source = 'Dune'; Art = '  SHAI-HULUD: signed payload provenance gate engaged' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -1099,6 +1102,23 @@ function Test-ReparoScriptParse {
     }
 }
 
+function Assert-ReparoDownloadedWindowsSignature {
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not $script:ReparoIsWindows) { return }
+
+    $signature = Get-AuthenticodeSignature -FilePath $Path
+    if ($signature.Status -ne 'Valid') {
+        throw "Downloaded Reparo.ps1 has an invalid Authenticode signature: $($signature.Status) ($($signature.StatusMessage))"
+    }
+    $actualSigner = if ($signature.SignerCertificate) { $signature.SignerCertificate.Thumbprint } else { '<none>' }
+    if ($actualSigner -ne $script:ReparoSigningSignerThumbprint) {
+        throw "Downloaded Reparo.ps1 signer mismatch. Expected $script:ReparoSigningSignerThumbprint, got $actualSigner."
+    }
+
+    Write-ReparoLog "[SIGNING] Downloaded Reparo.ps1 signature is valid for $($signature.SignerCertificate.Subject) ($actualSigner)."
+}
+
 function Get-ReparoFileHash {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -1130,8 +1150,8 @@ function Install-ReparoPinnedSigningTrust {
         throw 'Reparo -New requires elevation to install the pinned The Technologist signing trust.'
     }
 
-    $expectedRootThumbprint = '9F63BD0268BE2E8D4A61F14FB8B90343540AC179'
-    $expectedSignerThumbprint = '081400500D9EBC932690D277D95D8F1097CB5A88'
+    $expectedRootThumbprint = $script:ReparoSigningRootThumbprint
+    $expectedSignerThumbprint = $script:ReparoSigningSignerThumbprint
     $rootBase64 = 'MIIFJzCCAw+gAwIBAgIQaRDSrlFchKFP9u9j9Ay0RjANBgkqhkiG9w0BAQsFADAsMSowKAYDVQQDDCFUaGUgVGVjaG5vbG9naXN0IEludGVybmFsIFJvb3QgQ0EwHhcNMjYwODAyMDYzNTIxWhcNMzYwODAyMDY0NTIwWjAsMSowKAYDVQQDDCFUaGUgVGVjaG5vbG9naXN0IEludGVybmFsIFJvb3QgQ0EwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQC2XIlRU3ikhFCI9ia++s1e1dEUik/FboA/63K/Rhm8kp9vfsOl0g8W/lHnDg4NPS/FTTIr1O4QB50kx/EpNxT6+nsxgoEjAzC5jiXrLFQ67F2bdKfADdEYFKMyuRDpULwOf9wPS/6rqyJY65CGzNvht8fdNpZxh8ak4SgUIXE96xFFMbFi6z3kaAOc3LInN177reFe2UqQLVV8b8GFbFsxb3nCUi0ymFzBB2m76noscvHaZjt93kY093Ot/cjuJ1UWLIdTYOgidCK/sP4eTR1fZbzzPsKLhNc66ItFw22hbIYJRgsA+WwxggySl2TnhxIxmjtXQspVtoi1iFdbijjZe8cGVhgyy04zl6kniLK6Dv47ss+cWLQoPqt7YiiidDtFDV09rlen47jBxm5rPAiz4CReP6/+nZ71JaTS0lNF5fF1jkOMo2K61a/sosj0Vj8ph2XH2ttDknU+e5W7l9MjB7n/KXKxda7tEeR/++a8QQOoCvb3o/pHLv2xyo+miWp1TVwab1nmLNJ0fk+sN2mYSIL1ixTQSliCG2hLw16faGB9lTcR+gZ2CZumjhz2l3FJS90lNJVsSe0L2larhiVwZkG/ZTH+MICLN/mqaCdofQlHfhNrZHEZes8uNuuZogsWyW85QLgvMF8EOXDxhn6vOHWe/baY90iBpa9S1g3BsQIDAQABo0UwQzAOBgNVHQ8BAf8EBAMCAYYwEgYDVR0TAQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQULb+uiCqPcP381IWOPzUuoxPOziswDQYJKoZIhvcNAQELBQADggIBACV35+UPbJtJEKV+RsrDwYfxNXZALVEsllHwzLI9a/iL54WuQ4SmPJWFjAWUM1+RyjrjfW956TSJ2bXt1FVA2kvno3IvGUN7IRfd6BKAwMLaqPiSIjtx3IxHh4ekiKeBQidvQd48VSw+5MFcQ/H+gxllAeR23ISzXSIdSYjTDJVSKW2gbKN4tsjg5+yi2SGuddUKatZHg7+UFfeyTQelD2K4UIx9/dQl96lRX3uP1TsIfK4tCkxMWwhFpNgbZcqHyHNqSpLGyrTpuXfVjZDgO3E8OvUZVL/rxWoaQw77/HQTXABNtGMl+HovfW/AM38EYD9B8qGyRPaDhyovgvwr8Tp1B7BEkWTdE9ev/vqlTh91tw2eTGlI5TFf83OEKRTn3QdMUxE1burNb8FmMqWK2Mj9XtxL/baCiX04m+GWU58MupFMZCwJALD3z54XoLm0Q8P/cvu/oeMaqnpU2vE9/+D0jE2YKkRKlkxYnPUbmgla+6XKtftYb7PzYQoJOKHjn5/LauOmFcvqt2zBe+fpmuGVMiqGvzQp9Zy00CctPgrFCYb3VgpOnIYTwS1z2uG7TEpgHKI22RRe/QSywMxLGsR47FPKbLwFN4cWVtq3o9AtXgnkG+LwfVL96rWlIZNk/NhtfAbbDaZMdGVq5iAzVXj93+1/JVu3PaygqMPBomhn'
     $rootCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String($rootBase64))
     if ($rootCertificate.Thumbprint -ne $expectedRootThumbprint) { throw "Pinned root certificate thumbprint mismatch: $($rootCertificate.Thumbprint)" }
@@ -1324,6 +1344,7 @@ Log: $script:ReparoLogPath
             Unblock-File -LiteralPath $tempScript -ErrorAction SilentlyContinue
         }
         Test-ReparoScriptParse -Path $tempScript
+        Assert-ReparoDownloadedWindowsSignature -Path $tempScript
 
         $newHash = Get-ReparoFileHash -Path $tempScript
         if (Test-Path -LiteralPath $scriptPath) {
@@ -6778,8 +6799,8 @@ if ($script:ReparoFinalStatus -eq 'FAILED') {
 # SIG # Begin signature block
 # MIIfFwYJKoZIhvcNAQcCoIIfCDCCHwQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQU5bwNvsahsgWENPYzWcyt68gN
-# POqgghh2MIIFODCCAyCgAwIBAgIQRAnY3+h+m7ZGhdt+bpKDhTANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUmIFqQ5D9LhJwYrrFibG1BGsV
+# 1NSgghh2MIIFODCCAyCgAwIBAgIQRAnY3+h+m7ZGhdt+bpKDhTANBgkqhkiG9w0B
 # AQsFADAsMSowKAYDVQQDDCFUaGUgVGVjaG5vbG9naXN0IEludGVybmFsIFJvb3Qg
 # Q0EwHhcNMjYwODAyMDYzNTIyWhcNMzYwODAxMDY0NTIwWjAbMRkwFwYDVQQDDBBU
 # aGUgVGVjaG5vbG9naXN0MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA
@@ -6913,33 +6934,33 @@ if ($script:ReparoFinalStatus -eq 'FAILED') {
 # A1UEAwwhVGhlIFRlY2hub2xvZ2lzdCBJbnRlcm5hbCBSb290IENBAhBECdjf6H6b
 # tkaF235ukoOFMAkGBSsOAwIaBQCgeDAYBgorBgEEAYI3AgEMMQowCKACgAChAoAA
 # MBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisGAQQBgjcCAQsxDjAMBgor
-# BgEEAYI3AgEVMCMGCSqGSIb3DQEJBDEWBBS3vepS2UZXA/5luY6hHi4zDrmjljAN
-# BgkqhkiG9w0BAQEFAASCAgCJx9bePU3jRenMyZbIJgLRmylEg3k8b7vR2SlMlmsn
-# +xc3eKdYxKbIpe4d0myzyQOc959gOD6LqIs9o9kzWLuGx7fhDZISBh4aXGYyBKTq
-# n7gZa/9TPgdHgKSTnPO84M2Q00EG2LbBujnlWryF46vT54NfW6Wt+otT1L92Tch0
-# VnebVmZrvVIHzoZjubXxGdkXo7qXgBLrH7X7UoOMvgREt8DW/RO4kt5hlsrwY9Wc
-# h1YM6QEMwSiTO9BZeFvUmdnzFFN9cjoHlOvK+gWi9UoiUD2ycD4TyIs/4RzyrzQF
-# ALjXV3jGfbPYDDh5EccL9JK1OTJmJgmBWNnNVFIjetlDdBFV8NBqycAhDbteMukk
-# VXy+X/aHnynQzWJj+ZjpVZHIrnTtc2krd15sdViqBpvk7Vxl7eI0UD+8LhTFKX/U
-# nARN8lIRZSkFtiqEqNFy+o1c4DsrAY8MiSqegG9hJH5ZsoIt2vhK74XtcGp2kyRv
-# gLJGzKla39VCtp8U2FLZP/2sueptJ0ZG0TlF+xbF6OotXsmqsXJzYFUVZfqBLklC
-# +Eq5/hs0SXHGfe59M+6prQbzfhlUplFIZQJwitfEOIY1wXklDhlMZZdKTvwxdGM9
-# yNFDna+7bBV13zFJwimc5SsMRKdSVgPzG/TNhv6aTKAir9fNuXHNKXcNYRnvo9IV
-# 0KGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVT
+# BgEEAYI3AgEVMCMGCSqGSIb3DQEJBDEWBBRoYiaGxVysEUrXjlnstj5gBogGKjAN
+# BgkqhkiG9w0BAQEFAASCAgB4IvLdceD3ug+WaNhnC4dR0q/QKk1IsXXGduG3ZJex
+# 55m73jvqoPvxD+tS5VNk6ip7nMAb3xtnszA0Wy/swHWRuXHp1STGr7V8dWAntx4g
+# 642zAinZJLhLFY831MEPsQUehZi+hv5Gg76S3iLeDZf9VCTRP8E2vcIfhC7GeQzr
+# jSpT+6CKUbstXEOgu5q9kjI8ehJz8Y0QVG6zANZkVi9+gfWthIJZbFKmYbD/wY9n
+# qZuC/Q+maOUWiRGihnlvTD2G8yxU1/RIZdl19ReiE25VrLnslUM8zBfx6TJMX3zK
+# t0XhfQUJCb1CIsdP0ct8Mk2xt8VJvR0pXZJ+cgEllwYXPh/JBcMDkjnAKBfE6hZ2
+# 03Q0FxUjwKqAgXpPV4VIE0uqjA0X0pnMcYgoY/CruQOc4xnasaXWnitMAeUFJd4L
+# XeTASE9LBU33BZOV0MOoJCKRf7Uk3yA/1mM02qtaDR28rmp/rHPS2wR/zV7fJMWU
+# SS8g7/OD0/qX8Bd7TM8jNdMWfjffBm8s8J9V1QuDEFNzFqVKhRcWSUXivcNCoNLm
+# RQhJIFsfQOjoOCsi17FskVwZz2nyrybAUfzze5D7tKEWtuIHIHREpQPFq6KgRf6s
+# jQdm2smQZ559dwEdmocNho5lJ1ZXGZhiVIB/sbYvEGTZy4JytyWnd5wcl5aqwO9W
+# jqGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVT
 # MRcwFQYDVQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1
 # c3RlZCBHNCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTECEAqA
 # 7xhLjfEFgtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJ
-# KoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA4MDIwNzEwMDFaMC8GCSqGSIb3
-# DQEJBDEiBCDZrFwjmSGFM7zvpJAnapy9I7sw0BS2YBHBCg++LNpqCTANBgkqhkiG
-# 9w0BAQEFAASCAgAjjE1+Z2HnhkmeMa5tBPFY2/k7yEZoJl7NoVuOquGOXBZIVxOj
-# KCUD7jTC0PsovoX3c0w1WW84S0mOSKyBHVCyQr79p97lHtAdt4Kv/IzmE99QiL+/
-# pmdWK4ZB08O77TIw2mot5pf6t2E7Doddpn396C9YFFgUL4pxYpYPLpfsJ+w3Xw/3
-# i28rUDZEeWCUR+fraXWVLhBvll8cgC0P4IJl15qKPvLru1FPgq+M4dWA/av8yofq
-# oovJBMYj6x2IEvAu6oCQSD1oFkPq0gfjhWy2JH0Mlv1b0dyqbgesGWLZ75hQvbEF
-# 875WbvfAY/7uHcFpaPPWmEZAShAvQGJx9pT5SUv2qZPOUd0G2PXPjUz8qA/FkciD
-# kYuiTtx4wkCUDshIjJeH40bfVTqj2dm+dH9iJmCLuIR1F0gJLulLZsRVkZ+CaVNR
-# PIKwIRT2SqnIUbzAbkmuzCEa+xeXR632U5o/JkeYLVPhylRK2xnKBBQCkHG88IDJ
-# eWGTguaOmQvKZIcWsuchNYlo3qRKa0DOn5e9vyeO3cUoo5EgGRdgaTvfCEhsfrqb
-# 2pDBmlR4/t7MhKe9j4SQLOSuE3QgDz2/i22bgfniVfoD/O5nX2qQXBJ0HSUN1zw2
-# ajpocjBokWVeGXvEYU0pIcKbj8S7tbakCECVCszfkmWljjXeb7+t5BwXaQ==
+# KoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA4MDIwNzIwMzdaMC8GCSqGSIb3
+# DQEJBDEiBCDqNkpSrJrfT37AV1qSRqoxE63Dziyq0b+RHahym9rd0jANBgkqhkiG
+# 9w0BAQEFAASCAgA5a5WjcqHGqwc+dOe2qX8MlhzHvO/4TIEyK4BOdTKFscc68Hmw
+# mgsI2ddVcxYu7O3p6u0l1J8XA22ywih6xC1fA3Bgscuw6GExU0GC4otU32h0WCBZ
+# pdlQrXNHYcRgvZR89GHWKyITs7K+F2Zs4jVajoPuirUq7tnm7P8zEq/3az/pnNJl
+# vHCG6aUGBhxtTpGAStKVOULnp2OAIiSJhj/nIrn4hmK3mrfx6doW4WdmmJDyoU1h
+# 0zo7PWrHRXSak5k8av91GU1PDKBLX7xCOMubsQeR1pD0tjFStYXzgViL3pKzjS5I
+# 0PGm5FUAAX64bclHgdA8HQG2E7I2za1dq0xotHiCAxnt8DyRKUAltRDxOR31hwtV
+# BsPAlXkOEkXhXtxnOmVKZHelZUHscabJOxpV/haXa3OZi0IGsDV2Sa4GoWwvRdqX
+# RPvxKoZyArqLsdFYLSZyN7tMUWv2b25tfgwegeVPwTa2Xt5xZ91/mThApxwAoTNq
+# k7ckx5A+78PZT50u7qRFY6oZPxP6jAvAeEk81d1CuQnx3ubD431nGokLMmmY8/CX
+# uSBYR+zz9uSBnYewZSEY0kMLWYcgVvaeTUD0fuQNHZlbe3yckmWl9E9uH5H2iWF0
+# p+atTgRd2DeKJCAOuvYj5n6jBvhTBMYLJO3Fd13OVkTFMyHFNgfD/oY/Zw==
 # SIG # End signature block

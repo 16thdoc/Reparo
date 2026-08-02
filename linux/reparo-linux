@@ -6,9 +6,9 @@ set -u
 umask 077
 
 # Native and Windows runners share one Reparo release number and version flavor.
-REPARO_LINUX_VERSION='1.2.1.1'
-REPARO_VERSION_QUOTE='The needs of the many outweigh the needs of the few.'
-REPARO_VERSION_SOURCE='Star Trek II: The Wrath of Khan'
+REPARO_LINUX_VERSION='1.2.2.0'
+REPARO_VERSION_QUOTE='The sleeper must awaken.'
+REPARO_VERSION_SOURCE='Dune'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
