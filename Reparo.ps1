@@ -136,7 +136,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.3.0'
+$script:ReparoVersion = '1.2.4.0'
 $script:ReparoSigningRootThumbprint = '9F63BD0268BE2E8D4A61F14FB8B90343540AC179'
 $script:ReparoSigningSignerThumbprint = '081400500D9EBC932690D277D95D8F1097CB5A88'
 $script:ReparoBoundParameters = $PSBoundParameters
@@ -244,6 +244,7 @@ function Get-ReparoVersionFlavor {
         '1.2.2.1' = [pscustomobject]@{ Quote = 'It''s a trap!'; Source = 'Star Wars: Return of the Jedi'; Art = '  ACKBAR: emergency signature bypass marked unsafe' }
         '1.2.2.2' = [pscustomobject]@{ Quote = 'No disintegrations.'; Source = 'Star Wars: The Empire Strikes Back'; Art = '  VADER: help-text ambiguity vaporized' }
         '1.2.3.0' = [pscustomobject]@{ Quote = 'I''m doing my part.'; Source = 'Starship Troopers'; Art = '  RICO: signed update lane made opt-in' }
+        '1.2.4.0' = [pscustomobject]@{ Quote = 'There is no try.'; Source = 'Star Wars: The Empire Strikes Back'; Art = '  JEDI: transactional deploy rollback shield raised' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -1127,6 +1128,28 @@ function Assert-ReparoDownloadedWindowsSignature {
     Write-ReparoLog "[SIGNING] Downloaded Reparo.ps1 signature is valid for $($signature.SignerCertificate.Subject) ($actualSigner)."
 }
 
+function Test-ReparoInstalledRuntime {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ExpectedHash,
+        [switch]$Sign
+    )
+
+    Test-ReparoScriptParse -Path $Path
+    $installedHash = Get-ReparoFileHash -Path $Path
+    if ($installedHash -ne $ExpectedHash) {
+        throw "Installed Reparo.ps1 hash mismatch. Expected $ExpectedHash, got $installedHash."
+    }
+    if ($Sign) {
+        Assert-ReparoDownloadedWindowsSignature -Path $Path
+    }
+
+    $versionOutput = & $Path -Version *>&1 | Out-String
+    if ($LASTEXITCODE -notin @(0, $null) -or $versionOutput -notmatch '(?m)^Reparo \d+\.\d+\.\d+\.\d+\r?$') {
+        throw "Installed Reparo.ps1 failed version self-test: $versionOutput"
+    }
+}
+
 function Get-ReparoFileHash {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -1305,6 +1328,8 @@ function Invoke-ReparoNew {
     $backupRoot = Join-Path $TargetRoot 'Backups'
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ReparoNew_{0}_{1}" -f $PID, (Get-Date -Format 'yyyyMMddHHmmss'))
     $tempScript = Join-Path $tempRoot 'Reparo.ps1'
+    $rollbackPath = Join-Path $tempRoot 'Reparo.rollback.ps1'
+    $deploymentStarted = $false
 
     Write-Info "Install root: $TargetRoot"
     Write-Info "Source: $Url"
@@ -1400,14 +1425,19 @@ Log: $script:ReparoLogPath
 
         New-Item -ItemType Directory -Force -Path $TargetRoot, $targetLogRoot | Out-Null
 
-        if ((Test-Path -LiteralPath $scriptPath) -and -not $SkipBackup) {
-            New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
-            $backupPath = Join-Path $backupRoot ("Reparo_{0}.ps1" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
-            Copy-Item -LiteralPath $scriptPath -Destination $backupPath -Force
-            Write-Info "Backup saved: $backupPath"
+        if (Test-Path -LiteralPath $scriptPath) {
+            Copy-Item -LiteralPath $scriptPath -Destination $rollbackPath -Force
+            if (-not $SkipBackup) {
+                New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+                $backupPath = Join-Path $backupRoot ("Reparo_{0}.ps1" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+                Copy-Item -LiteralPath $scriptPath -Destination $backupPath -Force
+                Write-Info "Backup saved: $backupPath"
+            }
         }
 
+        $deploymentStarted = $true
         Copy-Item -LiteralPath $tempScript -Destination $scriptPath -Force
+        Test-ReparoInstalledRuntime -Path $scriptPath -ExpectedHash $newHash -Sign:$Sign
         Write-Done "Installed Reparo.ps1 updated ($newHash)."
         Write-Info "Live script: $scriptPath"
         Install-ReparoCommandShim -TargetRoot $TargetRoot
@@ -1423,6 +1453,23 @@ Log: $script:ReparoLogPath
 "@
     }
     catch {
+        if ($deploymentStarted) {
+            try {
+                if (Test-Path -LiteralPath $rollbackPath) {
+                    Copy-Item -LiteralPath $rollbackPath -Destination $scriptPath -Force
+                    Write-Warning "Reparo deployment failed; restored previous runtime: $scriptPath"
+                    Write-ReparoLog "[ROLLBACK] Restored previous Reparo runtime after failed deployment: $scriptPath"
+                }
+                elseif (Test-Path -LiteralPath $scriptPath) {
+                    Remove-Item -LiteralPath $scriptPath -Force
+                    Write-Warning "Reparo deployment failed; removed incomplete first-install runtime: $scriptPath"
+                    Write-ReparoLog "[ROLLBACK] Removed incomplete first-install Reparo runtime: $scriptPath"
+                }
+            }
+            catch {
+                Write-Error "Reparo deployment rollback failed: $($_.Exception.Message)"
+            }
+        }
         Write-ReparoEventLog -EventId 1104 -EntryType Error -Message @"
 Reparo install/update failed.
 
@@ -6815,8 +6862,8 @@ if ($script:ReparoFinalStatus -eq 'FAILED') {
 # SIG # Begin signature block
 # MIIfFwYJKoZIhvcNAQcCoIIfCDCCHwQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQU9vkT0JOxeWRCxcXh+MUMeEAd
-# 0Smgghh2MIIFODCCAyCgAwIBAgIQRAnY3+h+m7ZGhdt+bpKDhTANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUOUTextRGgEvT0EOvi5BLtOiJ
+# bzOgghh2MIIFODCCAyCgAwIBAgIQRAnY3+h+m7ZGhdt+bpKDhTANBgkqhkiG9w0B
 # AQsFADAsMSowKAYDVQQDDCFUaGUgVGVjaG5vbG9naXN0IEludGVybmFsIFJvb3Qg
 # Q0EwHhcNMjYwODAyMDYzNTIyWhcNMzYwODAxMDY0NTIwWjAbMRkwFwYDVQQDDBBU
 # aGUgVGVjaG5vbG9naXN0MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA
@@ -6950,33 +6997,33 @@ if ($script:ReparoFinalStatus -eq 'FAILED') {
 # A1UEAwwhVGhlIFRlY2hub2xvZ2lzdCBJbnRlcm5hbCBSb290IENBAhBECdjf6H6b
 # tkaF235ukoOFMAkGBSsOAwIaBQCgeDAYBgorBgEEAYI3AgEMMQowCKACgAChAoAA
 # MBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisGAQQBgjcCAQsxDjAMBgor
-# BgEEAYI3AgEVMCMGCSqGSIb3DQEJBDEWBBSFZAcBgJ4moN/d7Ck3+1kNNDJhSDAN
-# BgkqhkiG9w0BAQEFAASCAgCIbvH2/6XZ4qptvItA4j7qT1rkT2GLCcF6DDV5h+M6
-# dOEUqfu3p1lDYMwV4LGwMcYIrEcSw43auvZxOXFmL28dgWrfETNqQcMzOQy68OUq
-# DF73msSdJJ9owRqdjyL2JssEGkxSbjXIPb+GLlUPRkme1Z5OSj2jb5nZtUJ8ec7A
-# MBjp95xey+JvsICEQMx9vx/rewxabEUjCe4Ll+wSEUTEf2EUV4e22FaQCmT1l+k/
-# Z51O0VWw86UkXknRHRQX3Av+DS+ezaCD8+1ED/I2d2yFXxA3j4QqIjkQrDIgEuJt
-# CI533AAWR1P0dv8rFgMS7rbZCNbduAaTc7DQmAbCX6+e/QSBWkdCfkEvcSG4uKjC
-# 3DfabgNzoV3tZA/gm0bUtoLY7B7+1RXEPg3el5Y1/Al29q93XlZKvQMDNaVFCvHq
-# jW2C05DaNd9ettVKTA90D8aJ/XDJ0nqNjDvnxzySU8bfy9afLpqRxdAVp27wBe00
-# PA3ve+8nS8leeaMW7vZtvqzqotQu3dYQemoEUxJY3mMPGJAb4DwleMDZrYAGMAlT
-# l9+OmGU/UfAqHvLmSpOpF2duPts6LLHH6VxaVX+Rxxu3qe8r7Wl9vpZr6OzeTMNt
-# Jq2AUOShcEmkEABHI1ji1GAAGPS7V3n5Qqwcjr2BTmb7y2LuqyDCEv8StXZrxfGk
-# aqGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVT
+# BgEEAYI3AgEVMCMGCSqGSIb3DQEJBDEWBBRmPCkk4293lqB6igRCdFGSpRQnlDAN
+# BgkqhkiG9w0BAQEFAASCAgA11V7cBgAgRHChTIkS+1T5sPO2ap/NiThVAhtf3o3B
+# FKWnvWM9E+4GAvUBjtDHGrCFy9XQEs9DU2QvR0ItEbslIk45DLNru+vC3YcdVL6C
+# VlgbsNaVxZabxPojdDJ2MLyIiPZ0/I4b6/fnbWhQYHWyd5ZQenHRLTTMZcUOuUbG
+# Sl/y4xqT2+FJAszvyXa6RX374F6OjYAO/woxXI55blnfFg0USEdgyunRf78TX8R7
+# YuIJsABH791yAKTGpNt+vLIMxtujuVOVJ5S42JPG2jgez5ST0SHdcWna9BTvxonu
+# 27flzUV3dVB03QN7PiHYo1Y9Y6N5gIpW+pQ4NT/+VYVdw9E0T1sEWes0dVIp2Cjj
+# P2fsD6e1j1AFkxjcx4l8Lx+B1WENL+ia6juBUiIAH+fQPJZG64HVFBvblR3UkQiJ
+# sV2XhFhy7OqnoKzBxf32d51xLYzYdxcbowxbvnyQahicLNZEGujDoFEby8EdTBse
+# OvAfFM9JfoeCONpiLa45iKnKJGNZBw2jM1Vg0gLHNb8jZw2m0moRlq+X5Fv3mguH
+# IlM49N8hBoLmTEIeNLDzLcCl10jaOKFUf+RrVChTOCtbww4X/hWTEhfmp6ZiJP2j
+# PkXjpzG59a4HNzJcaB0jZna02COr9eHhP77AFMbGs7IGzUrLJ6E05PLebKSeJ5Lu
+# dKGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVT
 # MRcwFQYDVQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1
 # c3RlZCBHNCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTECEAqA
 # 7xhLjfEFgtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJ
-# KoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA4MDIwNzQyNTJaMC8GCSqGSIb3
-# DQEJBDEiBCDmxl5WWl+UrjftHXcJlnxTXrtrpmkZvYlfDI029BvRJDANBgkqhkiG
-# 9w0BAQEFAASCAgAKjXfVWZe8Ji3eLknHU9pmqwPhJckpKTXnZQk9kEhBUncJ0J9a
-# 6qmO3Ssxh1HhxEcpB+yMv3qVlwjuhmL4thOOiP+jNTA/U34xbk0mqiiwo4NxBKvZ
-# qGuyiKCwBto4tHn7zk/KRSkAo7TDlSWhBy3ZxItQ58JfKnudHkZ6xVJ42Wvcdjnc
-# LGEOGLMqFPR85+IGOgn4oRK0HHgodqbw57kV7tGMv5pCSIed899esBT/UgBnjmUy
-# WgzM1iPIJoMYfhB3F+ux0YTjtJbIlhP/E3H4UaeJkmH1gzPAum/gcfvnYViOxVOV
-# XdFv17vhJgrFSA44qUFrUjS2LvhOdm2MKdeHH4wh8dyuYP1bFHihepySyP9ysN6B
-# Zi5CAecom4Hznckys1+khow9brxFEf5Jj0RINIFrRwVBMN2YmzpMCd7WUS4BK8Ax
-# JO1JmFM+9zv0IfaR4j1zfshREDNmIYgCKCVRFfMS6gshc2QM5gxtbhTUgDD/Q6xd
-# 3Ug17I8dP2cteOe0iPervNF5HZ9a8XzLRdrFCg8AlEaYZ524jxYJeNxGXxrHkExe
-# QfW70kiD4SI89C+ft6b1OxmE1j+wPR6Mx4xkLZ3+W7ZpgGOL7tY99xpELQDhh2If
-# EZwPQkzI27dtYfyMMBJBkeh+J5XXLPPX6XivWA+sKBC6C2kPmn74C8tpLA==
+# KoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA4MDIwNzU0NTZaMC8GCSqGSIb3
+# DQEJBDEiBCDpYatZTEc3+shxajgkv4LrBRxQE7GKyZut2E/Ji+airDANBgkqhkiG
+# 9w0BAQEFAASCAgCEwuf0Q/gxDJ54Nr5yBt02ehUluwLOAn1uBY1N5tBZ2kD5EDq0
+# 14HoJZ2vVs+ldWCcpeWqQfqSZ3OFzo7iY4ckkrbcPmjIffM5GUjxWXEXrXcgaXKc
+# sYPwscC/ewQ+G5tNYvO3oJ9R7gS0DCgRfpSpdKjlfMBJSg6NiCT/CUigyqrwQDzm
+# zRE0h8GeF1KQ7rpXVhVN1tZpz8WEkUcoMUjomVPE1gcMvpK/w4YG4Mn2nTPHMeFw
+# PoHhpVa2hRGFwyecBMMDL8l08OiSFGIba6Pt8Vctq13QuUO4kAcmJgy5UFZWi7Ow
+# FyjuGlvOVYOMKP1Rmd0upSVeDy75mV2zjg/CdSKOkXusbXl3Z6Lszp6Ub9CtelrT
+# PoCu+vLHNODD7kmyVWL8fYg3HcnhhrOEUhb2bthoaABMdtgAJ7MlaD39sLEApgvl
+# KDlrCt0yuscuGxY24O9vDc1ysvWSeaJHjRE2LPGKxNSBYLzTq6ggPoGiLN+1T8Jc
+# 1cTcjhN+MRYh8eIo/OenN+0etXeJMUn6zMQgso3PcSBq4ohl9WZGDi7nUfOkBlu9
+# hqcvTX5fgtIgqV2gfsB9XU+mFoIfN4FIWD+qhxG5VOH26zx+6NpmTD+TCFEThWjh
+# 0CmrapCdUwJTa4YR4RNxXUvtyUT7NQRNfrmrtlWTt8UWxlnHPZ0S9FxJSw==
 # SIG # End signature block

@@ -397,7 +397,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | Mode | Behavior |
 | --- | --- |
 | Default | Runs `WindowsUpdate` only. |
-| `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` with parse validation and backup handling. It does not require a signed payload by default. Native Linux retains POSIX syntax validation. |
+| `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` transactionally: it stages and validates the candidate, retains a rollback copy even with `-NoBackup`, verifies the installed runtime, and restores the prior runtime if post-install validation fails. It does not require a signed payload by default. Native Linux applies the equivalent POSIX syntax/runtime rollback validation. |
 | `-Sign` / `-Signed` | Windows `-New` opt-in: installs only the pinned `The Technologist` root and publisher trust, then requires the downloaded runtime Authenticode signature to be `Valid` and from that signer. It does not alter execution policy or accept arbitrary certificates. |
 | `-Help` / `-H` / `-h` | Prints Reparo usage and exits without running updates. |
 | `-Version` / `-V` / `-v` | Prints the Reparo version, script source path, and version-specific quote, then exits without running updates. |
@@ -449,7 +449,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 Expected shape:
 
 ```text
-Reparo 1.2.3.0
+Reparo 1.2.4.0
 Source: C:\ProgramData\Reparo\Reparo.ps1
   "Never tell me the odds."
   - Star Wars: The Empire Strikes Back

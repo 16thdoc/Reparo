@@ -29,6 +29,7 @@ done
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/reparo-install-linux.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 runtime_download="$tmp_dir/reparo-linux"
+runtime_rollback="$tmp_dir/reparo-linux.rollback"
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 runtime_path="$install_root/reparo-linux"
 shim_dir="$HOME/.local/bin"
@@ -54,7 +55,23 @@ fi
 
 install -d -m 700 "$install_root"
 mkdir -p "$shim_dir"
-install -m 755 "$runtime_download" "$runtime_path"
+if [ -f "$runtime_path" ]; then
+    cp "$runtime_path" "$runtime_rollback"
+fi
+if ! install -m 755 "$runtime_download" "$runtime_path"; then
+    printf '%s\n' 'ERROR: Failed to stage the native Reparo runtime.' >&2
+    exit 1
+fi
+if ! sh -n "$runtime_path" || ! "$runtime_path" --version >/dev/null 2>&1; then
+    if [ -f "$runtime_rollback" ]; then
+        cp "$runtime_rollback" "$runtime_path"
+        printf '%s\n' "ERROR: Native runtime post-install validation failed; restored previous runtime: $runtime_path" >&2
+    else
+        rm -f "$runtime_path"
+        printf '%s\n' "ERROR: Native runtime post-install validation failed; removed incomplete first install: $runtime_path" >&2
+    fi
+    exit 1
+fi
 legacy_runtime="$install_root/Reparo.ps1"
 if [ -f "$legacy_runtime" ]; then
     rm -f "$legacy_runtime"
