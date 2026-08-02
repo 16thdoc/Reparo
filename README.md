@@ -400,6 +400,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` from GitHub, with parse validation and backup handling. On elevated Windows it also installs only the pinned `The Technologist` root and code-signing publisher trust before replacing the runtime; it does not alter execution policy or accept arbitrary certificates. |
 | `-Help` / `-H` / `-h` | Prints Reparo usage and exits without running updates. |
 | `-Version` / `-V` / `-v` | Prints the Reparo version, script source path, and version-specific quote, then exits without running updates. |
+| Linux `--version` | Native Linux reports the same release number, quote, and source as the Windows PowerShell runner. |
 | `-Kill` | Stops running Reparo PowerShell processes, then sweeps known updater front-end processes such as `winget`, `choco`, `npm`, `pip`, and related package managers. |
 | `-KillUpdaterNames <names>` | Adds extra process base names to the `-Kill` updater sweep, for example `-Kill -KillUpdaterNames msiexec`. |
 | `-Preview` | Logs what would run without executing package manager commands. |
