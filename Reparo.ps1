@@ -20,8 +20,8 @@ param(
     [switch]$Version,
     [Alias('Install', 'N')]
     [switch]$New,
-    [Alias('SkipSig', 'UnsafeSkipSignatureValidation')]
-    [switch]$SkipSignatureValidation,
+    [Alias('Signed', 'VerifySignature')]
+    [switch]$Sign,
     [Alias('P')]
     [switch]$Preview,
     [Alias('WU')]
@@ -136,7 +136,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.2.2'
+$script:ReparoVersion = '1.2.3.0'
 $script:ReparoSigningRootThumbprint = '9F63BD0268BE2E8D4A61F14FB8B90343540AC179'
 $script:ReparoSigningSignerThumbprint = '081400500D9EBC932690D277D95D8F1097CB5A88'
 $script:ReparoBoundParameters = $PSBoundParameters
@@ -243,6 +243,7 @@ function Get-ReparoVersionFlavor {
         '1.2.2.0' = [pscustomobject]@{ Quote = 'The sleeper must awaken.'; Source = 'Dune'; Art = '  SHAI-HULUD: signed payload provenance gate engaged' }
         '1.2.2.1' = [pscustomobject]@{ Quote = 'It''s a trap!'; Source = 'Star Wars: Return of the Jedi'; Art = '  ACKBAR: emergency signature bypass marked unsafe' }
         '1.2.2.2' = [pscustomobject]@{ Quote = 'No disintegrations.'; Source = 'Star Wars: The Empire Strikes Back'; Art = '  VADER: help-text ambiguity vaporized' }
+        '1.2.3.0' = [pscustomobject]@{ Quote = 'I''m doing my part.'; Source = 'Starship Troopers'; Art = '  RICO: signed update lane made opt-in' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -351,7 +352,7 @@ function Write-ReparoParameterBlock {
         Help                         = $Help
         Version                      = $Version
         New                          = $New
-        SkipSignatureValidation      = $SkipSignatureValidation
+        Sign                         = $Sign
         Preview                      = $Preview
         WindowsUpdate                = $WindowsUpdate
         Windows11Upgrade             = $Windows11Upgrade
@@ -588,12 +589,9 @@ Modes:
   -Syslog <host[:port]> Persistently set and use a TCP syslog listener. Default port: 514.
                        Example: -Syslog 192.168.50.31:514
                        Use -Syslog off or -Syslog disable to clear the saved target.
-  -Install, -New        Install/update C:\ProgramData\Reparo\Reparo.ps1 from GitHub.
-                        Elevated Windows installs trust for the pinned The Technologist
-                        signer, then requires the downloaded runtime's signature to be Valid.
-  -SkipSignatureValidation,-SkipSig
-                        Windows -New only. UNSAFE one-run override: skip downloaded-runtime
-                        signature validation. Pinned signer trust still installs; no setting persists.
+  -Install, -New        Install/update C:\ProgramData\Reparo\Reparo.ps1 with parse validation.
+  -Sign,-Signed         Windows -New only. Install trust for the pinned The Technologist
+                        signer and require the downloaded runtime's signature to be Valid.
    -Force               Run all sections except PowerShell 7, including developer toolchains and WSL apt handling.
                         Use -7 explicitly for the PowerShell 7 MSI update.
   -Kill                Stop running Reparo PowerShell processes and known updater front ends.
@@ -637,7 +635,7 @@ Windows Update:
 Install/update:
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Install
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -New
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -New -SkipSignatureValidation  # unsafe
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -New -Sign
 
 After install, new PowerShell sessions can usually run:
   reparo -Update
@@ -1298,7 +1296,7 @@ function Invoke-ReparoNew {
         [Parameter(Mandatory)][string]$TargetRoot,
         [Parameter(Mandatory)][string]$Url,
         [switch]$SkipBackup,
-        [switch]$SkipSignatureValidation,
+        [switch]$Sign,
         [switch]$WhatIfOnly
     )
 
@@ -1323,7 +1321,9 @@ SkipBackup: $SkipBackup
 Log: $script:ReparoLogPath
 "@
 
-    Install-ReparoPinnedSigningTrust -WhatIfOnly:$WhatIfOnly
+    if ($Sign) {
+        Install-ReparoPinnedSigningTrust -WhatIfOnly:$WhatIfOnly
+    }
 
     if ($WhatIfOnly) {
         Write-Info 'Preview only. No files will be replaced.'
@@ -1355,12 +1355,11 @@ Log: $script:ReparoLogPath
             Unblock-File -LiteralPath $tempScript -ErrorAction SilentlyContinue
         }
         Test-ReparoScriptParse -Path $tempScript
-        if ($SkipSignatureValidation -and $script:ReparoIsWindows) {
-            Write-Warning 'UNSAFE OVERRIDE: Skipping downloaded Reparo.ps1 signature validation for this -New invocation.'
-            Write-ReparoLog '[SIGNING] UNSAFE OVERRIDE: downloaded runtime signature validation was skipped by -SkipSignatureValidation.'
-        }
-        else {
+        if ($Sign) {
             Assert-ReparoDownloadedWindowsSignature -Path $tempScript
+        }
+        elseif ($script:ReparoIsWindows) {
+            Write-ReparoLog '[SIGNING] Downloaded runtime signature validation was not requested. Use -New -Sign to require the pinned signer.'
         }
 
         $newHash = Get-ReparoFileHash -Path $tempScript
@@ -2603,7 +2602,7 @@ if (Invoke-ReparoSchedule) {
 }
 
 if ($New) {
-    Invoke-ReparoNew -TargetRoot $InstallRoot -Url $SourceUrl -SkipBackup:$NoBackup -SkipSignatureValidation:$SkipSignatureValidation -WhatIfOnly:$Preview
+    Invoke-ReparoNew -TargetRoot $InstallRoot -Url $SourceUrl -SkipBackup:$NoBackup -Sign:$Sign -WhatIfOnly:$Preview
     Complete-ReparoUtilityLog -Status $(if ($Preview) { 'PREVIEW' } else { 'COMPLETE' })
     return
 }
@@ -6816,8 +6815,8 @@ if ($script:ReparoFinalStatus -eq 'FAILED') {
 # SIG # Begin signature block
 # MIIfFwYJKoZIhvcNAQcCoIIfCDCCHwQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUvBq0PIMwwhCXO9IRyU4IouOP
-# 5sugghh2MIIFODCCAyCgAwIBAgIQRAnY3+h+m7ZGhdt+bpKDhTANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQU9vkT0JOxeWRCxcXh+MUMeEAd
+# 0Smgghh2MIIFODCCAyCgAwIBAgIQRAnY3+h+m7ZGhdt+bpKDhTANBgkqhkiG9w0B
 # AQsFADAsMSowKAYDVQQDDCFUaGUgVGVjaG5vbG9naXN0IEludGVybmFsIFJvb3Qg
 # Q0EwHhcNMjYwODAyMDYzNTIyWhcNMzYwODAxMDY0NTIwWjAbMRkwFwYDVQQDDBBU
 # aGUgVGVjaG5vbG9naXN0MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA
@@ -6951,33 +6950,33 @@ if ($script:ReparoFinalStatus -eq 'FAILED') {
 # A1UEAwwhVGhlIFRlY2hub2xvZ2lzdCBJbnRlcm5hbCBSb290IENBAhBECdjf6H6b
 # tkaF235ukoOFMAkGBSsOAwIaBQCgeDAYBgorBgEEAYI3AgEMMQowCKACgAChAoAA
 # MBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisGAQQBgjcCAQsxDjAMBgor
-# BgEEAYI3AgEVMCMGCSqGSIb3DQEJBDEWBBSJuKP0cbnu62UwaU8zJznXBWtJRzAN
-# BgkqhkiG9w0BAQEFAASCAgCQGLDEGqJFxzgjasQs3sFvP2OL/1Ltm0gpq52ciITy
-# T1ceOxce/P5XthUQRDCa+q4ls7zpF11pbMpHcwWC7Dpc2yqWB0BZz6SDHvU1u9lo
-# eHZ4Bm3j1uWlh/Hft4fX8vzbLsIpxTq+0J8c86PCk+kBggpGOxrJG4o++U+1XyhM
-# D7up2y4i7lyP8r+MGwQFHsmhNHalLPCeGaK4fXFXaUvTgV9gb8g+88LhZ4jPLIqK
-# 2d0KzPX8hIQL/s24KpiDnG6CoTmLR/Ol5yF4msMpbOV7kcr2ImoL0VDvcDkAqf00
-# ngFh2r1q7HP7/vNBbY9VAIwHs+WMH6AkwX0n+zjhb4KH9SlyEvwHCdibcoR70R0A
-# KV7gTg8eJd0wxDZMponFOww/GgrH4dsFtv0uo0bRIZDvPLoB7Kw3dQtpIE6Gmor7
-# ovWd3p/cuI1Jvm6jZ7UfgQ2ot7vC6APznBofBflU465gTxV/Af4o7PiMK2iIcWcE
-# aXvS5CCl+MWiIAx4TaAR2BzCbMwjzQHpfwfeqNngY/IouG4eNurTMwdKinJOGrPB
-# wh63QsV2bdpm7UcOskH4DJjCUzI/R8JajmlHrZQWNv6GfYtWf2B95iKIFEFcF6De
-# 0dOoNgrrO/8nHCO82cctBcJyp8n8Etc5MYwjkfFuvVrwvTRJC4/nESBTB1WiEUMi
-# uKGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVT
+# BgEEAYI3AgEVMCMGCSqGSIb3DQEJBDEWBBSFZAcBgJ4moN/d7Ck3+1kNNDJhSDAN
+# BgkqhkiG9w0BAQEFAASCAgCIbvH2/6XZ4qptvItA4j7qT1rkT2GLCcF6DDV5h+M6
+# dOEUqfu3p1lDYMwV4LGwMcYIrEcSw43auvZxOXFmL28dgWrfETNqQcMzOQy68OUq
+# DF73msSdJJ9owRqdjyL2JssEGkxSbjXIPb+GLlUPRkme1Z5OSj2jb5nZtUJ8ec7A
+# MBjp95xey+JvsICEQMx9vx/rewxabEUjCe4Ll+wSEUTEf2EUV4e22FaQCmT1l+k/
+# Z51O0VWw86UkXknRHRQX3Av+DS+ezaCD8+1ED/I2d2yFXxA3j4QqIjkQrDIgEuJt
+# CI533AAWR1P0dv8rFgMS7rbZCNbduAaTc7DQmAbCX6+e/QSBWkdCfkEvcSG4uKjC
+# 3DfabgNzoV3tZA/gm0bUtoLY7B7+1RXEPg3el5Y1/Al29q93XlZKvQMDNaVFCvHq
+# jW2C05DaNd9ettVKTA90D8aJ/XDJ0nqNjDvnxzySU8bfy9afLpqRxdAVp27wBe00
+# PA3ve+8nS8leeaMW7vZtvqzqotQu3dYQemoEUxJY3mMPGJAb4DwleMDZrYAGMAlT
+# l9+OmGU/UfAqHvLmSpOpF2duPts6LLHH6VxaVX+Rxxu3qe8r7Wl9vpZr6OzeTMNt
+# Jq2AUOShcEmkEABHI1ji1GAAGPS7V3n5Qqwcjr2BTmb7y2LuqyDCEv8StXZrxfGk
+# aqGCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVT
 # MRcwFQYDVQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1
 # c3RlZCBHNCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTECEAqA
 # 7xhLjfEFgtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJ
-# KoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA4MDIwNzMxMzlaMC8GCSqGSIb3
-# DQEJBDEiBCATRof3RpUJNhu58VQO/OIhRFLPQiagdXFYCZNevG8/QzANBgkqhkiG
-# 9w0BAQEFAASCAgDC2ekgpOJy2yqKp1znzRrz+qhNCCjxu5q3N4bzqm4+n9MdEPtw
-# dkCca5XQFrosPSsz5Jjkb0xvAwe6jy5USEfCP4shBxJsIWPNU9rH1WUMOSnUlLbv
-# sgalxGaAP5XmWpnuBIGi0rYDR9KGeuENmD5n8Vi675jIaTlb7sPvUawfYxfLO+ir
-# n23TY2/oDTrAEABF58QGjJEeTXehTpWZCq6Ds5/PGTaJEkmSLcbN93BavqHNceqQ
-# jyk3WSAiaFgzIwdD1P/gIR8oBARimgFOYzr5w4y7Bj68lLK8e3F57mWMu0G2vDac
-# x1dku+CxIvLJ+PZ0hDmRHLYhGpuDAt0w8quuqCUOt1FS2RSdTFSsiC0LbEK3HFlx
-# 2a69mj/88/GhBhn8nBXsCqpr5Xwy1l6r5DZtw550rEv111vmq4JAkWUNEKSPVl2s
-# xhhtphKO48HK+XhQmTwuB6a0b+IBupr5/w1KwMEF2cNgdpcfSN4gZ+OlL/XooMq1
-# n3mBMs7bkHsIwBhKoRS2P6adjQOEcCrJnNaGfIXz/u/A2zhwbyR5ek5is4nqHULl
-# v9zEvOgF9bx0dq6vOZzBKe3r6+EhCbPdi2+SEKNUcEnGFpp99jdKKiGrzj4WhT/m
-# dfKRrqFsUvGfzFCkWwCzDPdi0/9wgWWmYoTBG5r8rrfcI+zlo+SczRQO/A==
+# KoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA4MDIwNzQyNTJaMC8GCSqGSIb3
+# DQEJBDEiBCDmxl5WWl+UrjftHXcJlnxTXrtrpmkZvYlfDI029BvRJDANBgkqhkiG
+# 9w0BAQEFAASCAgAKjXfVWZe8Ji3eLknHU9pmqwPhJckpKTXnZQk9kEhBUncJ0J9a
+# 6qmO3Ssxh1HhxEcpB+yMv3qVlwjuhmL4thOOiP+jNTA/U34xbk0mqiiwo4NxBKvZ
+# qGuyiKCwBto4tHn7zk/KRSkAo7TDlSWhBy3ZxItQ58JfKnudHkZ6xVJ42Wvcdjnc
+# LGEOGLMqFPR85+IGOgn4oRK0HHgodqbw57kV7tGMv5pCSIed899esBT/UgBnjmUy
+# WgzM1iPIJoMYfhB3F+ux0YTjtJbIlhP/E3H4UaeJkmH1gzPAum/gcfvnYViOxVOV
+# XdFv17vhJgrFSA44qUFrUjS2LvhOdm2MKdeHH4wh8dyuYP1bFHihepySyP9ysN6B
+# Zi5CAecom4Hznckys1+khow9brxFEf5Jj0RINIFrRwVBMN2YmzpMCd7WUS4BK8Ax
+# JO1JmFM+9zv0IfaR4j1zfshREDNmIYgCKCVRFfMS6gshc2QM5gxtbhTUgDD/Q6xd
+# 3Ug17I8dP2cteOe0iPervNF5HZ9a8XzLRdrFCg8AlEaYZ524jxYJeNxGXxrHkExe
+# QfW70kiD4SI89C+ft6b1OxmE1j+wPR6Mx4xkLZ3+W7ZpgGOL7tY99xpELQDhh2If
+# EZwPQkzI27dtYfyMMBJBkeh+J5XXLPPX6XivWA+sKBC6C2kPmn74C8tpLA==
 # SIG # End signature block
