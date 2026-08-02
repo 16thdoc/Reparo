@@ -27,6 +27,9 @@ reparo --force --preview         # include installed developer toolchains, dry-r
 reparo --include Apt Flatpak     # restrict the pass to named sections
 reparo --status                  # other Reparo Linux processes and latest log
 reparo --tail                    # follow the newest log
+reparo -Version                  # runtime version; see alias lexicon below
+reparo -New                      # download and run the current native installer
+reparo -Install                  # same native install/update action
 ```
 
 Linux detects its native manager from `/etc/os-release`: Apt (Debian, Ubuntu, Mint,
@@ -38,6 +41,15 @@ Composer. Logs live under `~/.local/state/reparo/logs` (respecting `XDG_STATE_HO
 Native package operations require root or passwordless `sudo -n`; Reparo skips them
 rather than summon an unattended password prompt from the abyss. `--kill` sends
 SIGTERM only to other Reparo Linux processes, never a broad updater-process sweep.
+
+### Linux command lexicon
+
+`Version`, `New`, and `Install` accept the full familiar spelling set: double-dash,
+single-dash, and bare long names in normal, lower, or upper case; their one-letter
+forms also work with or without a dash. In other words, `-Version`, `version`, `-V`,
+and `v` are equivalent; so are `-New`/`n` and `-Install`/`i`. `New` and `Install`
+both run the native installer, so they update Reparo itself; `--update` updates the
+machine's installed packages and tools instead.
 
 ## Windows quick start
 

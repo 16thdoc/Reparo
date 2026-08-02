@@ -5,7 +5,8 @@
 set -u
 umask 077
 
-REPARO_LINUX_VERSION='0.1.0'
+REPARO_LINUX_VERSION='0.1.1'
+REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
 LOG_ROOT="$STATE_ROOT/logs"
@@ -20,7 +21,8 @@ Reparo Linux - native maintenance runner
 
 Usage:
   reparo [--update] [--preview] [--force] [--include SECTION ...]
-  reparo --status | --kill | --tail [--tail-lines COUNT] | --version | --help
+  reparo --new | --install | --status | --kill | --tail [--tail-lines COUNT]
+  reparo --version | --help
 
 Modes:
   --update                 Run the detected native package manager plus present
@@ -34,9 +36,12 @@ Modes:
   --status                 Show other running Reparo Linux instances and logs.
   --kill                   Send SIGTERM only to other Reparo Linux instances.
   --tail                   Follow the newest Reparo Linux log.
+  --new / --install        Download and run the native Linux installer.
 
-PowerShell-style aliases (-Update, -Force, -Preview, -Include, -Status,
--Kill, -Tail, -Version, -Help) remain accepted for muscle memory.
+Version, New, and Install use the full lexicon: `--name`, `-Name`, `name`,
+their all-upper/all-lower variants, and short forms with or without a dash.
+Examples: `-Version`, `version`, `-V`, `v`; `-New`, `new`, `-N`, `n`; and
+`-Install`, `install`, `-I`, `i`.
 
 Native package operations require root or passwordless sudo (sudo -n). Reparo
 will skip rather than hang on a password prompt.
@@ -62,6 +67,29 @@ log() {
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+run_native_installer() {
+    for required in curl mktemp; do
+        command_exists "$required" || die "$required is required to install or update Reparo Linux"
+    done
+
+    bootstrap_dir=$(mktemp -d "${TMPDIR:-/tmp}/reparo-linux-bootstrap.XXXXXX") || die 'Cannot create installer workspace'
+    bootstrap_path="$bootstrap_dir/install-reparo-linux.sh"
+    printf '%s\n' "Downloading native Reparo installer: $REPARO_INSTALLER_URL"
+    if ! curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$REPARO_INSTALLER_URL" -o "$bootstrap_path"; then
+        rm -rf "$bootstrap_dir"
+        die 'Could not download native Reparo installer'
+    fi
+    if [ ! -s "$bootstrap_path" ] || ! sh -n "$bootstrap_path"; then
+        rm -rf "$bootstrap_dir"
+        die 'Downloaded installer is empty or fails POSIX shell syntax validation'
+    fi
+
+    printf '%s\n' 'Running native Reparo installer...'
+    if sh "$bootstrap_path" --verbose; then status=0; else status=$?; fi
+    rm -rf "$bootstrap_dir"
+    return "$status"
 }
 
 normalize_section() {
@@ -305,7 +333,9 @@ parse_args() {
             --status|-Status|-status) ACTION=status ;;
             --kill|-Kill|-kill) ACTION=kill ;;
             --tail|-Tail|-tail|-Log|-log) ACTION=tail ;;
-            --version|-Version|-version|-V|-v) ACTION=version ;;
+            --version|--Version|--VERSION|-version|-Version|-VERSION|version|Version|VERSION|-v|-V|v|V) ACTION=version ;;
+            --new|--New|--NEW|-new|-New|-NEW|new|New|NEW|-n|-N|n|N) ACTION=install ;;
+            --install|--Install|--INSTALL|-install|-Install|-INSTALL|install|Install|INSTALL|-i|-I|i|I) ACTION=install ;;
             --help|-Help|-help|-H|-h) ACTION=help ;;
             --tail-lines|-TailLines)
                 shift; [ "$#" -gt 0 ] || die '--tail-lines needs a positive number'
@@ -331,6 +361,7 @@ build_protected_processes
 case "$ACTION" in
     help) usage; exit 0 ;;
     version) printf '%s\n' "Reparo Linux $REPARO_LINUX_VERSION"; printf '%s\n' "Runtime: $0"; exit 0 ;;
+    install) run_native_installer; exit $? ;;
     status) show_status; exit 0 ;;
     kill) kill_reparo_processes; exit 0 ;;
     tail) tail_log; exit 0 ;;
