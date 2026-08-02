@@ -1,0 +1,362 @@
+#!/usr/bin/env sh
+# Reparo Linux: native, shell-agnostic maintenance runner.
+# This is intentionally separate from the signed Windows PowerShell runtime.
+
+set -u
+umask 077
+
+REPARO_LINUX_VERSION='0.1.0'
+DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
+LOG_ROOT="$STATE_ROOT/logs"
+PREVIEW=0
+FORCE=0
+INCLUDE=''
+TAIL_LINES=120
+
+usage() {
+    cat <<'EOF'
+Reparo Linux - native maintenance runner
+
+Usage:
+  reparo [--update] [--preview] [--force] [--include SECTION ...]
+  reparo --status | --kill | --tail [--tail-lines COUNT] | --version | --help
+
+Modes:
+  --update                 Run the detected native package manager plus present
+                           Flatpak, Snap, fwupd, npm, and OpenCode.
+  --force                  Include present developer toolchains: pipx, pnpm,
+                           Yarn, .NET tools, rustup, Conda, gems, and Composer.
+  --preview                Log and print commands without executing them.
+  --include SECTION ...    Run only named sections (Apt, Dnf, Pacman, Zypper,
+                           Flatpak, Snap, Fwupd, Npm, Opencode, Pipx, Pnpm,
+                           Yarn, DotNet, Rust, Conda, Gem, Composer).
+  --status                 Show other running Reparo Linux instances and logs.
+  --kill                   Send SIGTERM only to other Reparo Linux instances.
+  --tail                   Follow the newest Reparo Linux log.
+
+PowerShell-style aliases (-Update, -Force, -Preview, -Include, -Status,
+-Kill, -Tail, -Version, -Help) remain accepted for muscle memory.
+
+Native package operations require root or passwordless sudo (sudo -n). Reparo
+will skip rather than hang on a password prompt.
+EOF
+}
+
+die() {
+    printf '%s\n' "ERROR: $*" >&2
+    exit 2
+}
+
+ensure_log_root() {
+    if ! mkdir -p "$LOG_ROOT"; then
+        die "Cannot create log directory: $LOG_ROOT"
+    fi
+    LOG_FILE="$LOG_ROOT/reparo_$(hostname 2>/dev/null || printf unknown)_$$_$(date +%Y-%m-%d_%H%M%S)_RUNNING.log"
+    : >"$LOG_FILE" || die "Cannot write log file: $LOG_FILE"
+}
+
+log() {
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG_FILE"
+}
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+normalize_section() {
+    case "$1" in
+        apt|Apt) printf '%s' Apt ;;
+        dnf|Dnf) printf '%s' Dnf ;;
+        pacman|Pacman) printf '%s' Pacman ;;
+        zypper|Zypper) printf '%s' Zypper ;;
+        flatpak|Flatpak) printf '%s' Flatpak ;;
+        snap|Snap) printf '%s' Snap ;;
+        fwupd|Fwupd) printf '%s' Fwupd ;;
+        npm|Npm) printf '%s' Npm ;;
+        opencode|OpenCode|Opencode) printf '%s' Opencode ;;
+        pipx|Pipx) printf '%s' Pipx ;;
+        pnpm|Pnpm) printf '%s' Pnpm ;;
+        yarn|Yarn) printf '%s' Yarn ;;
+        dotnet|DotNet) printf '%s' DotNet ;;
+        rust|Rust|rustup) printf '%s' Rust ;;
+        conda|Conda) printf '%s' Conda ;;
+        gem|Gem|gems) printf '%s' Gem ;;
+        composer|Composer) printf '%s' Composer ;;
+        *) return 1 ;;
+    esac
+}
+
+add_include() {
+    section=$(normalize_section "$1") || die "Unknown section: $1"
+    case "|$INCLUDE|" in
+        *"|$section|"*) ;;
+        *) INCLUDE="${INCLUDE}${INCLUDE:+|}${section}" ;;
+    esac
+}
+
+section_selected() {
+    section=$1
+    if [ -n "$INCLUDE" ]; then
+        case "|$INCLUDE|" in *"|$section|"*) return 0 ;; *) return 1 ;; esac
+    fi
+
+    case "$section" in
+        Apt|Dnf|Pacman|Zypper|Flatpak|Snap|Fwupd|Npm|Opencode) return 0 ;;
+        Pipx|Pnpm|Yarn|DotNet|Rust|Conda|Gem|Composer) [ "$FORCE" -eq 1 ] ;;
+        *) return 1 ;;
+    esac
+}
+
+detect_native_section() {
+    distro=''
+    if [ -r /etc/os-release ]; then
+        # os-release is the distro's declarative environment file, not user input.
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        distro="${ID:-} ${ID_LIKE:-}"
+    fi
+
+    case "$distro" in
+        *kali*|*debian*|*ubuntu*|*linuxmint*|*pop*) printf '%s' Apt ;;
+        *fedora*|*rhel*|*centos*|*rocky*|*almalinux*) printf '%s' Dnf ;;
+        *arch*|*manjaro*) printf '%s' Pacman ;;
+        *suse*|*opensuse*|*sles*) printf '%s' Zypper ;;
+        *)
+            if command_exists apt-get; then printf '%s' Apt
+            elif command_exists dnf; then printf '%s' Dnf
+            elif command_exists pacman; then printf '%s' Pacman
+            elif command_exists zypper; then printf '%s' Zypper
+            else printf '%s' Unknown
+            fi
+            ;;
+    esac
+}
+
+run_command() {
+    section=$1
+    description=$2
+    shift 2
+    log "[CMD] $section: $description"
+    if [ "$PREVIEW" -eq 1 ]; then
+        log "[DRY-RUN] $section: $description"
+        return 0
+    fi
+
+    output_file=$(mktemp "${TMPDIR:-/tmp}/reparo-linux-command.XXXXXX") || {
+        log "[FAIL] $section: could not create command output file"
+        return 1
+    }
+    if "$@" >"$output_file" 2>&1; then
+        status=0
+    else
+        status=$?
+    fi
+    cat "$output_file" | tee -a "$LOG_FILE"
+    rm -f "$output_file"
+    if [ "$status" -eq 0 ]; then
+        log "[DONE] $section"
+    else
+        log "[FAIL] $section exited $status"
+    fi
+    return "$status"
+}
+
+run_privileged() {
+    section=$1
+    description=$2
+    shift 2
+    if [ "$PREVIEW" -eq 1 ]; then
+        run_command "$section" "$description" "$@"
+    elif [ "$(id -u)" -eq 0 ]; then
+        run_command "$section" "$description" "$@"
+    elif command_exists sudo && sudo -n true >/dev/null 2>&1; then
+        run_command "$section" "$description" sudo -n "$@"
+    else
+        log "[SKIP] $section: root or passwordless sudo is required; refusing to prompt"
+        return 0
+    fi
+}
+
+run_optional() {
+    section=$1
+    executable=$2
+    shift 2
+    if ! section_selected "$section"; then return 0; fi
+    if ! command_exists "$executable"; then
+        log "[SKIP] $section: $executable not found"
+        return 0
+    fi
+    run_command "$section" "$*" "$@" || true
+}
+
+run_native_manager() {
+    native_section=$(detect_native_section)
+    if ! section_selected "$native_section"; then return 0; fi
+    case "$native_section" in
+        Apt)
+            command_exists apt-get || { log '[SKIP] Apt: apt-get not found'; return; }
+            run_privileged Apt 'apt-get update' env DEBIAN_FRONTEND=noninteractive apt-get update || return
+            run_privileged Apt 'apt-get -y upgrade' env DEBIAN_FRONTEND=noninteractive apt-get -y upgrade || return
+            run_privileged Apt 'apt-get -y autoremove' env DEBIAN_FRONTEND=noninteractive apt-get -y autoremove || return
+            ;;
+        Dnf)
+            command_exists dnf || { log '[SKIP] Dnf: dnf not found'; return; }
+            run_privileged Dnf 'dnf -y upgrade' dnf -y upgrade || return
+            run_privileged Dnf 'dnf -y autoremove' dnf -y autoremove || return
+            ;;
+        Pacman)
+            command_exists pacman || { log '[SKIP] Pacman: pacman not found'; return; }
+            run_privileged Pacman 'pacman -Syu --noconfirm' pacman -Syu --noconfirm || return
+            ;;
+        Zypper)
+            command_exists zypper || { log '[SKIP] Zypper: zypper not found'; return; }
+            run_privileged Zypper 'zypper --non-interactive refresh' zypper --non-interactive refresh || return
+            run_privileged Zypper 'zypper --non-interactive update' zypper --non-interactive update || return
+            ;;
+        *) log '[SKIP] Native: no supported package manager detected' ;;
+    esac
+}
+
+latest_log() {
+    latest=''
+    for candidate in "$LOG_ROOT"/reparo_*.log; do
+        [ -f "$candidate" ] || continue
+        if [ -z "$latest" ] || [ "$candidate" -nt "$latest" ]; then latest=$candidate; fi
+    done
+    printf '%s' "$latest"
+}
+
+list_reparo_processes() {
+    grep -al 'reparo-linux' /proc/[0-9]*/cmdline 2>/dev/null | while IFS= read -r cmdline_path; do
+        proc=${cmdline_path%/cmdline}
+        pid=${proc#/proc/}
+        process_is_current_tree "$pid" && continue
+        cmdline=$({ tr '\000' ' ' <"$cmdline_path"; } 2>/dev/null || true)
+        case "$cmdline" in *'/reparo-linux'*) printf '%s\t%s\n' "$pid" "$cmdline" ;; esac
+    done
+}
+
+process_parent_id() {
+    awk '/^PPid:/{print $2; exit}' "/proc/$1/status" 2>/dev/null
+}
+
+build_protected_processes() {
+    PROTECTED_PROCESSES=" $$ "
+    parent=$(process_parent_id "$$")
+    while [ -n "$parent" ] && [ "$parent" -gt 1 ] 2>/dev/null; do
+        PROTECTED_PROCESSES="${PROTECTED_PROCESSES}${parent} "
+        parent=$(process_parent_id "$parent")
+    done
+}
+
+process_is_current_tree() {
+    candidate=$1
+    case "$PROTECTED_PROCESSES" in *" $candidate "*) return 0 ;; esac
+    while [ -n "$candidate" ] && [ "$candidate" -gt 1 ] 2>/dev/null; do
+        [ "$candidate" = "$$" ] && return 0
+        candidate=$(process_parent_id "$candidate")
+    done
+    return 1
+}
+
+show_status() {
+    ensure_log_root
+    log "Reparo Linux $REPARO_LINUX_VERSION status"
+    log "Log root: $LOG_ROOT"
+    processes=$(list_reparo_processes)
+    if [ -n "$processes" ]; then
+        log 'Running Reparo Linux processes:'
+        printf '%s\n' "$processes" | tee -a "$LOG_FILE"
+    else
+        log 'Running: none'
+    fi
+    latest=$(latest_log)
+    if [ -n "$latest" ]; then log "Latest log: $latest"; else log 'Latest log: none'; fi
+}
+
+kill_reparo_processes() {
+    ensure_log_root
+    processes=$(list_reparo_processes)
+    if [ -z "$processes" ]; then
+        log 'No other Reparo Linux process found.'
+        return 0
+    fi
+    printf '%s\n' "$processes" | while IFS="$(printf '\t')" read -r pid cmdline; do
+        log "[KILL] SIGTERM PID $pid: $cmdline"
+        if kill -TERM "$pid" 2>/dev/null; then log "[DONE] stopped PID $pid"; else log "[FAIL] could not stop PID $pid"; fi
+    done
+}
+
+tail_log() {
+    mkdir -p "$LOG_ROOT" || die "Cannot create log directory: $LOG_ROOT"
+    latest=$(latest_log)
+    [ -n "$latest" ] || die "No Reparo Linux log found in $LOG_ROOT"
+    printf '%s\n' "Following $latest"
+    tail -n "$TAIL_LINES" -f "$latest"
+}
+
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --update|-Update|-update) ;;
+            --force|-Force|-force) FORCE=1 ;;
+            --preview|-Preview|-preview) PREVIEW=1 ;;
+            --status|-Status|-status) ACTION=status ;;
+            --kill|-Kill|-kill) ACTION=kill ;;
+            --tail|-Tail|-tail|-Log|-log) ACTION=tail ;;
+            --version|-Version|-version|-V|-v) ACTION=version ;;
+            --help|-Help|-help|-H|-h) ACTION=help ;;
+            --tail-lines|-TailLines)
+                shift; [ "$#" -gt 0 ] || die '--tail-lines needs a positive number'
+                TAIL_LINES=$1 ;;
+            --include|-Include|-include)
+                shift
+                [ "$#" -gt 0 ] || die '--include needs at least one section'
+                while [ "$#" -gt 0 ]; do
+                    case "$1" in -*) break ;; *) add_include "$1"; shift ;; esac
+                done
+                continue ;;
+            *) die "Unknown option: $1" ;;
+        esac
+        shift
+    done
+    case "$TAIL_LINES" in ''|*[!0-9]*) die '--tail-lines must be a positive integer' ;; esac
+    [ "$TAIL_LINES" -gt 0 ] || die '--tail-lines must be greater than zero'
+}
+
+ACTION=update
+parse_args "$@"
+build_protected_processes
+case "$ACTION" in
+    help) usage; exit 0 ;;
+    version) printf '%s\n' "Reparo Linux $REPARO_LINUX_VERSION"; printf '%s\n' "Runtime: $0"; exit 0 ;;
+    status) show_status; exit 0 ;;
+    kill) kill_reparo_processes; exit 0 ;;
+    tail) tail_log; exit 0 ;;
+esac
+
+ensure_log_root
+log "Reparo Linux $REPARO_LINUX_VERSION starting"
+log "Mode: update force=$FORCE preview=$PREVIEW include=${INCLUDE:-auto} native=$(detect_native_section)"
+run_native_manager
+run_optional Flatpak flatpak flatpak update -y
+if section_selected Snap && command_exists snap; then run_privileged Snap 'snap refresh' snap refresh || true; fi
+if section_selected Fwupd && command_exists fwupdmgr; then
+    run_privileged Fwupd 'fwupdmgr refresh --force' fwupdmgr refresh --force || true
+    run_privileged Fwupd 'fwupdmgr update --assume-yes' fwupdmgr update --assume-yes || true
+fi
+run_optional Npm npm npm update -g
+run_optional Opencode opencode opencode upgrade
+run_optional Pipx pipx pipx upgrade-all
+run_optional Pnpm pnpm pnpm update -g
+run_optional Yarn yarn yarn global upgrade
+run_optional DotNet dotnet dotnet tool update --global --all
+run_optional Rust rustup rustup update
+run_optional Conda conda conda update -n base -c defaults conda -y
+run_optional Gem gem gem update
+run_optional Composer composer composer global update
+log "Reparo Linux complete. Log: $LOG_FILE"
+final_log="${LOG_FILE%_RUNNING.log}_$( [ "$PREVIEW" -eq 1 ] && printf PREVIEW || printf COMPLETE ).log"
+mv "$LOG_FILE" "$final_log"
+printf '%s\n' "Final log: $final_log"

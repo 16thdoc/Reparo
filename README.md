@@ -1,16 +1,51 @@
 # Reparo
 
-Reparo is a standalone Windows maintenance runner for RMM deployment.
+Reparo has separate native maintenance runners for Windows and Linux. Windows uses
+the signed PowerShell runner for RMM deployment; Linux uses a portable POSIX `sh`
+runtime and does not require PowerShell.
 
 It updates common package managers and toolchains when they are already present on a machine. The script is intentionally self-contained: it does not depend on profile modules, cloud-synced helper paths, editor sync state, or any other machine-specific automation.
 
-## What it does
+## Linux quick start
+
+Install or update the native Linux runtime from a clone of this repository:
+
+```sh
+sh ./deploy/install-reparo-linux.sh --verbose
+```
+
+The installer downloads `linux/reparo-linux`, validates it with `sh -n`, installs it
+at `~/.local/share/reparo/reparo-linux` (respecting `XDG_DATA_HOME`), and creates a
+shell-neutral `reparo` shim at `~/.local/bin/reparo`. It works from Bash, Zsh, Fish,
+Dash, or any shell that can launch a POSIX command. Add `~/.local/bin` to `PATH` if
+your distribution has not already done so.
+
+```sh
+reparo --preview                 # show exactly what an update pass would do
+reparo --update                  # native packages plus installed common tools
+reparo --force --preview         # include installed developer toolchains, dry-run
+reparo --include Apt Flatpak     # restrict the pass to named sections
+reparo --status                  # other Reparo Linux processes and latest log
+reparo --tail                    # follow the newest log
+```
+
+Linux detects its native manager from `/etc/os-release`: Apt (Debian, Ubuntu, Mint,
+Pop!_OS, Kali), Dnf (Fedora/RHEL-family), Pacman (Arch/Manjaro), or Zypper
+(openSUSE/SLES). It also updates installed Flatpak, Snap, fwupd, npm, and OpenCode;
+`--force` adds installed pipx, pnpm, Yarn, .NET tools, Rust, Conda, gems, and
+Composer. Logs live under `~/.local/state/reparo/logs` (respecting `XDG_STATE_HOME`).
+
+Native package operations require root or passwordless `sudo -n`; Reparo skips them
+rather than summon an unattended password prompt from the abyss. `--kill` sends
+SIGTERM only to other Reparo Linux processes, never a broad updater-process sweep.
+
+## Windows quick start
+
+### What it does
 
 By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, PowerShell 7 through Microsoft's signed machine-wide MSI, 7-Zip deployment through winget, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, Spicetify, and WSL, plus a Chocolatey-to-winget migration pass.
 
 Reparo does not install package managers from scratch. It only uses tools that are already present, then skips the sections that are not available. Use `-7Zip` only when you explicitly want Reparo to install the `7zip.7zip` winget package if it is missing, or update it when present.
-
-## Quick start
 
 Install or update the live ProgramData copy from GitHub:
 
