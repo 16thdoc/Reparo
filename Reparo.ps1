@@ -132,7 +132,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.5.1'
+$script:ReparoVersion = '1.2.5.2'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -242,6 +242,7 @@ function Get-ReparoVersionFlavor {
         '1.2.4.1' = [pscustomobject]@{ Quote = 'The Force will be with you. Always.'; Source = 'Star Wars: A New Hope'; Art = '  HOLOCRON: generated payload hash preserved beyond Git''s meddling' }
         '1.2.5.0' = [pscustomobject]@{ Quote = 'I''m afraid I can''t let you do that, Dave.'; Source = '2001: A Space Odyssey'; Art = '  HAL: profile-independent update oracle online' }
         '1.2.5.1' = [pscustomobject]@{ Quote = 'I''m sorry, Dave. I''m afraid I can''t do that.'; Source = '2001: A Space Odyssey'; Art = '  HAL: release identity corrected; update lane open' }
+        '1.2.5.2' = [pscustomobject]@{ Quote = 'We can''t rewind, we''ve come too far.'; Source = 'The Terminator'; Art = '  T-800: remote and installed bytes confirmed identical' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -1300,10 +1301,10 @@ Log: $script:ReparoLogPath
         if (Test-Path -LiteralPath $scriptPath) {
             $currentHash = Get-ReparoFileHash -Path $scriptPath
             if ($currentHash -eq $newHash) {
-                Write-Skip "Installed Reparo.ps1 is already current ($newHash)."
+                Write-Skip "Reparo $script:ReparoVersion already matches the downloaded source (SHA-256: $newHash)."
                 Install-ReparoCommandShim -TargetRoot $TargetRoot -WhatIfOnly:$WhatIfOnly
                 Write-ReparoEventLog -EventId 1101 -EntryType Information -Message @"
-Reparo install/update skipped; installed script is already current.
+Reparo install/update skipped; installed runtime matches the downloaded Reparo $script:ReparoVersion source.
 
 Computer: $env:COMPUTERNAME
 PID: $PID
