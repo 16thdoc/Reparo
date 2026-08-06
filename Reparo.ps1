@@ -20,8 +20,6 @@ param(
     [switch]$Version,
     [Alias('Install', 'N')]
     [switch]$New,
-    [Alias('Signed', 'VerifySignature')]
-    [switch]$Sign,
     [Alias('P')]
     [switch]$Preview,
     [Alias('WU')]
@@ -74,8 +72,6 @@ param(
     [string]$LockVersion,
     [ValidateSet('Auto', 'Winget', 'Choco')]
     [string]$PackageManager = 'Auto',
-    [Alias('IS')]
-    [switch]$InstallSpicetify,
     [Alias('F')]
     [switch]$Force,
     [Alias('K')]
@@ -137,8 +133,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:ReparoVersion = '1.2.5.0'
-$script:ReparoSigningRootThumbprint = '9F63BD0268BE2E8D4A61F14FB8B90343540AC179'
-$script:ReparoSigningSignerThumbprint = '081400500D9EBC932690D277D95D8F1097CB5A88'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -238,15 +232,15 @@ function Get-ReparoVersionFlavor {
         '1.1.15'  = [pscustomobject]@{ Quote = 'There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  WU: COM ectoplasm filtered from the console' }
         '1.1.16'  = [pscustomobject]@{ Quote = 'Time is an illusion. Lunchtime doubly so.'; Source = 'The Hitchhiker''s Guide to the Galaxy'; Art = '  CLOCK: one-shot maintenance ritual queued' }
         '1.2.0.0' = [pscustomobject]@{ Quote = 'There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  REPARO: four-part release machine awakened' }
-        '1.2.1.0' = [pscustomobject]@{ Quote = 'Trust, but verify.'; Source = 'Russian proverb'; Art = '  SIGNER: pinned trust chain brought inside the bootstrap' }
-        '1.2.1.1' = [pscustomobject]@{ Quote = 'The needs of the many outweigh the needs of the few.'; Source = 'Star Trek II: The Wrath of Khan'; Art = '  ENTERPRISE: trust bootstrap set to warp factor sensible' }
-        '1.2.2.0' = [pscustomobject]@{ Quote = 'The sleeper must awaken.'; Source = 'Dune'; Art = '  SHAI-HULUD: signed payload provenance gate engaged' }
-        '1.2.2.1' = [pscustomobject]@{ Quote = 'It''s a trap!'; Source = 'Star Wars: Return of the Jedi'; Art = '  ACKBAR: emergency signature bypass marked unsafe' }
+        '1.2.1.0' = [pscustomobject]@{ Quote = 'Trust, but verify.'; Source = 'Russian proverb'; Art = '  SENTINEL: bootstrap checks brought inside the runner' }
+        '1.2.1.1' = [pscustomobject]@{ Quote = 'The needs of the many outweigh the needs of the few.'; Source = 'Star Trek II: The Wrath of Khan'; Art = '  ENTERPRISE: bootstrap set to warp factor sensible' }
+        '1.2.2.0' = [pscustomobject]@{ Quote = 'The sleeper must awaken.'; Source = 'Dune'; Art = '  SHAI-HULUD: payload provenance gate disengaged' }
+        '1.2.2.1' = [pscustomobject]@{ Quote = 'It''s a trap!'; Source = 'Star Wars: Return of the Jedi'; Art = '  ACKBAR: emergency trust ritual decommissioned' }
         '1.2.2.2' = [pscustomobject]@{ Quote = 'No disintegrations.'; Source = 'Star Wars: The Empire Strikes Back'; Art = '  VADER: help-text ambiguity vaporized' }
-        '1.2.3.0' = [pscustomobject]@{ Quote = 'I''m doing my part.'; Source = 'Starship Troopers'; Art = '  RICO: signed update lane made opt-in' }
+        '1.2.3.0' = [pscustomobject]@{ Quote = 'I''m doing my part.'; Source = 'Starship Troopers'; Art = '  RICO: deployment lane cleared' }
         '1.2.4.0' = [pscustomobject]@{ Quote = 'There is no try.'; Source = 'Star Wars: The Empire Strikes Back'; Art = '  JEDI: transactional deploy rollback shield raised' }
-        '1.2.4.1' = [pscustomobject]@{ Quote = 'The Force will be with you. Always.'; Source = 'Star Wars: A New Hope'; Art = '  HOLOCRON: signed bytes preserved beyond Git''s meddling' }
-        '1.2.5.0' = [pscustomobject]@{ Quote = 'I''m afraid I can''t let you do that, Dave.'; Source = '2001: A Space Odyssey'; Art = '  HAL: profile-independent signature oracle online' }
+        '1.2.4.1' = [pscustomobject]@{ Quote = 'The Force will be with you. Always.'; Source = 'Star Wars: A New Hope'; Art = '  HOLOCRON: generated payload hash preserved beyond Git''s meddling' }
+        '1.2.5.0' = [pscustomobject]@{ Quote = 'I''m afraid I can''t let you do that, Dave.'; Source = '2001: A Space Odyssey'; Art = '  HAL: profile-independent update oracle online' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -355,7 +349,6 @@ function Write-ReparoParameterBlock {
         Help                         = $Help
         Version                      = $Version
         New                          = $New
-        Sign                         = $Sign
         Preview                      = $Preview
         WindowsUpdate                = $WindowsUpdate
         Windows11Upgrade             = $Windows11Upgrade
@@ -385,7 +378,6 @@ function Write-ReparoParameterBlock {
         LockApp                      = $LockApp
         LockVersion                  = $LockVersion
         PackageManager               = $PackageManager
-        InstallSpicetify             = $InstallSpicetify
         Force                        = $Force
         Kill                         = $Kill
         KillUpdaterNames             = $KillUpdaterNames
@@ -576,8 +568,6 @@ Modes:
   -LockApp <id/name>   Pin one app so package-manager update passes do not move it.
   -LockVersion <ver>   Version to pin. If omitted, Reparo tries to pin the currently installed version.
   -PackageManager      App lookup/lock backend: Auto, Winget, or Choco. Default: Auto.
-  -InstallSpicetify    Install or reinstall Spicetify Marketplace in the logged-on user's context,
-                       then run Spicetify update and restore/backup/apply.
   -ChocoWingetMapPath  Optional JSON or CSV map for site-specific package IDs.
                        JSON can be an object like {"git":"Git.Git"} or an array with
                        ChocoId/WingetId/Source fields. CSV uses ChocoId,WingetId,Source.
@@ -593,8 +583,6 @@ Modes:
                        Example: -Syslog 192.168.50.31:514
                        Use -Syslog off or -Syslog disable to clear the saved target.
   -Install, -New        Install/update C:\ProgramData\Reparo\Reparo.ps1 with parse validation.
-  -Sign,-Signed         Windows -New only. Install trust for the pinned The Technologist
-                        signer and require the downloaded runtime's signature to be Valid.
    -Force               Run all sections except PowerShell 7, including developer toolchains and WSL apt handling.
                         Use -7 explicitly for the PowerShell 7 MSI update.
   -Kill                Stop running Reparo PowerShell processes and known updater front ends.
@@ -638,7 +626,6 @@ Windows Update:
 Install/update:
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Install
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -New
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -New -Sign
 
 After install, new PowerShell sessions can usually run:
   reparo -Update
@@ -646,7 +633,7 @@ After install, new PowerShell sessions can usually run:
 
 Common sections:
   Winget, Winget(msstore), 7Zip, Choco, PowerShell7, WindowsUpdate, Windows11Upgrade,
-  Scoop, Apt, Dnf, Pacman, Zypper, Flatpak, Snap, Fwupd, Pip, Pipx, Npm, Opencode, Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer, Spicetify,
+  Scoop, Apt, Dnf, Pacman, Zypper, Flatpak, Snap, Fwupd, Pip, Pipx, Npm, Opencode, Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer,
   Wsl, WslApt.
 
 Logs:
@@ -706,7 +693,6 @@ $linuxForceSections = @($linuxPackageSections + $linuxAppSections + @(
     'Conda'
     'Gem'
     'Composer'
-    'Spicetify'
 ))
 
 $windowsForceSections = @(
@@ -727,7 +713,6 @@ $windowsForceSections = @(
     'Conda'
     'Gem'
     'Composer'
-    'Spicetify'
     'Wsl'
     'WslApt'
 )
@@ -795,11 +780,7 @@ elseif ($Update) {
     }
     $Include = $updateSections
 }
-elseif ($InstallSpicetify) {
-    $Include = @('Spicetify')
-}
-
-if (-not $script:ReparoIsWindows -and -not ($Update -or $Force -or $Include -or $Winget -or $WingetDiscover -or $Windows11Upgrade -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $InstallSpicetify -or $WindowsUpdate -or $WslApt -or $SevenZip)) {
+if (-not $script:ReparoIsWindows -and -not ($Update -or $Force -or $Include -or $Winget -or $WingetDiscover -or $Windows11Upgrade -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $WindowsUpdate -or $WslApt -or $SevenZip)) {
     $Include = $linuxPackageSections
 }
 
@@ -1113,57 +1094,16 @@ function Test-ReparoScriptParse {
     }
 }
 
-function Get-ReparoAuthenticodeSignature {
-    param([Parameter(Mandatory)][string]$Path)
-
-    if (-not $script:ReparoIsWindows) { return $null }
-
-    $securityModule = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
-    if (-not (Test-Path -LiteralPath $securityModule -PathType Leaf)) {
-        throw "Windows Authenticode module manifest is missing: $securityModule"
-    }
-
-    try {
-        Import-Module -Name $securityModule -Force -ErrorAction Stop
-    }
-    catch {
-        throw "Could not load the Windows Authenticode module from ${securityModule}: $($_.Exception.Message)"
-    }
-
-    Get-AuthenticodeSignature -FilePath $Path
-}
-
-function Assert-ReparoDownloadedWindowsSignature {
-    param([Parameter(Mandatory)][string]$Path)
-
-    if (-not $script:ReparoIsWindows) { return }
-
-    $signature = Get-ReparoAuthenticodeSignature -Path $Path
-    if ($signature.Status -ne 'Valid') {
-        throw "Downloaded Reparo.ps1 has an invalid Authenticode signature: $($signature.Status) ($($signature.StatusMessage))"
-    }
-    $actualSigner = if ($signature.SignerCertificate) { $signature.SignerCertificate.Thumbprint } else { '<none>' }
-    if ($actualSigner -ne $script:ReparoSigningSignerThumbprint) {
-        throw "Downloaded Reparo.ps1 signer mismatch. Expected $script:ReparoSigningSignerThumbprint, got $actualSigner."
-    }
-
-    Write-ReparoLog "[SIGNING] Downloaded Reparo.ps1 signature is valid for $($signature.SignerCertificate.Subject) ($actualSigner)."
-}
-
 function Test-ReparoInstalledRuntime {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$ExpectedHash,
-        [switch]$Sign
+        [Parameter(Mandatory)][string]$ExpectedHash
     )
 
     Test-ReparoScriptParse -Path $Path
     $installedHash = Get-ReparoFileHash -Path $Path
     if ($installedHash -ne $ExpectedHash) {
         throw "Installed Reparo.ps1 hash mismatch. Expected $ExpectedHash, got $installedHash."
-    }
-    if ($Sign) {
-        Assert-ReparoDownloadedWindowsSignature -Path $Path
     }
 
     $versionOutput = & $Path -Version *>&1 | Out-String
@@ -1192,50 +1132,6 @@ function Get-ReparoFileHash {
     }
     finally {
         $stream.Dispose()
-    }
-}
-
-function Install-ReparoPinnedSigningTrust {
-    param([switch]$WhatIfOnly)
-
-    if (-not $script:ReparoIsWindows) { return }
-    if (-not (Test-ReparoCurrentProcessElevated)) {
-        throw 'Reparo -New requires elevation to install the pinned The Technologist signing trust.'
-    }
-
-    $expectedRootThumbprint = $script:ReparoSigningRootThumbprint
-    $expectedSignerThumbprint = $script:ReparoSigningSignerThumbprint
-    $rootBase64 = 'MIIFJzCCAw+gAwIBAgIQaRDSrlFchKFP9u9j9Ay0RjANBgkqhkiG9w0BAQsFADAsMSowKAYDVQQDDCFUaGUgVGVjaG5vbG9naXN0IEludGVybmFsIFJvb3QgQ0EwHhcNMjYwODAyMDYzNTIxWhcNMzYwODAyMDY0NTIwWjAsMSowKAYDVQQDDCFUaGUgVGVjaG5vbG9naXN0IEludGVybmFsIFJvb3QgQ0EwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQC2XIlRU3ikhFCI9ia++s1e1dEUik/FboA/63K/Rhm8kp9vfsOl0g8W/lHnDg4NPS/FTTIr1O4QB50kx/EpNxT6+nsxgoEjAzC5jiXrLFQ67F2bdKfADdEYFKMyuRDpULwOf9wPS/6rqyJY65CGzNvht8fdNpZxh8ak4SgUIXE96xFFMbFi6z3kaAOc3LInN177reFe2UqQLVV8b8GFbFsxb3nCUi0ymFzBB2m76noscvHaZjt93kY093Ot/cjuJ1UWLIdTYOgidCK/sP4eTR1fZbzzPsKLhNc66ItFw22hbIYJRgsA+WwxggySl2TnhxIxmjtXQspVtoi1iFdbijjZe8cGVhgyy04zl6kniLK6Dv47ss+cWLQoPqt7YiiidDtFDV09rlen47jBxm5rPAiz4CReP6/+nZ71JaTS0lNF5fF1jkOMo2K61a/sosj0Vj8ph2XH2ttDknU+e5W7l9MjB7n/KXKxda7tEeR/++a8QQOoCvb3o/pHLv2xyo+miWp1TVwab1nmLNJ0fk+sN2mYSIL1ixTQSliCG2hLw16faGB9lTcR+gZ2CZumjhz2l3FJS90lNJVsSe0L2larhiVwZkG/ZTH+MICLN/mqaCdofQlHfhNrZHEZes8uNuuZogsWyW85QLgvMF8EOXDxhn6vOHWe/baY90iBpa9S1g3BsQIDAQABo0UwQzAOBgNVHQ8BAf8EBAMCAYYwEgYDVR0TAQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQULb+uiCqPcP381IWOPzUuoxPOziswDQYJKoZIhvcNAQELBQADggIBACV35+UPbJtJEKV+RsrDwYfxNXZALVEsllHwzLI9a/iL54WuQ4SmPJWFjAWUM1+RyjrjfW956TSJ2bXt1FVA2kvno3IvGUN7IRfd6BKAwMLaqPiSIjtx3IxHh4ekiKeBQidvQd48VSw+5MFcQ/H+gxllAeR23ISzXSIdSYjTDJVSKW2gbKN4tsjg5+yi2SGuddUKatZHg7+UFfeyTQelD2K4UIx9/dQl96lRX3uP1TsIfK4tCkxMWwhFpNgbZcqHyHNqSpLGyrTpuXfVjZDgO3E8OvUZVL/rxWoaQw77/HQTXABNtGMl+HovfW/AM38EYD9B8qGyRPaDhyovgvwr8Tp1B7BEkWTdE9ev/vqlTh91tw2eTGlI5TFf83OEKRTn3QdMUxE1burNb8FmMqWK2Mj9XtxL/baCiX04m+GWU58MupFMZCwJALD3z54XoLm0Q8P/cvu/oeMaqnpU2vE9/+D0jE2YKkRKlkxYnPUbmgla+6XKtftYb7PzYQoJOKHjn5/LauOmFcvqt2zBe+fpmuGVMiqGvzQp9Zy00CctPgrFCYb3VgpOnIYTwS1z2uG7TEpgHKI22RRe/QSywMxLGsR47FPKbLwFN4cWVtq3o9AtXgnkG+LwfVL96rWlIZNk/NhtfAbbDaZMdGVq5iAzVXj93+1/JVu3PaygqMPBomhn'
-    $rootCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String($rootBase64))
-    if ($rootCertificate.Thumbprint -ne $expectedRootThumbprint) { throw "Pinned root certificate thumbprint mismatch: $($rootCertificate.Thumbprint)" }
-
-    $signature = Get-ReparoAuthenticodeSignature -Path $PSCommandPath
-    if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $expectedSignerThumbprint) {
-        throw "Reparo bootstrap signer is not the pinned The Technologist certificate: $($signature.SignerCertificate.Thumbprint)"
-    }
-
-    foreach ($entry in @(
-        [pscustomobject]@{ Certificate = $rootCertificate; StoreName = 'Root'; Thumbprint = $expectedRootThumbprint },
-        [pscustomobject]@{ Certificate = $signature.SignerCertificate; StoreName = 'TrustedPublisher'; Thumbprint = $expectedSignerThumbprint }
-    )) {
-        $store = [Security.Cryptography.X509Certificates.X509Store]::new($entry.StoreName, 'LocalMachine')
-        try {
-            $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            if ($store.Certificates | Where-Object { $_.Thumbprint -eq $entry.Thumbprint }) {
-                Write-ReparoLog "[SIGNING] $($entry.Certificate.Subject) is already trusted in LocalMachine\$($entry.StoreName)."
-            }
-            elseif ($WhatIfOnly) {
-                Write-Info "Would trust $($entry.Certificate.Subject) in LocalMachine\$($entry.StoreName)."
-            }
-            else {
-                $store.Add($entry.Certificate)
-                Write-Done "Trusted $($entry.Certificate.Subject) in LocalMachine\$($entry.StoreName)."
-                Write-ReparoLog "[SIGNING] Trusted pinned $($entry.Certificate.Subject) ($($entry.Thumbprint)) in LocalMachine\$($entry.StoreName)."
-            }
-        }
-        finally {
-            $store.Close()
-        }
     }
 }
 
@@ -1341,7 +1237,6 @@ function Invoke-ReparoNew {
         [Parameter(Mandatory)][string]$TargetRoot,
         [Parameter(Mandatory)][string]$Url,
         [switch]$SkipBackup,
-        [switch]$Sign,
         [switch]$WhatIfOnly
     )
 
@@ -1368,9 +1263,6 @@ SkipBackup: $SkipBackup
 Log: $script:ReparoLogPath
 "@
 
-    if ($Sign) {
-        Install-ReparoPinnedSigningTrust -WhatIfOnly:$WhatIfOnly
-    }
 
     if ($WhatIfOnly) {
         Write-Info 'Preview only. No files will be replaced.'
@@ -1402,12 +1294,6 @@ Log: $script:ReparoLogPath
             Unblock-File -LiteralPath $tempScript -ErrorAction SilentlyContinue
         }
         Test-ReparoScriptParse -Path $tempScript
-        if ($Sign) {
-            Assert-ReparoDownloadedWindowsSignature -Path $tempScript
-        }
-        elseif ($script:ReparoIsWindows) {
-            Write-ReparoLog '[SIGNING] Downloaded runtime signature validation was not requested. Use -New -Sign to require the pinned signer.'
-        }
 
         $newHash = Get-ReparoFileHash -Path $tempScript
         if (Test-Path -LiteralPath $scriptPath) {
@@ -1459,7 +1345,7 @@ Log: $script:ReparoLogPath
 
         $deploymentStarted = $true
         Copy-Item -LiteralPath $tempScript -Destination $scriptPath -Force
-        Test-ReparoInstalledRuntime -Path $scriptPath -ExpectedHash $newHash -Sign:$Sign
+        Test-ReparoInstalledRuntime -Path $scriptPath -ExpectedHash $newHash
         Write-Done "Installed Reparo.ps1 updated ($newHash)."
         Write-Info "Live script: $scriptPath"
         Install-ReparoCommandShim -TargetRoot $TargetRoot
@@ -2632,7 +2518,6 @@ function Test-ReparoOperationalModeRequested {
         'ListVersionLocks',
         'MigrateChocoToWinget',
         'FinalizeChocolateyRemoval',
-        'InstallSpicetify',
         'Force',
         'Preview',
         'WindowsUpdate',
@@ -2671,7 +2556,7 @@ if (Invoke-ReparoSchedule) {
 }
 
 if ($New) {
-    Invoke-ReparoNew -TargetRoot $InstallRoot -Url $SourceUrl -SkipBackup:$NoBackup -Sign:$Sign -WhatIfOnly:$Preview
+    Invoke-ReparoNew -TargetRoot $InstallRoot -Url $SourceUrl -SkipBackup:$NoBackup -WhatIfOnly:$Preview
     Complete-ReparoUtilityLog -Status $(if ($Preview) { 'PREVIEW' } else { 'COMPLETE' })
     return
 }
@@ -2706,7 +2591,7 @@ if ($DeleteStale) {
     return
 }
 
-if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $InstallSpicetify -or $Force -or $Preview -or $WindowsUpdate -or $Windows11Upgrade -or $WslApt -or $SevenZip -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
+if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $Force -or $Preview -or $WindowsUpdate -or $Windows11Upgrade -or $WslApt -or $SevenZip -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
@@ -3334,7 +3219,6 @@ function Test-ReparoSectionTool {
         'conda' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
         'gem' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
         'composer' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
-        'spicetify' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--version')) }
         'wsl' { return (Test-ReparoExecutable -Name $PresenceCmd -Arguments @('--status')) }
         default { return (Test-Cmd $PresenceCmd) }
     }
@@ -5261,16 +5145,6 @@ function Test-ReparoIgnorableCommandOutputLine {
         }
     }
 
-    if ($Section -eq 'Spicetify') {
-        if ($text -match '^[\|/\\\-]\s+.+') {
-            return $true
-        }
-
-        if ($text -match '^Patching files\s+\[\d+/\d+\].*\b\d{1,3}%\s*\|\s*\d+s\s*$') {
-            return $true
-        }
-    }
-
     # PSWindowsUpdate sometimes writes raw Windows Update COM objects directly to
     # the host. They carry no operator-useful status and render as this noise.
     if ($Section -eq 'WindowsUpdate' -and $text -eq 'System.__ComObject') {
@@ -5405,303 +5279,6 @@ function Invoke-ReparoCommandStep {
     }
 }
 
-function New-ReparoSpicetifyWorkerScript {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$OutputPath,
-        [Parameter(Mandatory)][string]$StatusPath,
-        [switch]$PreviewOnly,
-        [switch]$InstallRequested
-    )
-
-    $script = @"
-`$ErrorActionPreference = 'Continue'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-`$OutputEncoding = [System.Text.Encoding]::UTF8
-`$outputPath = $(ConvertTo-ReparoPowerShellLiteral -Value $OutputPath)
-`$statusPath = $(ConvertTo-ReparoPowerShellLiteral -Value $StatusPath)
-`$previewOnly = `$$($PreviewOnly.IsPresent.ToString().ToLowerInvariant())
-`$installRequested = `$$($InstallRequested.IsPresent.ToString().ToLowerInvariant())
-
-function Write-ReparoSpicetifyOutput {
-    param([object]`$Value)
-    `$line = [string]`$Value
-    Add-Content -LiteralPath `$outputPath -Value `$line -Encoding UTF8
-}
-
-function Resolve-ReparoSpicetifyCommand {
-    `$command = Get-Command spicetify -CommandType Application -ErrorAction SilentlyContinue
-    if (`$command) { return `$command.Source }
-
-    `$homePath = if (-not [string]::IsNullOrWhiteSpace(`$HOME)) { `$HOME } else { `$env:USERPROFILE }
-    `$candidates = @(
-        `$(if (`$env:APPDATA) { Join-Path `$env:APPDATA 'spicetify\spicetify.exe' }),
-        `$(if (`$env:LOCALAPPDATA) { Join-Path `$env:LOCALAPPDATA 'spicetify\spicetify.exe' }),
-        `$(if (`$env:USERPROFILE) { Join-Path `$env:USERPROFILE '.spicetify\spicetify.exe' }),
-        `$(if (`$homePath) { Join-Path `$homePath '.spicetify/spicetify' }),
-        `$(if (`$homePath) { Join-Path `$homePath '.local/bin/spicetify' })
-    )
-
-    foreach (`$candidate in `$candidates) {
-        if (-not [string]::IsNullOrWhiteSpace(`$candidate) -and (Test-Path -LiteralPath `$candidate)) {
-            return `$candidate
-        }
-    }
-
-    return `$null
-}
-
-try {
-    `$identityName = `$null
-    try { `$identityName = [Security.Principal.WindowsIdentity]::GetCurrent().Name } catch { }
-    if ([string]::IsNullOrWhiteSpace(`$identityName)) { `$identityName = [Environment]::UserName }
-    Write-ReparoSpicetifyOutput ("[INFO] Spicetify worker identity: {0}" -f `$identityName)
-    `$spicetify = Resolve-ReparoSpicetifyCommand
-    if (`$installRequested) {
-        Write-ReparoSpicetifyOutput '[STEP] Spicetify install/reinstall'
-        if (`$previewOnly) {
-            Write-ReparoSpicetifyOutput '[DRY-RUN] Invoke-WebRequest https://raw.githubusercontent.com/spicetify/marketplace/main/resources/install.ps1'
-            Write-ReparoSpicetifyOutput '[DRY-RUN] powershell -File install.ps1 -BypassAdmin'
-        }
-        else {
-            `$installerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("spicetify-install-{0}.ps1" -f [guid]::NewGuid())
-            Write-ReparoSpicetifyOutput ("[CMD] Download Spicetify installer to {0}" -f `$installerPath)
-            Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/spicetify/marketplace/main/resources/install.ps1' -OutFile `$installerPath
-            Unblock-File -LiteralPath `$installerPath -ErrorAction SilentlyContinue
-            `$installOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File `$installerPath -BypassAdmin 2>&1)
-            `$installExit = `$LASTEXITCODE
-            foreach (`$line in `$installOutput) { Write-ReparoSpicetifyOutput ([string]`$line) }
-            Remove-Item -LiteralPath `$installerPath -Force -ErrorAction SilentlyContinue
-            if (`$installExit -ne 0) {
-                Write-ReparoSpicetifyOutput ("[ERROR] Spicetify installer failed with exit code {0}" -f `$installExit)
-                Set-Content -LiteralPath `$statusPath -Value ([string]`$installExit) -Encoding ASCII
-                exit `$installExit
-            }
-
-            `$spicetify = Resolve-ReparoSpicetifyCommand
-        }
-    }
-
-    if (-not `$spicetify) {
-        if (`$previewOnly) {
-            Write-ReparoSpicetifyOutput '[DRY-RUN] spicetify command not found; preview accepts this and skips live checks.'
-            Write-ReparoSpicetifyOutput '[DRY-RUN] spicetify update'
-            Write-ReparoSpicetifyOutput '[DRY-RUN] spicetify restore backup apply'
-            Set-Content -LiteralPath `$statusPath -Value '0' -Encoding ASCII
-            exit 0
-        }
-
-        Write-ReparoSpicetifyOutput '[SKIP] spicetify was not found in the interactive user context.'
-        Set-Content -LiteralPath `$statusPath -Value '42' -Encoding ASCII
-        exit 42
-    }
-
-    Write-ReparoSpicetifyOutput ("[CHECK] spicetify path: {0}" -f `$spicetify)
-    `$versionOutput = @(& `$spicetify --version 2>&1)
-    foreach (`$line in `$versionOutput) { Write-ReparoSpicetifyOutput ("[CHECK] {0}" -f [string]`$line) }
-
-    if (`$previewOnly) {
-        Write-ReparoSpicetifyOutput '[DRY-RUN] spicetify update'
-        Write-ReparoSpicetifyOutput '[DRY-RUN] spicetify restore backup apply'
-        Set-Content -LiteralPath `$statusPath -Value '0' -Encoding ASCII
-        exit 0
-    }
-
-    foreach (`$step in @(
-        @{ Label = 'Spicetify update'; Args = @('update') },
-        @{ Label = 'Spicetify restore backup apply'; Args = @('restore', 'backup', 'apply') }
-    )) {
-        Write-ReparoSpicetifyOutput ("[STEP] {0}" -f `$step.Label)
-        `$output = @(& `$spicetify @(`$step.Args) 2>&1)
-        `$exit = `$LASTEXITCODE
-        foreach (`$line in `$output) { Write-ReparoSpicetifyOutput ([string]`$line) }
-        if (`$exit -ne 0) {
-            Write-ReparoSpicetifyOutput ("[ERROR] {0} failed with exit code {1}" -f `$step.Label, `$exit)
-            Set-Content -LiteralPath `$statusPath -Value ([string]`$exit) -Encoding ASCII
-            exit `$exit
-        }
-    }
-
-    Write-ReparoSpicetifyOutput '[DONE] Spicetify update and restore/backup/apply completed.'
-    Set-Content -LiteralPath `$statusPath -Value '0' -Encoding ASCII
-    exit 0
-}
-catch {
-    `$message = (`$_ | Out-String).Trim()
-    if ([string]::IsNullOrWhiteSpace(`$message)) { `$message = `$_.Exception.Message }
-    Write-ReparoSpicetifyOutput ("[ERROR] {0}" -f `$message)
-    Set-Content -LiteralPath `$statusPath -Value '1' -Encoding ASCII
-    exit 1
-}
-"@
-
-    Set-Content -LiteralPath $Path -Value $script -Encoding UTF8
-}
-
-function Sync-ReparoSpicetifyOutput {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][ref]$LineCount
-    )
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return
-    }
-
-    try {
-        $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8 -ErrorAction Stop)
-    }
-    catch {
-        return
-    }
-
-    if ($lines.Count -le $LineCount.Value) {
-        return
-    }
-
-    if ($LineCount.Value -le 0) {
-        $newLines = $lines
-    }
-    else {
-        $newLines = $lines[$LineCount.Value..($lines.Count - 1)]
-    }
-
-    foreach ($line in $newLines) {
-        if (-not (Test-ReparoIgnorableCommandOutputLine -Section 'Spicetify' -Line ([string]$line))) {
-            Write-Host ([string]$line)
-            Write-ReparoLog ("[CMD-OUT] Spicetify: {0}" -f [string]$line)
-        }
-    }
-
-    $LineCount.Value = $lines.Count
-}
-
-function Invoke-ReparoSpicetify {
-    if (-not (Test-ReparoSectionSelected 'Spicetify')) { return }
-
-    Write-Step 'Spicetify'
-    Write-ReparoLog '[STEP] Spicetify'
-    Write-ReparoLog '[INFO] Spicetify runs in the interactive user context because Spotify and Spicetify state are per-user.'
-
-    $safeSection = ConvertTo-ReparoSafeFileName -Value 'Spicetify'
-    $workerScriptPath = Join-Path $LogRoot ("{0}_{1}.command.ps1" -f $script:ReparoLogBaseName, $safeSection)
-    $workerOutputPath = Join-Path $LogRoot ("{0}_{1}.out.log" -f $script:ReparoLogBaseName, $safeSection)
-    $workerStatusPath = Join-Path $LogRoot ("{0}_{1}.exit" -f $script:ReparoLogBaseName, $safeSection)
-    Remove-Item -LiteralPath $workerScriptPath, $workerOutputPath, $workerStatusPath -Force -ErrorAction SilentlyContinue
-    New-ReparoSpicetifyWorkerScript -Path $workerScriptPath -OutputPath $workerOutputPath -StatusPath $workerStatusPath -PreviewOnly:$Preview -InstallRequested:$InstallSpicetify
-
-    $lineCount = 0
-    $timeoutSeconds = 600
-    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-
-    try {
-        if ((Test-Admin) -or (Test-ReparoSystemIdentity)) {
-            $interactiveUser = Get-ReparoInteractiveUserName
-            if ([string]::IsNullOrWhiteSpace($interactiveUser)) {
-                Write-Skip 'Spicetify requested, but no logged-on Explorer user was found.'
-                Write-ReparoLog '[SKIP] Spicetify requested, but no logged-on Explorer user was found'
-                Add-ReparoSummaryRecord -Bucket Skipped -Software 'Spicetify' -Version '-' -Method 'spicetify' -Reason 'no logged-on Explorer user found'
-                return
-            }
-
-            $shell = Resolve-ReparoShell
-            $taskName = ('Reparo-Spicetify-{0}-{1}' -f $env:COMPUTERNAME, $PID)
-            $taskArguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $workerScriptPath
-            Write-ReparoLog ("[CMD] Register-ScheduledTask -TaskName {0} -UserId {1} -Execute {2} -Argument {3}" -f $taskName, $interactiveUser, $shell, $taskArguments)
-
-            try {
-                $action = New-ScheduledTaskAction -Execute $shell -Argument $taskArguments
-                $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
-                $principal = New-ScheduledTaskPrincipal -UserId $interactiveUser -LogonType Interactive -RunLevel Limited
-                Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force -ErrorAction Stop | Out-Null
-            }
-            catch {
-                throw "Unable to create Spicetify user-context scheduled task. $($_.Exception.Message)"
-            }
-
-            try {
-                Write-ReparoLog ("[CMD] Start-ScheduledTask -TaskName {0}" -f $taskName)
-                Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
-            }
-            catch {
-                throw "Unable to start Spicetify user-context scheduled task. $($_.Exception.Message)"
-            }
-        }
-        else {
-            $shell = Resolve-ReparoShell
-            Write-ReparoLog ("[CMD] {0} -NoProfile -ExecutionPolicy Bypass -File {1}" -f $shell, $workerScriptPath)
-            $spicetifyStartArgs = @{
-                FilePath = $shell
-                ArgumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $workerScriptPath)
-                PassThru = $true
-            }
-            if ($script:ReparoIsWindows) {
-                $spicetifyStartArgs['WindowStyle'] = 'Hidden'
-            }
-            $process = Start-Process @spicetifyStartArgs
-            Write-ReparoDebug ("Started Spicetify worker PID {0}" -f $process.Id)
-        }
-
-        while (-not (Test-Path -LiteralPath $workerStatusPath)) {
-            Start-Sleep -Milliseconds 500
-            Sync-ReparoSpicetifyOutput -Path $workerOutputPath -LineCount ([ref]$lineCount)
-
-            if ($stopwatch.Elapsed.TotalSeconds -ge $timeoutSeconds) {
-                throw "Spicetify worker did not finish within ${timeoutSeconds}s."
-            }
-        }
-
-        Sync-ReparoSpicetifyOutput -Path $workerOutputPath -LineCount ([ref]$lineCount)
-        $exitText = (Get-Content -LiteralPath $workerStatusPath -ErrorAction SilentlyContinue | Select-Object -First 1)
-        $exitCode = 1
-        if (-not [int]::TryParse([string]$exitText, [ref]$exitCode)) {
-            $exitCode = 1
-        }
-
-        if ($exitCode -eq 0) {
-            if ($Preview) {
-                Write-Skip 'Spicetify (preview only)'
-                Add-ReparoSummaryRecord -Bucket Skipped -Software 'Spicetify' -Version '-' -Method 'spicetify' -Reason 'preview only'
-            }
-            else {
-                Write-Done 'Spicetify complete'
-                if ($InstallSpicetify) {
-                    Add-ReparoSummaryNote 'Spicetify completed install/reinstall, update, and restore/backup/apply in the interactive user context.'
-                }
-                else {
-                    Add-ReparoSummaryNote 'Spicetify completed update and restore/backup/apply in the interactive user context.'
-                }
-            }
-        }
-        elseif ($exitCode -eq 42) {
-            Write-Skip 'spicetify not found in the interactive user context; skipping'
-            Add-ReparoSummaryRecord -Bucket Skipped -Software 'Spicetify' -Version '-' -Method 'spicetify' -Reason 'spicetify not found in interactive user context'
-        }
-        else {
-            Write-Fail "Spicetify failed with exit code $exitCode"
-            Add-ReparoSummaryRecord -Bucket Failed -Software 'Spicetify' -Version '-' -Method 'spicetify' -Reason "exit code $exitCode"
-        }
-    }
-    catch {
-        Write-Fail "Spicetify failed: $($_.Exception.Message)"
-        Write-ReparoLog ("[ERROR] Spicetify: {0}" -f $_.Exception.Message)
-        Add-ReparoSummaryRecord -Bucket Failed -Software 'Spicetify' -Version '-' -Method 'spicetify' -Reason $_.Exception.Message
-    }
-    finally {
-        if ($taskName) {
-            try {
-                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
-                Write-ReparoDebug ("Spicetify task cleanup: deleted {0}" -f $taskName)
-            }
-            catch {
-                Write-ReparoDebug ("Spicetify task cleanup failed for {0}: {1}" -f $taskName, $_.Exception.Message)
-            }
-        }
-
-        Remove-Item -LiteralPath $workerScriptPath, $workerStatusPath -Force -ErrorAction SilentlyContinue
-    }
-}
-
 if ($ListVersionLocks) {
     Show-ReparoVersionLocks
     return
@@ -5765,9 +5342,6 @@ elseif ($MigrateChocoToWinget) {
 }
 elseif ($FinalizeChocolateyRemoval) {
     $mode = 'FINALIZE CHOCOLATEY REMOVAL'
-}
-elseif ($InstallSpicetify) {
-    $mode = 'INSTALL SPICETIFY'
 }
 elseif ($Windows11Upgrade) {
     $mode = 'WINDOWS11 UPGRADE'
@@ -6652,7 +6226,6 @@ Invoke-ReparoCommandStep -Section 'CargoBins' -PresenceCmd 'cargo-install-update
 Invoke-ReparoCommandStep -Section 'Conda' -PresenceCmd 'conda' -Command 'conda update -n base conda -y; conda update --all -y'
 Invoke-ReparoCommandStep -Section 'Gem' -PresenceCmd 'gem' -Command 'gem update --system; gem update'
 Invoke-ReparoCommandStep -Section 'Composer' -PresenceCmd 'composer' -Command 'composer self-update; composer global update'
-Invoke-ReparoSpicetify
 Invoke-ReparoCommandStep -Section 'Wsl' -PresenceCmd 'wsl' -Command 'wsl --update; wsl --shutdown'
 
 if ($WslApt -and (Test-ReparoSectionSelected 'WslApt')) {
@@ -6880,172 +6453,3 @@ Invoke-ReparoForcedShutdown
 if ($script:ReparoFinalStatus -eq 'FAILED') {
     exit 1
 }
-
-# SIG # Begin signature block
-# MIIfFwYJKoZIhvcNAQcCoIIfCDCCHwQCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
-# gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUxLnIvBY2E77T9t16VpIQJXfa
-# f0qgghh2MIIFODCCAyCgAwIBAgIQRAnY3+h+m7ZGhdt+bpKDhTANBgkqhkiG9w0B
-# AQsFADAsMSowKAYDVQQDDCFUaGUgVGVjaG5vbG9naXN0IEludGVybmFsIFJvb3Qg
-# Q0EwHhcNMjYwODAyMDYzNTIyWhcNMzYwODAxMDY0NTIwWjAbMRkwFwYDVQQDDBBU
-# aGUgVGVjaG5vbG9naXN0MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA
-# lNNhdFAcHc7pXrTpI9GZ4wGRATk5nCBjKBB/M9WKokYnDIr073y59dRUaXETnzl/
-# kKdorprHwvmSX8k6StiVCl8zAEi94w7CLYB5rqMXFmKm3VFX6s6X615gnoEL2sZX
-# Ff9Nof+zIH+2TqVof7kYnSjUcpcDabadRxg4tpEfONLWKtRmgGMFI/AgfJKZrQgG
-# oGoSZK8ba+Oo+HsrrsPAmgJCbSNInBn9cuOCqbyGenaFA+MYzUQ41GsFdlrWKP/k
-# UIye+0OqsABabOq2y18k9zTfivgF1Vq5/raUDwjMDQPT/FwX7+vESWPdiDBCjlxw
-# udll03kF1dfz9cF9zOV6UAWce8nxWl/jtaix4dIX+SyEPjKtOPMm7SYBERVWeTYG
-# oGFOzyWNnxKm9YQ+2k7eYHEmlOdWI8KvcIXZwTG/o/XKOuh1CaV2Hbhfw4QFg4FU
-# 32JjNYMid7hJBhAtLf5yCMGO0VSdcVyJrC+xQKR7UGobwFqGTRImIp3V9QffGxXh
-# we+HU5qNzkhzA9mrg7XKgCxXbyz1HmwOH1+4v+cHB1AD/d91vnBnydg4Az2IDmC9
-# AlmJwMaEMdkhpHzutSmQ0wbktu/I/3d6Ww2M7KKWHdQeqiMEFR/tZ6W5yt8oYipo
-# LcTGbl87MdBYykI2iF8yeyCIBlAoozk0/FnBQqVsEZUCAwEAAaNnMGUwDgYDVR0P
-# AQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMDMB8GA1UdIwQYMBaAFC2/rogq
-# j3D9/NSFjj81LqMTzs4rMB0GA1UdDgQWBBRXUJHYAZIY2TOUNjqBVrsf0xlVjjAN
-# BgkqhkiG9w0BAQsFAAOCAgEABDrlrZlG0CHzdeCegE53n1s1U5xebwC77FdXTM9I
-# 4vKRrtROYog0HssZ4JFTXXgAuoIv7SwpyNQUf7HtxSzp99qLnMJ7/uusclQOEGb0
-# 8hWGCSp+KT8Jw5ltKUyygYdjAs5epHxAT6EA4XNbJ5DCox+ZyFhHo7XjoFGEbZGo
-# XWcUhpVYl/XP4+7iUa+fVRaETHg/uJYtdoCMi5bdy5lcubIFwb9d1VI3JwbuhYMa
-# xh8+yWMeRz2IRcVt/Xw4DxlC12HOqico8kDY86l8GGH8VSPvwW1SLwepf3/iVr8/
-# bA5QiTb38eMOkYcFrXcw3FNV2MYuVXB1CYRCHog60cJ52u9iZBVKnZjiHtc4wnWW
-# QcaLjKjD/4ZuyK0yw3TjXdGwO9+rEpWLFjsUSkVBltH7/Ont1/9Tvjer0poauyxq
-# zOu4dZmaK6DU9jAygU9UhTiT2PP0ji8sec9XGDkC/P8YcihrDkERKrqQAt4r3Q9k
-# eEAq92NccsmuC9/zwt2/jpJCt566Tg9U1Yohy/qdwVbzNIgHyuIOtfPEtYlhleur
-# GR4/fkb1Oqqwome7AlEy6L/1IHKXn/A/cScN0BnswLkg8yVhsoZK++0KXAHZHFjW
-# pv9PV0pPFkyS0Zh1XPoRroJT0ENsS+SvHQube2rJc+WPjmPV2CSMNqjFJ3dIlz8X
-# tvMwggWNMIIEdaADAgECAhAOmxiO+dAt5+/bUOIIQBhaMA0GCSqGSIb3DQEBDAUA
-# MGUxCzAJBgNVBAYTAlVTMRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsT
-# EHd3dy5kaWdpY2VydC5jb20xJDAiBgNVBAMTG0RpZ2lDZXJ0IEFzc3VyZWQgSUQg
-# Um9vdCBDQTAeFw0yMjA4MDEwMDAwMDBaFw0zMTExMDkyMzU5NTlaMGIxCzAJBgNV
-# BAYTAlVTMRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdp
-# Y2VydC5jb20xITAfBgNVBAMTGERpZ2lDZXJ0IFRydXN0ZWQgUm9vdCBHNDCCAiIw
-# DQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAL/mkHNo3rvkXUo8MCIwaTPswqcl
-# LskhPfKK2FnC4SmnPVirdprNrnsbhA3EMB/zG6Q4FutWxpdtHauyefLKEdLkX9YF
-# PFIPUh/GnhWlfr6fqVcWWVVyr2iTcMKyunWZanMylNEQRBAu34LzB4TmdDttceIt
-# DBvuINXJIB1jKS3O7F5OyJP4IWGbNOsFxl7sWxq868nPzaw0QF+xembud8hIqGZX
-# V59UWI4MK7dPpzDZVu7Ke13jrclPXuU15zHL2pNe3I6PgNq2kZhAkHnDeMe2scS1
-# ahg4AxCN2NQ3pC4FfYj1gj4QkXCrVYJBMtfbBHMqbpEBfCFM1LyuGwN1XXhm2Tox
-# RJozQL8I11pJpMLmqaBn3aQnvKFPObURWBf3JFxGj2T3wWmIdph2PVldQnaHiZdp
-# ekjw4KISG2aadMreSx7nDmOu5tTvkpI6nj3cAORFJYm2mkQZK37AlLTSYW3rM9nF
-# 30sEAMx9HJXDj/chsrIRt7t/8tWMcCxBYKqxYxhElRp2Yn72gLD76GSmM9GJB+G9
-# t+ZDpBi4pncB4Q+UDCEdslQpJYls5Q5SUUd0viastkF13nqsX40/ybzTQRESW+UQ
-# UOsxxcpyFiIJ33xMdT9j7CFfxCBRa2+xq4aLT8LWRV+dIPyhHsXAj6KxfgommfXk
-# aS+YHS312amyHeUbAgMBAAGjggE6MIIBNjAPBgNVHRMBAf8EBTADAQH/MB0GA1Ud
-# DgQWBBTs1+OC0nFdZEzfLmc/57qYrhwPTzAfBgNVHSMEGDAWgBRF66Kv9JLLgjEt
-# UYunpyGd823IDzAOBgNVHQ8BAf8EBAMCAYYweQYIKwYBBQUHAQEEbTBrMCQGCCsG
-# AQUFBzABhhhodHRwOi8vb2NzcC5kaWdpY2VydC5jb20wQwYIKwYBBQUHMAKGN2h0
-# dHA6Ly9jYWNlcnRzLmRpZ2ljZXJ0LmNvbS9EaWdpQ2VydEFzc3VyZWRJRFJvb3RD
-# QS5jcnQwRQYDVR0fBD4wPDA6oDigNoY0aHR0cDovL2NybDMuZGlnaWNlcnQuY29t
-# L0RpZ2lDZXJ0QXNzdXJlZElEUm9vdENBLmNybDARBgNVHSAECjAIMAYGBFUdIAAw
-# DQYJKoZIhvcNAQEMBQADggEBAHCgv0NcVec4X6CjdBs9thbX979XB72arKGHLOyF
-# XqkauyL4hxppVCLtpIh3bb0aFPQTSnovLbc47/T/gLn4offyct4kvFIDyE7QKt76
-# LVbP+fT3rDB6mouyXtTP0UNEm0Mh65ZyoUi0mcudT6cGAxN3J0TU53/oWajwvy8L
-# punyNDzs9wPHh6jSTEAZNUZqaVSwuKFWjuyk1T3osdz9HNj0d1pcVIxv76FQPfx2
-# CWiEn2/K2yCNNWAcAgPLILCsWKAOQGPFmCLBsln1VWvPJ6tsds5vIy30fnFqI2si
-# /xK4VC0nftg62fC2h5b9W9FcrBjDTZ9ztwGpn1eqXijiuZQwgga0MIIEnKADAgEC
-# AhANx6xXBf8hmS5AQyIMOkmGMA0GCSqGSIb3DQEBCwUAMGIxCzAJBgNVBAYTAlVT
-# MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j
-# b20xITAfBgNVBAMTGERpZ2lDZXJ0IFRydXN0ZWQgUm9vdCBHNDAeFw0yNTA1MDcw
-# MDAwMDBaFw0zODAxMTQyMzU5NTlaMGkxCzAJBgNVBAYTAlVTMRcwFQYDVQQKEw5E
-# aWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1c3RlZCBHNCBUaW1l
-# U3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTEwggIiMA0GCSqGSIb3DQEB
-# AQUAA4ICDwAwggIKAoICAQC0eDHTCphBcr48RsAcrHXbo0ZodLRRF51NrY0NlLWZ
-# loMsVO1DahGPNRcybEKq+RuwOnPhof6pvF4uGjwjqNjfEvUi6wuim5bap+0lgloM
-# 2zX4kftn5B1IpYzTqpyFQ/4Bt0mAxAHeHYNnQxqXmRinvuNgxVBdJkf77S2uPoCj
-# 7GH8BLuxBG5AvftBdsOECS1UkxBvMgEdgkFiDNYiOTx4OtiFcMSkqTtF2hfQz3zQ
-# Sku2Ws3IfDReb6e3mmdglTcaarps0wjUjsZvkgFkriK9tUKJm/s80FiocSk1VYLZ
-# lDwFt+cVFBURJg6zMUjZa/zbCclF83bRVFLeGkuAhHiGPMvSGmhgaTzVyhYn4p0+
-# 8y9oHRaQT/aofEnS5xLrfxnGpTXiUOeSLsJygoLPp66bkDX1ZlAeSpQl92QOMeRx
-# ykvq6gbylsXQskBBBnGy3tW/AMOMCZIVNSaz7BX8VtYGqLt9MmeOreGPRdtBx3yG
-# OP+rx3rKWDEJlIqLXvJWnY0v5ydPpOjL6s36czwzsucuoKs7Yk/ehb//Wx+5kMqI
-# MRvUBDx6z1ev+7psNOdgJMoiwOrUG2ZdSoQbU2rMkpLiQ6bGRinZbI4OLu9BMIFm
-# 1UUl9VnePs6BaaeEWvjJSjNm2qA+sdFUeEY0qVjPKOWug/G6X5uAiynM7Bu2ayBj
-# UwIDAQABo4IBXTCCAVkwEgYDVR0TAQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQU729T
-# SunkBnx6yuKQVvYv1Ensy04wHwYDVR0jBBgwFoAU7NfjgtJxXWRM3y5nP+e6mK4c
-# D08wDgYDVR0PAQH/BAQDAgGGMBMGA1UdJQQMMAoGCCsGAQUFBwMIMHcGCCsGAQUF
-# BwEBBGswaTAkBggrBgEFBQcwAYYYaHR0cDovL29jc3AuZGlnaWNlcnQuY29tMEEG
-# CCsGAQUFBzAChjVodHRwOi8vY2FjZXJ0cy5kaWdpY2VydC5jb20vRGlnaUNlcnRU
-# cnVzdGVkUm9vdEc0LmNydDBDBgNVHR8EPDA6MDigNqA0hjJodHRwOi8vY3JsMy5k
-# aWdpY2VydC5jb20vRGlnaUNlcnRUcnVzdGVkUm9vdEc0LmNybDAgBgNVHSAEGTAX
-# MAgGBmeBDAEEAjALBglghkgBhv1sBwEwDQYJKoZIhvcNAQELBQADggIBABfO+xaA
-# HP4HPRF2cTC9vgvItTSmf83Qh8WIGjB/T8ObXAZz8OjuhUxjaaFdleMM0lBryPTQ
-# M2qEJPe36zwbSI/mS83afsl3YTj+IQhQE7jU/kXjjytJgnn0hvrV6hqWGd3rLAUt
-# 6vJy9lMDPjTLxLgXf9r5nWMQwr8Myb9rEVKChHyfpzee5kH0F8HABBgr0UdqirZ7
-# bowe9Vj2AIMD8liyrukZ2iA/wdG2th9y1IsA0QF8dTXqvcnTmpfeQh35k5zOCPmS
-# Nq1UH410ANVko43+Cdmu4y81hjajV/gxdEkMx1NKU4uHQcKfZxAvBAKqMVuqte69
-# M9J6A47OvgRaPs+2ykgcGV00TYr2Lr3ty9qIijanrUR3anzEwlvzZiiyfTPjLbnF
-# RsjsYg39OlV8cipDoq7+qNNjqFzeGxcytL5TTLL4ZaoBdqbhOhZ3ZRDUphPvSRmM
-# Thi0vw9vODRzW6AxnJll38F0cuJG7uEBYTptMSbhdhGQDpOXgpIUsWTjd6xpR6oa
-# Qf/DJbg3s6KCLPAlZ66RzIg9sC+NJpud/v4+7RWsWCiKi9EOLLHfMR2ZyJ/+xhCx
-# 9yHbxtl5TPau1j/1MIDpMPx0LckTetiSuEtQvLsNz3Qbp7wGWqbIiOWCnb5WqxL3
-# /BAPvIXKUjPSxyZsq8WhbaM2tszWkPZPubdcMIIG7TCCBNWgAwIBAgIQCoDvGEuN
-# 8QWC0cR2p5V0aDANBgkqhkiG9w0BAQsFADBpMQswCQYDVQQGEwJVUzEXMBUGA1UE
-# ChMORGlnaUNlcnQsIEluYy4xQTA/BgNVBAMTOERpZ2lDZXJ0IFRydXN0ZWQgRzQg
-# VGltZVN0YW1waW5nIFJTQTQwOTYgU0hBMjU2IDIwMjUgQ0ExMB4XDTI1MDYwNDAw
-# MDAwMFoXDTM2MDkwMzIzNTk1OVowYzELMAkGA1UEBhMCVVMxFzAVBgNVBAoTDkRp
-# Z2lDZXJ0LCBJbmMuMTswOQYDVQQDEzJEaWdpQ2VydCBTSEEyNTYgUlNBNDA5NiBU
-# aW1lc3RhbXAgUmVzcG9uZGVyIDIwMjUgMTCCAiIwDQYJKoZIhvcNAQEBBQADggIP
-# ADCCAgoCggIBANBGrC0Sxp7Q6q5gVrMrV7pvUf+GcAoB38o3zBlCMGMyqJnfFNZx
-# +wvA69HFTBdwbHwBSOeLpvPnZ8ZN+vo8dE2/pPvOx/Vj8TchTySA2R4QKpVD7dvN
-# Zh6wW2R6kSu9RJt/4QhguSssp3qome7MrxVyfQO9sMx6ZAWjFDYOzDi8SOhPUWlL
-# nh00Cll8pjrUcCV3K3E0zz09ldQ//nBZZREr4h/GI6Dxb2UoyrN0ijtUDVHRXdmn
-# cOOMA3CoB/iUSROUINDT98oksouTMYFOnHoRh6+86Ltc5zjPKHW5KqCvpSduSwhw
-# UmotuQhcg9tw2YD3w6ySSSu+3qU8DD+nigNJFmt6LAHvH3KSuNLoZLc1Hf2JNMVL
-# 4Q1OpbybpMe46YceNA0LfNsnqcnpJeItK/DhKbPxTTuGoX7wJNdoRORVbPR1VVnD
-# uSeHVZlc4seAO+6d2sC26/PQPdP51ho1zBp+xUIZkpSFA8vWdoUoHLWnqWU3dCCy
-# FG1roSrgHjSHlq8xymLnjCbSLZ49kPmk8iyyizNDIXj//cOgrY7rlRyTlaCCfw7a
-# SUROwnu7zER6EaJ+AliL7ojTdS5PWPsWeupWs7NpChUk555K096V1hE0yZIXe+gi
-# AwW00aHzrDchIc2bQhpp0IoKRR7YufAkprxMiXAJQ1XCmnCfgPf8+3mnAgMBAAGj
-# ggGVMIIBkTAMBgNVHRMBAf8EAjAAMB0GA1UdDgQWBBTkO/zyMe39/dfzkXFjGVBD
-# z2GM6DAfBgNVHSMEGDAWgBTvb1NK6eQGfHrK4pBW9i/USezLTjAOBgNVHQ8BAf8E
-# BAMCB4AwFgYDVR0lAQH/BAwwCgYIKwYBBQUHAwgwgZUGCCsGAQUFBwEBBIGIMIGF
-# MCQGCCsGAQUFBzABhhhodHRwOi8vb2NzcC5kaWdpY2VydC5jb20wXQYIKwYBBQUH
-# MAKGUWh0dHA6Ly9jYWNlcnRzLmRpZ2ljZXJ0LmNvbS9EaWdpQ2VydFRydXN0ZWRH
-# NFRpbWVTdGFtcGluZ1JTQTQwOTZTSEEyNTYyMDI1Q0ExLmNydDBfBgNVHR8EWDBW
-# MFSgUqBQhk5odHRwOi8vY3JsMy5kaWdpY2VydC5jb20vRGlnaUNlcnRUcnVzdGVk
-# RzRUaW1lU3RhbXBpbmdSU0E0MDk2U0hBMjU2MjAyNUNBMS5jcmwwIAYDVR0gBBkw
-# FzAIBgZngQwBBAIwCwYJYIZIAYb9bAcBMA0GCSqGSIb3DQEBCwUAA4ICAQBlKq3x
-# HCcEua5gQezRCESeY0ByIfjk9iJP2zWLpQq1b4URGnwWBdEZD9gBq9fNaNmFj6Eh
-# 8/YmRDfxT7C0k8FUFqNh+tshgb4O6Lgjg8K8elC4+oWCqnU/ML9lFfim8/9yJmZS
-# e2F8AQ/UdKFOtj7YMTmqPO9mzskgiC3QYIUP2S3HQvHG1FDu+WUqW4daIqToXFE/
-# JQ/EABgfZXLWU0ziTN6R3ygQBHMUBaB5bdrPbF6MRYs03h4obEMnxYOX8VBRKe1u
-# NnzQVTeLni2nHkX/QqvXnNb+YkDFkxUGtMTaiLR9wjxUxu2hECZpqyU1d0IbX6Wq
-# 8/gVutDojBIFeRlqAcuEVT0cKsb+zJNEsuEB7O7/cuvTQasnM9AWcIQfVjnzrvwi
-# CZ85EE8LUkqRhoS3Y50OHgaY7T/lwd6UArb+BOVAkg2oOvol/DJgddJ35XTxfUlQ
-# +8Hggt8l2Yv7roancJIFcbojBcxlRcGG0LIhp6GvReQGgMgYxQbV1S3CrWqZzBt1
-# R9xJgKf47CdxVRd/ndUlQ05oxYy2zRWVFjF7mcr4C34Mj3ocCVccAvlKV9jEnstr
-# niLvUxxVZE/rptb7IRE2lskKPIJgbaP5t2nGj/ULLi49xTcBZU8atufk+EMF/cWu
-# iC7POGT75qaL6vdCvHlshtjdNXOCIUjsarfNZzGCBgswggYHAgEBMEAwLDEqMCgG
-# A1UEAwwhVGhlIFRlY2hub2xvZ2lzdCBJbnRlcm5hbCBSb290IENBAhBECdjf6H6b
-# tkaF235ukoOFMAkGBSsOAwIaBQCgeDAYBgorBgEEAYI3AgEMMQowCKACgAChAoAA
-# MBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisGAQQBgjcCAQsxDjAMBgor
-# BgEEAYI3AgEVMCMGCSqGSIb3DQEJBDEWBBTbA7rrquxBC1bu7hU+KdzP+dhkyTAN
-# BgkqhkiG9w0BAQEFAASCAgA8Y1onY+myyqD2VGE+7DoDLtipZSgX+QHnlJarybh5
-# chmNUU+bT4oYZUMXjklc3wI1mrIJgx33DlW4QmqUdHWn07eWp6uKeROG1N0ESmu+
-# gBIs5Zls2NkqeW47Te9fFl29UovP/4vbdqlnDTJiVnVYEyQ4gk6iZKEjYy3QQ9nK
-# vMQZluUZ83XFH4JbxizJvTlnZsvmjHltWKukFmAUWqJywy71cO76ibhz5ZEJSB/z
-# bNFGJK1pz/Ebs4xXHSmxagg1ub2EZQks0maBw8oVlC9tkFE3zXQ71zMVz+vCQOYh
-# tnnSAEE7y8u72vR1yPBOiIZqfb0xThtkIL3NRm5YJy6CSYF3oda3NVWuSjjOjB0F
-# e7ReBLXaMxi1MWQG3T0jKA/7vx5AfmOf1W4pUT0bkh+vSBtP1UfqQzydBLrfhq8X
-# nn4jtD9XamdHlt+83u78N1FkOOJyLR2vy8Ry0UCzp45CcR86Aw9WchX2GvkMICG3
-# GNSM2QNonXmMOeHb21Kqoaj006FTaCGK3MqtrVb/t/Ir/T06eSCvr8kZHH3JGr1F
-# 1npiT2F3FP+pX1fXIqotBMsZEMmssqfa0+wLCsY4zKR9SoRpSgHoP1+M7Xy47BKr
-# YS4dPb4eIIwWWYXTKEyogGSUTOwhTZwYQpxljkD4oKybXTDgdHsNNNBCf/4oduH5
-# i6GCAyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVT
-# MRcwFQYDVQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1
-# c3RlZCBHNCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTECEAqA
-# 7xhLjfEFgtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJ
-# KoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA4MDIwODA4MDZaMC8GCSqGSIb3
-# DQEJBDEiBCDZXFORnBIxwXST+w43edNx91HRhr+FVG4TAkqQYlHfUTANBgkqhkiG
-# 9w0BAQEFAASCAgBsuPPfPS75j8UX3E+43mEsqPmO52TkNf4lIsP/cRS0EQkkOBJZ
-# WxaGgwL8KzetzbyIz0OnTkIeW8UDqAKpLkIqatHIT3KKminOzlS38/m2ieExbwUS
-# lP/m5cm2KlAjWxxMNPsh4YjNmesLdQ/icHr9SkqxMz5kOdVrPtVkVIIZ9xtbgDlj
-# MNb6y6aQdeFDKGz1TbkR9BnDgI3z6bFGuFZga7j4hxdFbSajxYu0tPTILjGVvbEM
-# VaV8oWnAbb/aFEbknqCsV3Z8Vj0AKKK1wQwWWlqiQv+HVX4L404XBS8WLsToEAmy
-# DWILLVfQP1E9zb7s64HjtQfOIOk4WWgeJi/0s7aDc4Owkn+z3xM67p0uINfS1dE9
-# GU8+/d91Lm7d6a++1ktVIPDHhN41coq2MSDMf6LoiG/zQpetFRB/9ugrmxRfmpkv
-# JzkSRjPM+QOmtApMCqKKfFVWUjM7i25vOAdmap6YboGHjx2piVDwdCfQh6C4JMVq
-# VOEdQKPis8czxW8vjQ4EgIZaBvQjzdmUMzIL0HfygPM1MOcXFpsAbG5Sm33NpU6J
-# 1EznWVG3Swanu9uVJPn797ol5zDf3Cmt1ApZRou0DAfSBZXcBTjXzgqRMjsMkN46
-# Xz7rWuZgmfEv5/Hf8haZCM+JgGLY6ssF8VAtIbz+UPRHc7R/7MTVxzCwWA==
-# SIG # End signature block

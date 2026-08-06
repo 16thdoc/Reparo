@@ -88,7 +88,7 @@ the same CyberShell-style version quote/source flavor.
 
 ### What it does
 
-By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, PowerShell 7 through Microsoft's signed machine-wide MSI, 7-Zip deployment through winget, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, Spicetify, and WSL, plus a Chocolatey-to-winget migration pass.
+By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, PowerShell 7 through Microsoft's signed machine-wide MSI, 7-Zip deployment through winget, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, and WSL, plus a Chocolatey-to-winget migration pass.
 
 Reparo does not install package managers from scratch. It only uses tools that are already present, then skips the sections that are not available. Use `-7Zip` only when you explicitly want Reparo to install the `7zip.7zip` winget package if it is missing, or update it when present.
 
@@ -176,19 +176,13 @@ Recommended rollout pattern:
 3. Review logs and RMM output before broad deployment.
 4. Reserve `-Force` for known developer workstations or hands-on maintenance.
 
-## Internal code signing
+## Deployment integrity
 
-Reparo has a fleet-only internal signing identity under `deploy/signing/`. Deploy
-`deploy/signing/Install-ReparoInternalSigningTrust.ps1` through Ninja as SYSTEM before
-using the signed Reparo artifacts on managed endpoints. It trusts the internal root
-and approved signing publisher without distributing a private key. The signer workflow
-and certificate thumbprints are documented in `deploy/RMM-Operator-Guide.md`.
-
-Routine source work and Linux-only changes can be committed without the Windows
-signing identity. Before publishing or deploying a Windows fleet release, follow
-`RELEASE.md` and run `deploy/signing/New-SignedReparoRelease.ps1` on the signing
-workstation. The consolidated Ninja/ScreenConnect operator instructions are in
-`deploy/RMM-Operator-Guide.md`.
+The generated Ninja and ScreenConnect artifacts carry a SHA-256 hash of their bundled
+Reparo payload and refuse to install it if the extracted bytes do not match. GitHub
+updates use the repository source URL configured by the deployment artifact. Follow
+`RELEASE.md` when publishing a fleet release; consolidated Ninja/ScreenConnect
+instructions are in `deploy/RMM-Operator-Guide.md`.
 
 ### Ninja deployment options
 
@@ -397,8 +391,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | Mode | Behavior |
 | --- | --- |
 | Default | Runs `WindowsUpdate` only. |
-| `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` transactionally: it stages and validates the candidate, retains a rollback copy even with `-NoBackup`, verifies the installed runtime, and restores the prior runtime if post-install validation fails. It does not require a signed payload by default. Native Linux applies the equivalent POSIX syntax/runtime rollback validation. |
-| `-Sign` / `-Signed` | Windows `-New` opt-in: installs only the pinned `The Technologist` root and publisher trust, then requires the downloaded runtime Authenticode signature to be `Valid` and from that signer. It does not alter execution policy or accept arbitrary certificates. |
+| `-Install` / `-New` | Installs or updates `C:\ProgramData\Reparo\Reparo.ps1` transactionally: it stages and validates the candidate, retains a rollback copy even with `-NoBackup`, verifies the installed runtime, and restores the prior runtime if post-install validation fails. Native Linux applies the equivalent POSIX syntax/runtime rollback validation. |
 | `-Help` / `-H` / `-h` | Prints Reparo usage and exits without running updates. |
 | `-Version` / `-V` / `-v` | Prints the Reparo version, script source path, and version-specific quote, then exits without running updates. |
 | Linux `--version` | Native Linux reports the same release number, quote, and source as the Windows PowerShell runner. |
@@ -428,7 +421,6 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-LockApp <id/name>` | Pins one app through the package manager so Reparo and normal package-manager updates do not move it. |
 | `-LockVersion <version>` | Version to pin with `-LockApp`. If omitted, Reparo tries to pin the currently installed version. |
 | `-PackageManager Auto\|Winget\|Choco` | Selects the app lookup/lock backend for `-CheckApp` and `-LockApp`. Default is `Auto`, which tries winget first, then Chocolatey. |
-| `-InstallSpicetify` | Installs or reinstalls Spicetify Marketplace in the logged-on user's context, then runs update and backup/apply. |
 | `-Tail` | Follows the active Reparo log when used by itself. When combined with a run mode, it prints the tail of that run's log at the end. |
 | `-TailLines <count>` | Controls how many existing log lines `-Tail` prints before following. Default: `400`. |
 | `-Time <when>` / `-At <when>` | Windows only. Creates a one-shot Task Scheduler task that runs the requested Reparo invocation as `SYSTEM` with highest privileges, then deletes itself. Clock inputs (`11:45pm`, `11pm`, `23:00`, `23:00:30`) use the next local occurrence. Delay inputs accept compact/long forms (`30s`, `30m`, `5h`, `2d`, `90min`) and positive decimals such as `1.5h`. Requires elevation. It rejects `-Preview`, `-Status`, `-Tail`, `-Kill`, `-Sweep`, and `-DeleteStale`. |
@@ -440,7 +432,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Shutdown` | Shuts down the computer 30 seconds after Reparo completes. Cannot be combined with `-Reboot`. |
 | `-InstallNuGetProvider` | Bootstraps the NuGet provider before PSGallery installs when `true` (default). Set it to `false` only if you want to suppress that bootstrap attempt. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
-| `-Force` | Runs the full local-dev-tool pass, includes the per-user Spicetify update/backup/apply section, and enables Windows Update and WSL apt handling. It deliberately excludes PowerShell 7; run `-7` explicitly for that MSI update. Use carefully. |
+| `-Force` | Runs the full local-dev-tool pass and enables Windows Update and WSL apt handling. It deliberately excludes PowerShell 7; run `-7` explicitly for that MSI update. Use carefully. |
 
 ### Version quote style
 
@@ -509,7 +501,6 @@ Available section names:
 - `Conda`
 - `Gem`
 - `Composer`
-- `Spicetify`
 - `Wsl`
 - `WslApt`
 - `WindowsUpdate`
@@ -554,31 +545,6 @@ When that lock is active, Reparo skips the dedicated `PowerShell7` section.
 The general winget pass also excludes `Microsoft.PowerShell` whenever this
 dedicated section is selected, preventing an MSIX/MSI installer-technology
 knife fight.
-
-### Spicetify
-
-The `Spicetify` section is included in `-Force` and can also be run directly:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Include Spicetify
-```
-
-To install or reinstall Spicetify Marketplace for the logged-on user, use:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -InstallSpicetify
-```
-
-Spicetify is intentionally handled as a per-user tool. When Reparo is running elevated or as `SYSTEM`, it creates a short-lived hidden interactive scheduled task for the logged-on Explorer user, then runs:
-
-```powershell
-spicetify update
-spicetify backup apply
-```
-
-If `-InstallSpicetify` is present, Reparo first runs the official Spicetify Marketplace PowerShell installer from that same user context. That installer also bootstraps the Spicetify CLI when needed. If Spicetify is not installed or cannot be resolved during ordinary `-Force`, the section is skipped.
-
-If `spicetify backup apply` reports that a backup already exists and asks for `spicetify restore backup` before creating another backup, Reparo treats that as an already-backed-up state and continues. It does not clear or replace the existing Spicetify backup automatically.
 
 ### WSL apt
 
@@ -764,13 +730,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Update -Lo
 - Windows PowerShell 5.1 or PowerShell 7+
 - Administrative rights for Windows Update operations
 - Existing package managers for each selected section
-- A logged-on Explorer user for the `Spicetify` section when Reparo is running elevated or as `SYSTEM`
 - `choco` and `winget` available in the same execution context for `-MigrateChocoToWinget`
 - `PSWindowsUpdate` is auto-installed from PSGallery when possible for the `WindowsUpdate` section
 
 `winget` and Microsoft Store behavior can vary by Windows build, execution context, source agreement state, tenant policy, and device policy. Test from the same context your RMM will use, especially when running as `SYSTEM`.
-
-Spicetify behavior is user-context sensitive because Spotify and Spicetify files live under the interactive user's profile. Do not run the underlying Spicetify commands as admin unless you intentionally want to target the elevated account's profile instead of the desktop user's Spotify install.
 
 ## Troubleshooting
 

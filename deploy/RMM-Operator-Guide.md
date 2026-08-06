@@ -1,6 +1,6 @@
 # Reparo RMM Operator Guide
 
-This is the one operator guide for deploying, trusting, running, and troubleshooting
+This is the one operator guide for deploying, running, and troubleshooting
 Reparo through **NinjaOne** and **ScreenConnect**.
 
 Repository source of truth:
@@ -17,22 +17,20 @@ Desktop\Reparo\
 
 ## Short version — do this first
 
-### NinjaOne: signed pilot
+### NinjaOne: pilot
 
-1. Import `Internal-Code-Signing\Install-ReparoInternalSigningTrust.ps1` as a
-   PowerShell automation.
+1. Import `Ninja\Ninja-Embedded-Offline.ps1`.
 2. Run it as **SYSTEM**, with **no options and no arguments**, on one pilot endpoint.
-3. Import `Ninja\Ninja-Embedded-Offline.ps1`.
-4. Run it as **SYSTEM**, with **no options and no arguments**, on that same endpoint.
-5. Import/run `Ninja\Ninja-Reparo-Diagnostic.ps1` as SYSTEM.
-6. Confirm:
+3. Import/run `Ninja\Ninja-Reparo-Diagnostic.ps1` as SYSTEM.
+4. Confirm the runtime is present and inspect its version and SHA-256:
 
    ```text
-   Runtime signature status: Valid
-   Runtime signer thumbprint: 93CE2552E5C7F90600C36BDB83541921FCC97ED1
+   Runtime exists: True
+   Runtime version: <expected release>
+   Runtime SHA-256: <expected payload hash>
    ```
 
-7. After the pilot succeeds, use `Ninja\Ninja-Embedded.ps1` for normal
+5. After the pilot succeeds, use `Ninja\Ninja-Embedded.ps1` for normal
    install/refresh-and-report deployment.
 
 ### ScreenConnect: normal toolbox use
@@ -62,14 +60,14 @@ parameters. Pick the separate script that performs the action you want.
 | Ninja file | What it does |
 | --- | --- |
 | `Ninja-Embedded.ps1` | Installs/refreshes Reparo, then writes the installed version to the Ninja device field `Reparo`. No maintenance run. |
-| `Ninja-Embedded-Offline.ps1` | Installs the embedded signed runtime without contacting GitHub, then writes the version field. |
+| `Ninja-Embedded-Offline.ps1` | Installs the embedded runtime without contacting GitHub, then writes the version field. |
 | `Ninja-Reparo-ReportOnly.ps1` | Reads the installed runtime and updates only the Ninja `Reparo` field. |
 | `Ninja-Reparo-Update.ps1` | Installs/refreshes Reparo and updates the version field. No machine maintenance run. |
 | `Ninja-Reparo-Force-AllowReboot.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force -AllowReboot`. Windows Update may reboot only if required. |
 | `Ninja-Reparo-Kill.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Kill` to stop stuck Reparo and known updater processes. No reboot. |
 | `Ninja-Reparo-New.ps1` | Runs native `Reparo -New` only against an existing runtime, then updates the version field. It does not bootstrap a missing install. |
 | `Ninja-Reparo-Uninstall.ps1` | Stops Reparo processes, removes its runtime/PATH/logs/diagnostics, then clears the version field. No reboot. |
-| `Ninja-Reparo-Diagnostic.ps1` | Read-only inspection of runtime, logs, PATH, execution context, Ninja field support, and runtime signature. |
+| `Ninja-Reparo-Diagnostic.ps1` | Read-only inspection of runtime, logs, PATH, execution context, Ninja field support, version, and hash. |
 
 All Ninja artifacts run as **SYSTEM**. They are suitable for normal RMM deployment;
 do not paste extra command-line flags into their Ninja configuration.
@@ -112,37 +110,13 @@ or open a fresh terminal:
 C:\ProgramData\Reparo\bin\reparo.cmd -Version
 ```
 
-### 2. Internal code signing and trust
+### 2. Deployment integrity
 
-Reparo uses a free, private fleet-only PKI. It is not publicly trusted on random
-computers, by design. Managed endpoints trust it after the trust deployment script
-runs.
-
-| Identity | Thumbprint |
-| --- | --- |
-| Internal root CA | `1C44A46033EF4BB52695208ACF4455823A64BE57` |
-| Approved Reparo signer | `93CE2552E5C7F90600C36BDB83541921FCC97ED1` |
-
-The trust script installs only public certificates:
-
-- root CA → `LocalMachine\Root`
-- signing certificate → `LocalMachine\TrustedPublisher`
-
-The signing private key is non-exportable and remains on the signing workstation. It
-must never be copied, exported, committed, or uploaded to Ninja/ScreenConnect.
-
-#### Pilot trust procedure
-
-1. Deploy the trust script through Ninja as SYSTEM with no options/arguments.
-2. Deploy the signed **offline** artifact. Offline avoids any ambiguity while proving
-   the embedded signed payload, endpoint trust, and SYSTEM context work together.
-3. Run the Ninja diagnostic.
-4. Do not broadly deploy until the diagnostic reports `Valid` and the approved signer
-   thumbprint.
-
-The signed GitHub release is current, but Reparo's runtime update logic does not yet
-hard-refuse an unsigned/wrong-signer remote candidate. Keep the signed offline pilot
-as the trust proof until that enforcement gate is completed.
+Generated Ninja and ScreenConnect artifacts embed a gzip-compressed Reparo payload
+and its SHA-256 hash. The artifact verifies the extracted payload before invoking the
+transactional installer; a mismatch stops the deployment. The normal refresh path
+uses the repository URL configured in the artifact. Review generated artifacts and
+pilot an offline deployment before broad rollout.
 
 ### 3. NinjaOne deployment details
 
@@ -166,7 +140,7 @@ Use:
 Ninja-Embedded-Offline.ps1
 ```
 
-It installs only the signed Reparo payload embedded in the artifact. It makes no
+It installs only the Reparo payload embedded in the artifact. It makes no
 GitHub request.
 
 #### Refresh Reparo only
@@ -201,7 +175,7 @@ Ninja-Reparo-Diagnostic.ps1
 
 It is read-only. If installation claims success but the ProgramData runtime is absent,
 the diagnostic tells you the actual SYSTEM identity, working directory, runtime/log
-presence, PATH state, Ninja custom-field command availability, and signature state.
+presence, PATH state, Ninja custom-field command availability, version, and hash.
 
 For embedded-installer failures, inspect:
 
@@ -215,20 +189,10 @@ That directory captures the embedded child installer stdout/stderr.
 
 ScreenConnect toolbox files live in `ScreenConnect\`.
 
-#### Trust first
-
-Before treating ScreenConnect deployment as signed/trusted, run the same:
-
-```text
-Internal-Code-Signing\Install-ReparoInternalSigningTrust.ps1
-```
-
-from Toolbox under SYSTEM/admin.
-
 #### Embedded installer
 
 `ScreenConnect-Reparo-Embedded.ps1` is the self-contained installer. It contains a
-signed Reparo payload and works without helper-file attachments.
+Reparo payload and works without helper-file attachments.
 
 Useful Toolbox arguments:
 
@@ -263,32 +227,11 @@ Important reboot distinction:
 
 ### 5. Windows fleet release workflow
 
-Routine source work and Linux-only changes may be committed without this workflow.
-Before publishing or deploying Windows RMM artifacts, run this workflow on the
-signing workstation:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File .\deploy\signing\New-SignedReparoRelease.ps1
-```
-
-The workflow:
-
-1. Signs `Reparo.ps1`.
-2. Generates all embedded Ninja and ScreenConnect artifacts from that signed source.
-3. Signs the generated artifacts.
-4. Verifies each artifact carries the approved signer.
-5. Stops before commit/push/deploy.
-
-Then commit the regenerated signed artifacts and:
-
-```text
-Review diff → commit signed release → push intentionally → pilot → deploy
-```
-
-Never edit a signed script after the workflow finishes. Make the change, rerun the
-workflow, then commit. The signature is evidence of exact bytes, not a participation
-trophy.
+After changing `Reparo.ps1`, regenerate every embedded artifact with
+`deploy\New-NinjaEmbeddedDeployment.ps1`, including the fixed-action Ninja scripts
+and the ScreenConnect artifact. Review the source and generated diff, run the
+relevant tests, commit the coherent release, push it, then pilot before broad
+deployment.
 
 ### 6. Current deployment safety rules
 
@@ -298,6 +241,6 @@ trophy.
 - `-Force` is a maintenance-window/hands-on tool, not a fleet default.
 - `-Force -Reboot` deliberately reboots after completion.
 - Do not add Ninja parameters/options to fixed artifacts.
-- Pilot trust and signed offline install before broad signed rollout.
+- Pilot the offline embedded installer before broad rollout.
 - Keep `Desktop\Reparo\` as convenient staging only; GitHub/repository remains the
   canonical source.

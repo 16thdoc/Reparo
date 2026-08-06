@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Reparo Linux: native, shell-agnostic maintenance runner.
-# This is intentionally separate from the signed Windows PowerShell runtime.
+# This is intentionally separate from the Windows PowerShell runtime.
 
 set -u
 umask 077
@@ -57,8 +57,8 @@ will skip rather than hang on a password prompt. Global npm installs under a sys
 prefix such as /usr/local use that same privilege path; user-owned npm prefixes do
 not.
 
-Native --new validates POSIX shell syntax. Windows Authenticode validation applies
-only to the elevated PowerShell -New path.
+Native --new validates POSIX shell syntax. Windows -New validates PowerShell syntax
+and the installed runtime hash before completing the transaction.
 EOF
 }
 
@@ -117,7 +117,7 @@ normalize_option() {
 
 windows_only_option() {
     case "$1" in
-        windowsupdate|wu|windows11upgrade|win11|windows11|upgradetowindows11|powershell7only|7|powershell7|sevenzip|7zip|7z|wslapt|wsl|winget|wg|wingetdiscover|wd|search|s|list|versionlock|vl|addversionlock|saveversionlock|avl|versionlockpath|vlp|listversionlocks|lvl|migratechocotowinget|mcw|chocoderegisteronly|cdo|forcewingetreinstall|fwr|allowruntimederegister|ard|allowportablederegister|apd|finalizechocolateyremoval|fcr|allowremainingchocopackages|nochocolateybackup|migrationreportpath|chocowingetmappath|cwm|migratechocoexclude|mce|checkapp|lockapp|lockversion|packagemanager|installspicetify|is|ignoretimeouts|it|wingettimeoutseconds|wts|wingetdiscoverytimeoutseconds|wdts|windowsupdatetimeoutseconds|wuts|wslapttimeoutseconds|wats|snaptimeoutseconds|sts|installnugetprovider|inp|allowreboot|allowrestart|ar|forcereboot|reboot|restart|r|forcerestart|fr|fs|frst|forceshutdown|shutdown|poweroff|forcepoweroff|fsh|logroot|lr|syslog|installroot|ir|sourceurl|su|nobackup|nb|sweep|sweepstale|clean|prune|sw|deletestale|ds|time|at)
+        windowsupdate|wu|windows11upgrade|win11|windows11|upgradetowindows11|powershell7only|7|powershell7|sevenzip|7zip|7z|wslapt|wsl|winget|wg|wingetdiscover|wd|search|s|list|versionlock|vl|addversionlock|saveversionlock|avl|versionlockpath|vlp|listversionlocks|lvl|migratechocotowinget|mcw|chocoderegisteronly|cdo|forcewingetreinstall|fwr|allowruntimederegister|ard|allowportablederegister|apd|finalizechocolateyremoval|fcr|allowremainingchocopackages|nochocolateybackup|migrationreportpath|chocowingetmappath|cwm|migratechocoexclude|mce|checkapp|lockapp|lockversion|packagemanager|ignoretimeouts|it|wingettimeoutseconds|wts|wingetdiscoverytimeoutseconds|wdts|windowsupdatetimeoutseconds|wuts|wslapttimeoutseconds|wats|snaptimeoutseconds|sts|installnugetprovider|inp|allowreboot|allowrestart|ar|forcereboot|reboot|restart|r|forcerestart|fr|fs|frst|forceshutdown|shutdown|poweroff|forcepoweroff|fsh|logroot|lr|syslog|installroot|ir|sourceurl|su|nobackup|nb|sweep|sweepstale|clean|prune|sw|deletestale|ds|time|at)
             return 0
             ;;
         *) return 1 ;;
