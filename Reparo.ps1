@@ -132,7 +132,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.5.0'
+$script:ReparoVersion = '1.2.5.1'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -241,6 +241,7 @@ function Get-ReparoVersionFlavor {
         '1.2.4.0' = [pscustomobject]@{ Quote = 'There is no try.'; Source = 'Star Wars: The Empire Strikes Back'; Art = '  JEDI: transactional deploy rollback shield raised' }
         '1.2.4.1' = [pscustomobject]@{ Quote = 'The Force will be with you. Always.'; Source = 'Star Wars: A New Hope'; Art = '  HOLOCRON: generated payload hash preserved beyond Git''s meddling' }
         '1.2.5.0' = [pscustomobject]@{ Quote = 'I''m afraid I can''t let you do that, Dave.'; Source = '2001: A Space Odyssey'; Art = '  HAL: profile-independent update oracle online' }
+        '1.2.5.1' = [pscustomobject]@{ Quote = 'I''m sorry, Dave. I''m afraid I can''t do that.'; Source = '2001: A Space Odyssey'; Art = '  HAL: release identity corrected; update lane open' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
