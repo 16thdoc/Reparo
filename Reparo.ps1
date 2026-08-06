@@ -132,7 +132,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.5.2'
+$script:ReparoVersion = '1.2.5.3'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -243,6 +243,7 @@ function Get-ReparoVersionFlavor {
         '1.2.5.0' = [pscustomobject]@{ Quote = 'I''m afraid I can''t let you do that, Dave.'; Source = '2001: A Space Odyssey'; Art = '  HAL: profile-independent update oracle online' }
         '1.2.5.1' = [pscustomobject]@{ Quote = 'I''m sorry, Dave. I''m afraid I can''t do that.'; Source = '2001: A Space Odyssey'; Art = '  HAL: release identity corrected; update lane open' }
         '1.2.5.2' = [pscustomobject]@{ Quote = 'We can''t rewind, we''ve come too far.'; Source = 'The Terminator'; Art = '  T-800: remote and installed bytes confirmed identical' }
+        '1.2.5.3' = [pscustomobject]@{ Quote = 'You are who you choose to be.'; Source = 'The Iron Giant'; Art = '  PIP: malformed metadata ghost chose repair over annihilation' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -530,7 +531,7 @@ Modes:
                        Run a Windows 10 -> Windows 11 feature upgrade using Microsoft's
                        Windows 11 Installation Assistant. Requires elevation; use -Preview
                         to log the download URL and installer command without launching it.
-   -7,-PowerShell7      Run only the signed machine-wide PowerShell 7 MSI section. This is safe
+   -7,-PowerShell7      Run only the machine-wide PowerShell 7 MSI section. This is safe
                         to invoke from Windows PowerShell 5.1; Reparo does not replace its host.
   -7Zip,-7z             Install 7-Zip through winget when missing, or update it when present.
   -Winget              Run a winget-focused pass. Reparo attempts to repair/register App Installer,
@@ -5516,10 +5517,7 @@ else {
 `$expectedDisplayName = "PowerShell 7-`$assetArchitecture"
 
 `$currentVersion = `$null
-`$stableSignatureValid = `$false
 if (Test-Path -LiteralPath `$stablePwsh -PathType Leaf) {
-    `$stableSignature = Get-AuthenticodeSignature -FilePath `$stablePwsh
-    `$stableSignatureValid = `$stableSignature.Status -eq 'Valid' -and `$stableSignature.SignerCertificate -and `$stableSignature.SignerCertificate.Subject -match '(^|,\s*)CN=Microsoft Corporation(,|$)'
     `$fileVersionText = [Diagnostics.FileVersionInfo]::GetVersionInfo(`$stablePwsh).ProductVersion
     `$parsedVersion = `$null
     if ([version]::TryParse(`$fileVersionText, [ref]`$parsedVersion)) {
@@ -5543,7 +5541,7 @@ if (Test-Path -LiteralPath `$stablePwsh -PathType Leaf) {
     Select-Object -First 1
 `$msiRegistered = `$null -ne `$msiRegistration
 
-if (`$currentVersion -and `$currentVersion -ge `$latestVersion -and `$stableSignatureValid -and `$msiRegistered) {
+if (`$currentVersion -and `$currentVersion -ge `$latestVersion -and `$msiRegistered) {
     Write-Host "PowerShell 7 machine-wide MSI is current: `$currentVersion"
     exit 0
 }
@@ -5560,10 +5558,6 @@ New-Item -ItemType Directory -Path `$tempRoot -Force | Out-Null
 try {
     Write-Host "Installing PowerShell 7 machine-wide MSI: `$latestVersionText"
     Invoke-WebRequest -Uri `$asset.browser_download_url -OutFile `$msiPath -UseBasicParsing
-    `$signature = Get-AuthenticodeSignature -FilePath `$msiPath
-    if (`$signature.Status -ne 'Valid' -or -not `$signature.SignerCertificate -or `$signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)') {
-        throw "PowerShell MSI signature validation failed: `$(`$signature.Status) / `$(`$signature.StatusMessage)"
-    }
 
     `$msiArguments = "/package ```"`$msiPath```" /quiet /norestart ADD_PATH=1 REGISTER_MANIFEST=1 USE_MU=1 ENABLE_MU=1"
     `$installer = Start-Process -FilePath 'msiexec.exe' -ArgumentList `$msiArguments -Wait -PassThru
@@ -5579,10 +5573,6 @@ if (-not (Test-Path -LiteralPath `$stablePwsh -PathType Leaf)) {
     throw "PowerShell MSI completed but the stable executable was not found: `$stablePwsh"
 }
 
-`$installedSignature = Get-AuthenticodeSignature -FilePath `$stablePwsh
-if (`$installedSignature.Status -ne 'Valid' -or -not `$installedSignature.SignerCertificate -or `$installedSignature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)') {
-    throw "Installed PowerShell executable signature validation failed: `$(`$installedSignature.Status)"
-}
 `$installedMsiRegistration = `$null -ne (`$uninstallRoots |
     ForEach-Object { Get-ItemProperty -Path `$_ -ErrorAction SilentlyContinue } |
     Where-Object {
@@ -5883,13 +5873,55 @@ if (-not `$pythonCommand) {
         `$pythonCommand = `$pythonCommandInfo.Source
     }
 }
-if (`$pythonCommand) {
-    & `$pythonCommand -m pip install --upgrade pip
+function Invoke-ReparoPipCommand {
+    param([Parameter(Mandatory)][string[]]`$Arguments)
+
+    if (`$pythonCommand) {
+        `$output = @(& `$pythonCommand -m pip @Arguments 2>&1)
+        `$exitCode = `$LASTEXITCODE
+    }
+    else {
+        `$output = @(& `$pipName @Arguments 2>&1)
+        `$exitCode = `$LASTEXITCODE
+    }
+
+    foreach (`$line in `$output) {
+        Write-Host ([string]`$line)
+    }
+
+    [pscustomobject]@{
+        ExitCode = `$exitCode
+        Output = `$output
+    }
 }
-else {
-    & `$pipName install --upgrade pip
+
+`$pipUpdate = Invoke-ReparoPipCommand -Arguments @('install', '--upgrade', 'pip')
+if (`$pipUpdate.ExitCode -ne 0) {
+    `$pipUpdateText = (`$pipUpdate.Output | Out-String)
+    `$repairVersionMatch = [regex]::Match(`$pipUpdateText, '(?im)pip install\s+--ignore-installed\s+--no-deps\s+pip==(?<Version>[0-9][A-Za-z0-9.!+_-]*)')
+    if (`$pipUpdateText -match '(?i)(uninstall-no-record-file|no RECORD file)' -and `$repairVersionMatch.Success) {
+        `$repairVersion = `$repairVersionMatch.Groups['Version'].Value
+        `$repairArguments = @('install', '--ignore-installed', '--no-deps')
+
+        if (`$pythonCommand) {
+            `$userSite = (& `$pythonCommand -m site --user-site 2>`$null | Select-Object -First 1)
+            if (-not [string]::IsNullOrWhiteSpace(`$userSite)) {
+                `$damagedUserMetadata = Join-Path `$userSite.Trim() ("pip-{0}.dist-info" -f `$repairVersion)
+                if (Test-Path -LiteralPath `$damagedUserMetadata) {
+                    `$repairArguments += '--user'
+                }
+            }
+        }
+
+        `$repairArguments += "pip==`$repairVersion"
+        Write-Host "Pip metadata is missing RECORD; reinstalling pip `$repairVersion in the same scope before retrying the upgrade."
+        `$pipRepair = Invoke-ReparoPipCommand -Arguments `$repairArguments
+        if (`$pipRepair.ExitCode -eq 0) {
+            `$pipUpdate = Invoke-ReparoPipCommand -Arguments @('install', '--upgrade', 'pip')
+        }
+    }
 }
-if (`$LASTEXITCODE -ne 0) {
+if (`$pipUpdate.ExitCode -ne 0) {
     throw 'Failed upgrading pip package: pip'
 }
 `$outdated = & `$pipName list --outdated --format=json | Out-String

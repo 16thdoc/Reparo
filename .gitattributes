@@ -1,7 +1,6 @@
 * text=auto
 
-# Authenticode signatures cover exact bytes. Never normalize PowerShell scripts
-# in Git or GitHub's raw endpoint will invalidate their signatures.
+# Embedded deployment payloads hash exact PowerShell source bytes.
 *.ps1 -text
 *.bat text eol=crlf
 *.cmd text eol=crlf

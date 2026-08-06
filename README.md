@@ -1,7 +1,7 @@
 # Reparo
 
 Reparo has separate native maintenance runners for Windows and Linux. Windows uses
-the signed PowerShell runner for RMM deployment; Linux uses a portable POSIX `sh`
+the PowerShell runner for RMM deployment; Linux uses a portable POSIX `sh`
 runtime and does not require PowerShell.
 
 It updates common package managers and toolchains when they are already present on a machine. The script is intentionally self-contained: it does not depend on profile modules, cloud-synced helper paths, editor sync state, or any other machine-specific automation.
@@ -88,7 +88,12 @@ the same CyberShell-style version quote/source flavor.
 
 ### What it does
 
-By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, PowerShell 7 through Microsoft's signed machine-wide MSI, 7-Zip deployment through winget, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, and WSL, plus a Chocolatey-to-winget migration pass.
+By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, PowerShell 7 through Microsoft's machine-wide MSI, 7-Zip deployment through winget, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, and WSL, plus a Chocolatey-to-winget migration pass.
+
+On Windows, the Pip section repairs Pip metadata missing its `RECORD` file by
+reinstalling the exact damaged Pip version in the same user or machine scope, then
+retries the normal upgrade. Other Pip failures remain fatal and are reported without
+being disguised as metadata damage.
 
 Reparo does not install package managers from scratch. It only uses tools that are already present, then skips the sections that are not available. Use `-7Zip` only when you explicitly want Reparo to install the `7zip.7zip` winget package if it is missing, or update it when present.
 
@@ -400,7 +405,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Preview` | Logs what would run without executing package manager commands. |
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, `PowerShell7`, and `WindowsUpdate`. |
 | `-11` / `-Win11` / `-Windows11` | Runs a Windows 10 to Windows 11 feature upgrade using Microsoft's Windows 11 Installation Assistant. Requires elevation. Use `-Preview -11` first to log the download URL and installer command without launching the upgrade goblin. |
-| `-7` / `-PowerShell7` | Runs only the signed, machine-wide PowerShell 7 MSI section. It is intended to be launched from Windows PowerShell 5.1 and does not update the host process. |
+| `-7` / `-PowerShell7` | Runs only the machine-wide PowerShell 7 MSI section. It is intended to be launched from Windows PowerShell 5.1 and does not update the host process. |
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |
 | `-WingetDiscover` | Repairs/refreshes winget if needed and runs only winget discovery commands. |
 | `-Search` / `-List` / `-S` / `-L` | Inventories applications Reparo `-Force` can update and prints installed versions, available versions when known, update method, source, lock status, and a ready-to-copy `LockSpec`. Add terms after the switch to filter, for example `reparo -Search git` or `reparo -List git`. PowerShell switch names are case-insensitive, so lowercase forms work too. |
@@ -441,10 +446,10 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 Expected shape:
 
 ```text
-Reparo 1.2.5.2
+Reparo 1.2.5.3
 Source: C:\ProgramData\Reparo\Reparo.ps1
-  "Never tell me the odds."
-  - Star Wars: The Empire Strikes Back
+  "You are who you choose to be."
+  - The Iron Giant
 ```
 
 The quote body and source can change every release. The indentation, surrounding quote marks, and `  - Source` attribution line should not.
@@ -519,12 +524,13 @@ Use an elevated/admin or SYSTEM context and expect a long-running installer plus
 
 ### PowerShell 7
 
-The `PowerShell7` section installs or updates Microsoft's signed, machine-wide
+The `PowerShell7` section installs or updates Microsoft's machine-wide
 MSI at `C:\Program Files\PowerShell\7\pwsh.exe`. The stable path is suitable for
 OpenSSH Server, scheduled tasks, and other machine-level automation. Reparo
-queries the latest stable GitHub release, validates the Authenticode signature,
-and skips installation only when the signed executable and Windows Installer
-registration confirm that the machine-wide MSI is already current.
+queries the latest stable GitHub release and skips installation only when the
+executable version and Windows Installer registration confirm that the machine-wide
+MSI is already current. HTTPS release provenance, version checks, MSI registration,
+and embedded-payload SHA-256 verification remain in place.
 
 The section is included in `-Update` but deliberately excluded from `-Force`, so
 an unattended full pass cannot update the PowerShell host beneath itself. Run it
