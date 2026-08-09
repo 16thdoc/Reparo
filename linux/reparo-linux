@@ -49,7 +49,7 @@ Modes:
 
 Every native command uses the full lexicon: `--name`, `-Name`, and `name` in
 any casing, plus short forms with or without a dash. Short forms are Update/U,
-Force/F, Preview/P, Include/C, Status/S, Kill/K, Tail/T, TailLines/TL,
+Force/F, Preview/P, Include/C, Status, Kill/K, Tail/T, TailLines/TL,
 Version/V, New/N, Install/I, and Help/H. `Log` is an alias for Tail.
 
 Native package operations require root or passwordless sudo (sudo -n). Reparo
@@ -117,7 +117,7 @@ normalize_option() {
 
 windows_only_option() {
     case "$1" in
-        windowsupdate|wu|windows11upgrade|win11|windows11|upgradetowindows11|powershell7only|7|powershell7|sevenzip|7zip|7z|wslapt|wsl|winget|wg|wingetdiscover|wd|search|s|list|versionlock|vl|addversionlock|saveversionlock|avl|versionlockpath|vlp|listversionlocks|lvl|migratechocotowinget|mcw|chocoderegisteronly|cdo|forcewingetreinstall|fwr|allowruntimederegister|ard|allowportablederegister|apd|finalizechocolateyremoval|fcr|allowremainingchocopackages|nochocolateybackup|migrationreportpath|chocowingetmappath|cwm|migratechocoexclude|mce|checkapp|lockapp|lockversion|packagemanager|ignoretimeouts|it|wingettimeoutseconds|wts|wingetdiscoverytimeoutseconds|wdts|windowsupdatetimeoutseconds|wuts|wslapttimeoutseconds|wats|snaptimeoutseconds|sts|installnugetprovider|inp|allowreboot|allowrestart|ar|forcereboot|reboot|restart|r|forcerestart|fr|fs|frst|forceshutdown|shutdown|poweroff|forcepoweroff|fsh|logroot|lr|syslog|installroot|ir|sourceurl|su|nobackup|nb|sweep|sweepstale|clean|prune|sw|deletestale|ds|time|at)
+        windowsupdate|wu|windows11upgrade|win11|windows11|upgradetowindows11|powershell7only|7|powershell7|sevenzip|7zip|7z|wslapt|wsl|winget|wg|wingetdiscover|wd|search|list|versionlock|vl|addversionlock|saveversionlock|avl|versionlockpath|vlp|listversionlocks|lvl|migratechocotowinget|mcw|chocoderegisteronly|cdo|forcewingetreinstall|fwr|allowruntimederegister|ard|allowportablederegister|apd|finalizechocolateyremoval|fcr|allowremainingchocopackages|nochocolateybackup|migrationreportpath|chocowingetmappath|cwm|migratechocoexclude|mce|checkapp|lockapp|lockversion|packagemanager|ignoretimeouts|it|wingettimeoutseconds|wts|wingetdiscoverytimeoutseconds|wdts|windowsupdatetimeoutseconds|wuts|wslapttimeoutseconds|wats|snaptimeoutseconds|sts|installnugetprovider|inp|allowreboot|allowrestart|ar|forcereboot|reboot|restart|r|forcerestart|fr|fs|frst|forceshutdown|shutdown|poweroff|forcepoweroff|fsh|s|logroot|lr|syslog|installroot|ir|sourceurl|su|nobackup|nb|sweep|sweepstale|clean|prune|sw|deletestale|ds|time|at)
             return 0
             ;;
         *) return 1 ;;

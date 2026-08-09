@@ -408,7 +408,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-7` / `-PowerShell7` | Runs only the machine-wide PowerShell 7 MSI section. It is intended to be launched from Windows PowerShell 5.1 and does not update the host process. |
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |
 | `-WingetDiscover` | Repairs/refreshes winget if needed and runs only winget discovery commands. |
-| `-Search` / `-List` / `-S` / `-L` | Inventories applications Reparo `-Force` can update and prints installed versions, available versions when known, update method, source, lock status, and a ready-to-copy `LockSpec`. Add terms after the switch to filter, for example `reparo -Search git` or `reparo -List git`. PowerShell switch names are case-insensitive, so lowercase forms work too. |
+| `-Search` / `-List` / `-L` | Inventories applications Reparo `-Force` can update and prints installed versions, available versions when known, update method, source, lock status, and a ready-to-copy `LockSpec`. Add terms after the switch to filter, for example `reparo -Search git` or `reparo -List git`. |
 | `-VersionLock <spec>` | Adds an inline version lock for this run. Format: `method:id=version`, for example `winget:Git.Git=2.51.0`. |
 | `-AddVersionLock <spec>` / `-SaveVersionLock <spec>` / `-AVL <spec>` | Persists a Reparo-side version lock to the local workstation lock file, then exits. Use this for machine-specific exclusions such as ScanSnap. |
 | `-VersionLockPath <path>` | Reads version locks from JSON. Default: `C:\ProgramData\Reparo\version-locks.json`. |
@@ -434,7 +434,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-IgnoreTimeouts` | Disables timeout enforcement even when timeout parameters are supplied. |
 | `-AllowReboot` / `-AllowRestart` | Allows the Windows Update section to pass `-AutoReboot`. By default Reparo passes `-IgnoreReboot`. |
 | `-Reboot` / `-Restart` / `-R` | Restarts the computer 30 seconds after Reparo completes. |
-| `-Shutdown` | Shuts down the computer 30 seconds after Reparo completes. Cannot be combined with `-Reboot`. |
+| `-Shutdown` / `-S` | Shuts down the computer 30 seconds after Reparo completes. Cannot be combined with `-Reboot`. |
 | `-InstallNuGetProvider` | Bootstraps the NuGet provider before PSGallery installs when `true` (default). Set it to `false` only if you want to suppress that bootstrap attempt. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
 | `-Force` | Runs the full local-dev-tool pass and enables Windows Update and WSL apt handling. It deliberately excludes PowerShell 7; run `-7` explicitly for that MSI update. Use carefully. |
@@ -654,7 +654,7 @@ Use `-Debug` when you want extra trace lines in the log for mode selection, comm
 Use `-WingetDiscover` when you want to refresh the winget discovery list without running live upgrades.
 Use `-Kill` when a run is stuck; it stops matched Reparo process trees and then sweeps known updater front ends so orphaned `winget.exe` or similar package-manager processes are not left running. Reparo does not kill generic shells or installer engines by default; add extra process base names with `-KillUpdaterNames` when you intentionally want that broader cleanup.
 Use `-IgnoreTimeouts` when you explicitly want to suppress timeout enforcement even if timeout values are supplied.
-Use `-AllowReboot` only when Windows Update may auto-reboot before the rest of the Reparo run finishes. Use `-Reboot` to restart, or `-Shutdown` to power off, 30 seconds after Reparo completes. Both post-run power actions honor `-Preview`; `-Reboot` and `-Shutdown` cannot be combined.
+Use `-AllowReboot` only when Windows Update may auto-reboot before the rest of the Reparo run finishes. Use `-Reboot` to restart, or `-Shutdown` / `-S` to power off, 30 seconds after Reparo completes. Both post-run power actions honor `-Preview`; `-Reboot` and `-Shutdown` cannot be combined.
 Most command timeouts are disabled by default. Use `-WingetTimeoutSeconds`, `-WingetDiscoveryTimeoutSeconds`, and `-WindowsUpdateTimeoutSeconds` only when you explicitly want Reparo to stop a command after a positive number of seconds. `WslApt` defaults to `-WslAptTimeoutSeconds 1800` because unattended sudo/apt sessions can otherwise wait forever.
 Use `-InstallNuGetProvider:$false` if a managed environment wants to block NuGet provider bootstrapping, or leave it at the default `true` so Reparo can install it before PSGallery module installs.
 
@@ -677,7 +677,6 @@ reparo -Search
 reparo -List
 reparo -Search git
 reparo -List git
-reparo -S vscode
 reparo -L vscode
 ```
 

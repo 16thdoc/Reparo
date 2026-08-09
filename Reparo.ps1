@@ -38,7 +38,7 @@ param(
     [switch]$Winget,
     [Alias('WD')]
     [switch]$WingetDiscover,
-    [Alias('S', 'List', 'L')]
+    [Alias('List', 'L')]
     [switch]$Search,
     [Alias('VL')]
     [string[]]$VersionLock,
@@ -101,7 +101,7 @@ param(
     [switch]$AllowReboot,
     [Alias('Reboot', 'Restart', 'R', 'ForceRestart', 'FR', 'FS', 'FRST')]
     [switch]$ForceReboot,
-    [Alias('Shutdown', 'PowerOff', 'ForcePowerOff', 'FSH')]
+    [Alias('Shutdown', 'PowerOff', 'ForcePowerOff', 'FSH', 'S')]
     [switch]$ForceShutdown,
     [Alias('LR')]
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs",
