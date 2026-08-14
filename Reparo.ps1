@@ -3033,6 +3033,10 @@ function Resolve-ReparoShell {
     Write-ReparoDebug 'Resolving runnable PowerShell host.'
     $shellCandidates = New-Object System.Collections.Generic.List[object]
     if ($script:ReparoIsWindows) {
+        # Keep child work in the inbox host. Winget can update PowerShell 7;
+        # running that installer from pwsh tears down the worker that is
+        # waiting on it and can propagate a Ctrl+C-like break to reparo.cmd.
+        [void]$shellCandidates.Add([pscustomobject]@{ Name = 'Windows PowerShell'; Path = 'powershell' })
         $programFilesRoot = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
         [void]$shellCandidates.Add([pscustomobject]@{
             Name = 'PowerShell 7 (machine)'
@@ -3040,7 +3044,9 @@ function Resolve-ReparoShell {
         })
     }
     [void]$shellCandidates.Add([pscustomobject]@{ Name = 'pwsh'; Path = 'pwsh' })
-    [void]$shellCandidates.Add([pscustomobject]@{ Name = 'powershell'; Path = 'powershell' })
+    if (-not $script:ReparoIsWindows) {
+        [void]$shellCandidates.Add([pscustomobject]@{ Name = 'powershell'; Path = 'powershell' })
+    }
 
     foreach ($candidate in $shellCandidates) {
         if ([IO.Path]::IsPathRooted($candidate.Path)) {
