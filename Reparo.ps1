@@ -3398,7 +3398,11 @@ function New-ReparoWingetUpgradeQueueCommand {
     )
 
     $source = if ($Section -eq 'Winget(msstore)') { 'msstore' } else { 'winget' }
-    $excluded = @($ExcludedIds + 'Microsoft.PowerShell') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+    # These installers can terminate the process tree hosting Reparo or its
+    # operator session. Leave them for an intentional update after Reparo and
+    # any OpenCode control session have exited.
+    $runtimeHostIds = @('Microsoft.PowerShell', 'SST.OpenCodeDesktop')
+    $excluded = @($ExcludedIds + $runtimeHostIds) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
     $updates = @(Get-ReparoPendingUpdates -Section $Section) | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Id) }
     $commands = New-Object System.Collections.Generic.List[string]
 
@@ -5463,8 +5467,9 @@ if ($runWingetSections) {
             $lockedWingetIds = @(Get-ReparoLockedPackageIds -Method 'winget')
             # Never use `winget upgrade --all` here: WinGet 1.29 ignores a
             # blocking PowerShell pin when --force is set. An explicit queue
-            # makes exclusions and version locks reliable. PowerShell 7 stays
-            # in its dedicated section, after this worker has exited.
+            # makes exclusions and version locks reliable. Runtime hosts such
+            # as PowerShell 7 and OpenCode must be updated after Reparo and its
+            # operator session have exited.
             $wingetCommand = New-ReparoWingetUpgradeQueueCommand -Section 'Winget' -ExcludedIds $lockedWingetIds
             $wingetStoreCommand = New-ReparoWingetUpgradeQueueCommand -Section 'Winget(msstore)' -ExcludedIds $lockedWingetIds
             Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command $wingetCommand -TimeoutSeconds $WingetTimeoutSeconds
