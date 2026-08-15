@@ -3304,7 +3304,10 @@ function ConvertFrom-ReparoWingetTable {
         if ($line -match '^\d+\s+upgrades?\s+available\.?$') { continue }
         if ($line -match '^(No installed package found|No available upgrade found|No packages found|The following packages have an upgrade)') { continue }
 
-        $match = [regex]::Match($line, '^(?<name>.+?)\s{2,}(?<id>\S+)\s{2,}(?<version>\S+)\s{2,}(?<available>\S+)(?:\s{2,}(?<source>\S+))?\s*$')
+        # WinGet drops the padded Name/Id column gap when a display name exceeds
+        # its nominal width. Package IDs contain a dot, unlike the words in a
+        # display name, so use that stable delimiter instead of fixed spacing.
+        $match = [regex]::Match($line, '^(?<name>.+?)\s+(?<id>(?=[\w-]*[A-Za-z])[\w-]+(?:\.[\w-]+)+)\s+(?<version>\S+)\s+(?<available>\S+)(?:\s+(?<source>\S+))?\s*$')
         if (-not $match.Success) { continue }
 
         $name = $match.Groups['name'].Value.Trim()
@@ -3313,6 +3316,7 @@ function ConvertFrom-ReparoWingetTable {
 
         [void]$updates.Add([pscustomobject]@{
             Software       = $name
+            Id             = $match.Groups['id'].Value.Trim()
             CurrentVersion = $match.Groups['version'].Value.Trim()
             Version        = $available
             Method         = $Method
@@ -3329,7 +3333,7 @@ function Get-ReparoPendingUpdates {
         switch ($Section) {
             'Winget' {
                 if (-not (Test-ReparoExecutable -Name 'winget' -Arguments @('--version'))) { return @() }
-                $output = @(winget upgrade --include-unknown --accept-source-agreements 2>&1)
+                $output = @(winget upgrade --source winget --include-unknown --accept-source-agreements 2>&1)
                 return @(ConvertFrom-ReparoWingetTable -Output $output -Method 'winget')
             }
             'Winget(msstore)' {
@@ -3385,6 +3389,37 @@ function Get-ReparoPendingUpdates {
     }
 
     return @()
+}
+
+function New-ReparoWingetUpgradeQueueCommand {
+    param(
+        [Parameter(Mandatory)][ValidateSet('Winget', 'Winget(msstore)')][string]$Section,
+        [string[]]$ExcludedIds = @()
+    )
+
+    $source = if ($Section -eq 'Winget(msstore)') { 'msstore' } else { 'winget' }
+    $excluded = @($ExcludedIds + 'Microsoft.PowerShell') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+    $updates = @(Get-ReparoPendingUpdates -Section $Section) | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Id) }
+    $commands = New-Object System.Collections.Generic.List[string]
+
+    [void]$commands.Add("`$failedPackages = @()")
+    foreach ($update in $updates) {
+        if ($excluded | Where-Object { $_ -ieq $update.Id }) {
+            [void]$commands.Add(("Write-Host {0}" -f (ConvertTo-ReparoPowerShellLiteral -Value ("Skipping excluded winget package: {0}" -f $update.Id))))
+            continue
+        }
+
+        $id = ConvertTo-ReparoPowerShellLiteral -Value $update.Id
+        [void]$commands.Add(("winget upgrade --id {0} --exact --source {1} --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force" -f $id, $source))
+        [void]$commands.Add(("if (`$LASTEXITCODE -ne 0) { `$failedPackages += " + $id + ' }'))
+    }
+
+    if ($commands.Count -eq 1) {
+        [void]$commands.Add("Write-Host 'No eligible winget upgrades found.'")
+    }
+
+    [void]$commands.Add("if (`$failedPackages.Count -gt 0) { Write-Error ('winget upgrades failed: ' + (`$failedPackages -join ', ')); exit 1 }")
+    return ($commands -join [Environment]::NewLine)
 }
 
 function New-ReparoVersionLockRecord {
@@ -5425,26 +5460,15 @@ if ($runWingetSections) {
         }
 
         if (-not $WingetDiscover) {
-            $wingetCommand = 'winget upgrade --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force'
             $lockedWingetIds = @(Get-ReparoLockedPackageIds -Method 'winget')
-            if ($lockedWingetIds.Count -gt 0) {
-                Write-Warning ("Skipping winget bulk upgrades because winget does not support exclusions for version locks: {0}" -f ($lockedWingetIds -join ', '))
-                Write-ReparoLog ("[SKIP] Winget bulk upgrades skipped; version locks require exclusions unsupported by winget: {0}" -f ($lockedWingetIds -join ', '))
-                Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget' -Version '-' -Method 'Winget' -Reason 'version locks require exclusions unsupported by winget'
-            }
-            else {
-                Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command $wingetCommand -TimeoutSeconds $WingetTimeoutSeconds
-            }
-
-            $wingetStoreCommand = 'winget upgrade --source msstore --all --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force'
-            if ($lockedWingetIds.Count -gt 0) {
-                Write-Warning 'Skipping Microsoft Store winget bulk upgrades because version-lock exclusions are unsupported by winget.'
-                Write-ReparoLog '[SKIP] Winget(msstore) bulk upgrades skipped; version locks require exclusions unsupported by winget'
-                Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget(msstore)' -Version '-' -Method 'Winget(msstore)' -Reason 'version locks require exclusions unsupported by winget'
-            }
-            else {
-                Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command $wingetStoreCommand -TimeoutSeconds $WingetTimeoutSeconds
-            }
+            # Never use `winget upgrade --all` here: WinGet 1.29 ignores a
+            # blocking PowerShell pin when --force is set. An explicit queue
+            # makes exclusions and version locks reliable. PowerShell 7 stays
+            # in its dedicated section, after this worker has exited.
+            $wingetCommand = New-ReparoWingetUpgradeQueueCommand -Section 'Winget' -ExcludedIds $lockedWingetIds
+            $wingetStoreCommand = New-ReparoWingetUpgradeQueueCommand -Section 'Winget(msstore)' -ExcludedIds $lockedWingetIds
+            Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command $wingetCommand -TimeoutSeconds $WingetTimeoutSeconds
+            Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command $wingetStoreCommand -TimeoutSeconds $WingetTimeoutSeconds
         }
         else {
             Write-Skip 'WingetDiscover requested; skipping live winget upgrade commands.'
