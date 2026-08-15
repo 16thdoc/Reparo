@@ -132,7 +132,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.6.0'
+$script:ReparoVersion = '1.2.6.1'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -245,6 +245,7 @@ function Get-ReparoVersionFlavor {
         '1.2.5.2' = [pscustomobject]@{ Quote = 'We can''t rewind, we''ve come too far.'; Source = 'The Terminator'; Art = '  T-800: remote and installed bytes confirmed identical' }
         '1.2.5.3' = [pscustomobject]@{ Quote = 'You are who you choose to be.'; Source = 'The Iron Giant'; Art = '  PIP: malformed metadata ghost chose repair over annihilation' }
         '1.2.6.0' = [pscustomobject]@{ Quote = 'Sometimes, dead is better.'; Source = 'Pet Sematary'; Art = '  PKI: certificate crypt sealed; no resurrection clause' }
+        '1.2.6.1' = [pscustomobject]@{ Quote = 'Get away from her, you bitch!'; Source = 'Aliens'; Art = '  RIPLEY: runtime-host installers ejected from the upgrade airlock' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {

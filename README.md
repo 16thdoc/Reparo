@@ -446,10 +446,10 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 Expected shape:
 
 ```text
-Reparo 1.2.6.0
+Reparo 1.2.6.1
 Source: C:\ProgramData\Reparo\Reparo.ps1
-  "Sometimes, dead is better."
-  - Pet Sematary
+  "Get away from her, you bitch!"
+  - Aliens
 ```
 
 The quote body and source can change every release. The indentation, surrounding quote marks, and `  - Source` attribution line should not.

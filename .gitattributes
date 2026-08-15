@@ -7,6 +7,7 @@
 
 # Documentation and repo metadata stay LF for cleaner diffs.
 *.sh text eol=lf
+linux/reparo-linux text eol=lf
 *.md text eol=lf
 .gitignore text eol=lf
 .gitattributes text eol=lf
