@@ -3418,6 +3418,7 @@ function New-ReparoWingetUpgradeQueueCommand {
     $commands = New-Object System.Collections.Generic.List[string]
 
     [void]$commands.Add("`$failedPackages = @()")
+    [void]$commands.Add("`$manualPackages = @()")
     foreach ($update in $updates) {
         if ($excluded | Where-Object { $_ -ieq $update.Id }) {
             [void]$commands.Add(("Write-Host {0}" -f (ConvertTo-ReparoPowerShellLiteral -Value ("Skipping excluded winget package: {0}" -f $update.Id))))
@@ -3425,14 +3426,17 @@ function New-ReparoWingetUpgradeQueueCommand {
         }
 
         $id = ConvertTo-ReparoPowerShellLiteral -Value $update.Id
-        [void]$commands.Add(("winget upgrade --id {0} --exact --source {1} --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force" -f $id, $source))
-        [void]$commands.Add(("if (`$LASTEXITCODE -ne 0) { `$failedPackages += " + $id + ' }'))
+        [void]$commands.Add(("`$wingetOutput = @(winget upgrade --id {0} --exact --source {1} --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1)" -f $id, $source))
+        [void]$commands.Add('`$wingetExitCode = `$LASTEXITCODE')
+        [void]$commands.Add('`$wingetOutput | ForEach-Object { Write-Output `$_ }')
+        [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } else { `$failedPackages += " + $id + ' } }'))
     }
 
-    if ($commands.Count -eq 1) {
+    if ($commands.Count -eq 2) {
         [void]$commands.Add("Write-Host 'No eligible winget upgrades found.'")
     }
 
+    [void]$commands.Add("if (`$manualPackages.Count -gt 0) { Write-Warning ('Winget packages pending manual uninstall/reinstall: ' + (`$manualPackages -join ', ')) }")
     [void]$commands.Add("if (`$failedPackages.Count -gt 0) { Write-Error ('winget upgrades failed: ' + (`$failedPackages -join ', ')); exit 1 }")
     return ($commands -join [Environment]::NewLine)
 }
@@ -5293,10 +5297,24 @@ function Invoke-ReparoCommandStep {
         Write-ReparoDebug ("{0} output lines captured: {1}" -f $Section, $output.Count)
 
         $manualWingetReason = Get-ReparoWingetManualInterventionReason -Output $output
+        $manualWingetPackageIds = @(
+            $output |
+                ForEach-Object { [regex]::Match([string]$_, 'Winget package requires manual uninstall/reinstall:\s*(?<Id>\S+)') } |
+                Where-Object { $_.Success } |
+                ForEach-Object { $_.Groups['Id'].Value } |
+                Select-Object -Unique
+        )
         if ($manualWingetReason) {
             Write-Warning $manualWingetReason
             Write-ReparoLog ("[WARN] {0}" -f $manualWingetReason)
             Add-ReparoSummaryNote $manualWingetReason
+            foreach ($packageId in $manualWingetPackageIds) {
+                $manualUpdate = @($pendingUpdates | Where-Object { $_.Id -ieq $packageId } | Select-Object -First 1)
+                if ($manualUpdate.Count -gt 0) {
+                    Add-ReparoSummaryRecord -Bucket Skipped -Software $manualUpdate[0].Software -CurrentVersion $manualUpdate[0].CurrentVersion -Version $manualUpdate[0].Version -Method $manualUpdate[0].Method -Reason 'manual uninstall/reinstall required by winget'
+                }
+            }
+            $pendingUpdates = @($pendingUpdates | Where-Object { $manualWingetPackageIds -notcontains $_.Id })
         }
 
         if ($result.TimedOut) {
@@ -5664,11 +5682,12 @@ else {
 Invoke-ReparoCommandStep -Section 'Scoop' -PresenceCmd 'scoop' -Command $scoopCommand
 
 $lockedChocoIds = @(Get-ReparoLockedPackageIds -Method 'choco')
-if ($lockedChocoIds.Count -gt 0) {
-    $chocoLockLiteral = '@({0})' -f ((@($lockedChocoIds | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))
-    $chocoCommand = @"
+$chocoLockLiteral = '@({0})' -f ((@($lockedChocoIds | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))
+$chocoCommand = @"
 `$lockedPackages = $chocoLockLiteral
 `$outdated = @(choco outdated --limit-output --no-color 2>`$null)
+if (`$LASTEXITCODE -ne 0) { throw "Chocolatey outdated query failed with exit code `$LASTEXITCODE" }
+`$eligiblePackages = 0
 foreach (`$line in `$outdated) {
     if (`$line -notmatch '\|') { continue }
     `$packageId = (`$line -split '\|')[0].Trim()
@@ -5678,14 +5697,14 @@ foreach (`$line in `$outdated) {
         continue
     }
 
+    `$eligiblePackages++
     choco upgrade `$packageId -y --no-progress
     if (`$LASTEXITCODE -ne 0) { throw "Failed upgrading Chocolatey package: `$packageId" }
 }
+if (`$eligiblePackages -eq 0) { Write-Host 'No eligible Chocolatey upgrades found.' }
 "@
+if ($lockedChocoIds.Count -gt 0) {
     Add-ReparoSummaryNote ("Chocolatey version locks active; excluding: {0}" -f ($lockedChocoIds -join ', '))
-}
-else {
-    $chocoCommand = 'choco upgrade all -y --no-progress'
 }
 Invoke-ReparoCommandStep -Section 'Choco' -PresenceCmd 'choco' -Command $chocoCommand
 

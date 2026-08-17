@@ -97,6 +97,12 @@ being disguised as metadata damage.
 
 Reparo does not install package managers from scratch. It only uses tools that are already present, then skips the sections that are not available. Use `-7Zip` only when you explicitly want Reparo to install the `7zip.7zip` winget package if it is missing, or update it when present.
 
+Winget packages whose publisher changes installer technology are reported as pending a
+manual uninstall/reinstall; Reparo will not blindly remove user software. Chocolatey
+updates are queued from `choco outdated` rather than `choco upgrade all`, so stale
+local package records whose source package has been removed do not fail the entire
+maintenance pass.
+
 Install or update the live ProgramData copy from GitHub:
 
 ```powershell
