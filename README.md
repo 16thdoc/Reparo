@@ -434,7 +434,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-IgnoreTimeouts` | Disables timeout enforcement even when timeout parameters are supplied. |
 | `-AllowReboot` / `-AllowRestart` | Allows the Windows Update section to pass `-AutoReboot`. By default Reparo passes `-IgnoreReboot`. |
 | `-Reboot` / `-Restart` / `-R` | Restarts the computer 30 seconds after Reparo completes. |
-| `-Shutdown` / `-S` | Shuts down the computer 30 seconds after Reparo completes. Cannot be combined with `-Reboot`. |
+| `-Shutdown` / `-S` | Shuts down the computer 30 seconds after Reparo completes. Cannot be combined with `-Reboot`; `-S` is **not** a silent-mode switch. |
 | `-InstallNuGetProvider` | Bootstraps the NuGet provider before PSGallery installs when `true` (default). Set it to `false` only if you want to suppress that bootstrap attempt. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
 | `-Force` | Runs the full local-dev-tool pass and enables Windows Update and WSL apt handling. It deliberately excludes PowerShell 7; run `-7` explicitly for that MSI update. Use carefully. |
@@ -655,7 +655,7 @@ Use `-WingetDiscover` when you want to refresh the winget discovery list without
 Use `-Kill` when a run is stuck; it stops matched Reparo process trees and then sweeps known updater front ends so orphaned `winget.exe` or similar package-manager processes are not left running. Reparo does not kill generic shells or installer engines by default; add extra process base names with `-KillUpdaterNames` when you intentionally want that broader cleanup.
 Use `-IgnoreTimeouts` when you explicitly want to suppress timeout enforcement even if timeout values are supplied.
 Use `-AllowReboot` only when Windows Update may auto-reboot before the rest of the Reparo run finishes. Use `-Reboot` to restart, or `-Shutdown` / `-S` to power off, 30 seconds after Reparo completes. Both post-run power actions honor `-Preview`; `-Reboot` and `-Shutdown` cannot be combined.
-Most command timeouts are disabled by default. Use `-WingetTimeoutSeconds`, `-WingetDiscoveryTimeoutSeconds`, and `-WindowsUpdateTimeoutSeconds` only when you explicitly want Reparo to stop a command after a positive number of seconds. `WslApt` defaults to `-WslAptTimeoutSeconds 1800` because unattended sudo/apt sessions can otherwise wait forever.
+Winget upgrades default to `-WingetTimeoutSeconds 1800` so an unattended installer cannot wait forever; set it to `0` or use `-IgnoreTimeouts` only when indefinite execution is intentional. Discovery and Windows Update timeouts remain opt-in. `WslApt` defaults to `-WslAptTimeoutSeconds 1800` because unattended sudo/apt sessions can otherwise wait forever.
 Use `-InstallNuGetProvider:$false` if a managed environment wants to block NuGet provider bootstrapping, or leave it at the default `true` so Reparo can install it before PSGallery module installs.
 
 At the end of the run, Reparo prints a `REPARO summary` with:

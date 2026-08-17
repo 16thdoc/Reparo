@@ -82,7 +82,7 @@ param(
     [switch]$IgnoreTimeouts,
     [ValidateRange(0, [int]::MaxValue)]
     [Alias('WTS')]
-    [int]$WingetTimeoutSeconds = 0,
+    [int]$WingetTimeoutSeconds = 1800,
     [ValidateRange(0, [int]::MaxValue)]
     [Alias('WDTS')]
     [int]$WingetDiscoveryTimeoutSeconds = 0,
@@ -613,7 +613,8 @@ Modes:
 Timeouts:
   Most command timeouts are disabled by default. WSL apt has a default timeout
   because unattended sudo/apt sessions can otherwise wait forever.
-  -WingetTimeoutSeconds          Optional live Winget upgrade timeout.
+   -WingetTimeoutSeconds          Live Winget upgrade timeout. Default: 1800 seconds; use 0
+                                  or -IgnoreTimeouts to disable it.
   -WingetDiscoveryTimeoutSeconds Optional discovery timeout used by -Winget.
   -WindowsUpdateTimeoutSeconds   Optional Windows Update timeout.
   -WslAptTimeoutSeconds          WSL apt timeout. Default: 1800 seconds.
@@ -774,7 +775,6 @@ elseif ($Force) {
     else {
         $Include = $linuxForceSections
     }
-    $IgnoreTimeouts = $true
     if ($script:ReparoIsWindows) {
         $Include = $windowsForceSections
     }
@@ -3334,13 +3334,23 @@ function Get-ReparoPendingUpdates {
         switch ($Section) {
             'Winget' {
                 if (-not (Test-ReparoExecutable -Name 'winget' -Arguments @('--version'))) { return @() }
-                $output = @(winget upgrade --source winget --include-unknown --accept-source-agreements 2>&1)
-                return @(ConvertFrom-ReparoWingetTable -Output $output -Method 'winget')
+                $shell = Resolve-ReparoShell
+                $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command 'winget upgrade --source winget --include-unknown --accept-source-agreements' -Section 'Winget(pending updates)' -TimeoutSeconds $WingetTimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
+                if ($result.TimedOut) {
+                    Add-ReparoSummaryNote ("Winget update discovery timed out after {0}." -f $result.Elapsed)
+                    return @()
+                }
+                return @(ConvertFrom-ReparoWingetTable -Output @($result.Output) -Method 'winget')
             }
             'Winget(msstore)' {
                 if (-not (Test-ReparoExecutable -Name 'winget' -Arguments @('--version'))) { return @() }
-                $output = @(winget upgrade --source msstore --include-unknown --accept-source-agreements 2>&1)
-                return @(ConvertFrom-ReparoWingetTable -Output $output -Method 'winget/msstore')
+                $shell = Resolve-ReparoShell
+                $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command 'winget upgrade --source msstore --include-unknown --accept-source-agreements' -Section 'Winget(msstore pending updates)' -TimeoutSeconds $WingetTimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
+                if ($result.TimedOut) {
+                    Add-ReparoSummaryNote ("Microsoft Store update discovery timed out after {0}." -f $result.Elapsed)
+                    return @()
+                }
+                return @(ConvertFrom-ReparoWingetTable -Output @($result.Output) -Method 'winget/msstore')
             }
             'Choco' {
                 if (-not (Test-ReparoExecutable -Name 'choco' -Arguments @('--version'))) { return @() }
