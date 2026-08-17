@@ -3427,8 +3427,8 @@ function New-ReparoWingetUpgradeQueueCommand {
 
         $id = ConvertTo-ReparoPowerShellLiteral -Value $update.Id
         [void]$commands.Add(("`$wingetOutput = @(winget upgrade --id {0} --exact --source {1} --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1)" -f $id, $source))
-        [void]$commands.Add('`$wingetExitCode = `$LASTEXITCODE')
-        [void]$commands.Add('`$wingetOutput | ForEach-Object { Write-Output `$_ }')
+        [void]$commands.Add("`$wingetExitCode = `$LASTEXITCODE")
+        [void]$commands.Add("`$wingetOutput | ForEach-Object { Write-Output `$_ }")
         [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } else { `$failedPackages += " + $id + ' } }'))
     }
 
