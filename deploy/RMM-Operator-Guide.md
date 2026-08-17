@@ -39,7 +39,7 @@ Upload the wanted file from `ScreenConnect\` into Toolbox and run it as SYSTEM/a
 
 | Need | Toolbox file |
 | --- | --- |
-| First install without GitHub | `ScreenConnect-Reparo-Embedded.ps1` with `-Offline true` |
+| First install/update without GitHub | `ScreenConnect-Reparo-Embedded-Offline.ps1` |
 | First install / refresh with GitHub | `Install-Reparo.bat` |
 | Remove Reparo runtime and diagnostics | `ScreenConnect-Reparo-Uninstall.ps1` |
 | Standard managed update | `Run-Reparo-System.cmd` |
@@ -63,6 +63,7 @@ parameters. Pick the separate script that performs the action you want.
 | `Ninja-Embedded-Offline.ps1` | Installs the embedded runtime without contacting GitHub, then writes the version field. |
 | `Ninja-Reparo-ReportOnly.ps1` | Reads the installed runtime and updates only the Ninja `Reparo` field. |
 | `Ninja-Reparo-Update.ps1` | Installs/refreshes Reparo and updates the version field. No machine maintenance run. |
+| `Ninja-Reparo-Force.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force`. No reboot permission is granted. |
 | `Ninja-Reparo-Force-AllowReboot.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force -AllowReboot`. Windows Update may reboot only if required. |
 | `Ninja-Reparo-Kill.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Kill` to stop stuck Reparo and known updater processes. No reboot. |
 | `Ninja-Reparo-New.ps1` | Runs native `Reparo -New` only against an existing runtime, then updates the version field. It does not bootstrap a missing install. |
@@ -191,15 +192,16 @@ ScreenConnect toolbox files live in `ScreenConnect\`.
 
 #### Embedded installer
 
-`ScreenConnect-Reparo-Embedded.ps1` is the self-contained installer. It contains a
-Reparo payload and works without helper-file attachments.
+`ScreenConnect-Reparo-Embedded.ps1` and
+`ScreenConnect-Reparo-Embedded-Offline.ps1` are self-contained installers. They
+contain a Reparo payload and work without helper-file attachments.
 
 Useful Toolbox arguments:
 
 | Goal | Arguments |
 | --- | --- |
 | Install only, with GitHub refresh | none |
-| Install only, no GitHub request | `-Offline true` |
+| Install/update only, no GitHub request | `ScreenConnect-Reparo-Embedded-Offline.ps1` |
 | Install and run managed maintenance | `-Update` |
 | Install and run maintenance offline | `-Offline true -Update` |
 | Version inspection | Run `C:\ProgramData\Reparo\bin\reparo.cmd -Version` from the remote session. |

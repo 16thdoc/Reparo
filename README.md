@@ -315,8 +315,10 @@ ScreenConnect-ready command files are included under `deploy\ScreenConnect`.
 | Tool | Purpose |
 | --- | --- |
 | `Install-Reparo.bat` | Installs or updates the ProgramData runtime from GitHub, repairs the `reparo.cmd` shim, and checks `reparo -Version`. |
+| `ScreenConnect-Reparo-Embedded-Offline.ps1` | Self-contained install/update with the embedded reviewed runtime; makes no GitHub request. |
 | `Run-Reparo-System.cmd` | Creates and starts a one-shot SYSTEM scheduled task that runs `C:\ProgramData\Reparo\Reparo.ps1 -Update`. |
 | `Run-Reparo-Force-System.cmd` | Creates and starts a one-shot SYSTEM scheduled task that runs `C:\ProgramData\Reparo\Reparo.ps1 -Force`. |
+| `Run-Reparo-Force-AllowReboot-System.cmd` | Runs `-Force -AllowReboot` (also accepted as `-AllowRestart`) as SYSTEM; Windows Update may reboot only if required. |
 | `Run-Reparo-Force-Reboot-System.cmd` | Runs `-Force -Reboot` as SYSTEM; the computer restarts after Reparo completes. |
 | `Run-Reparo-New-System.cmd` | Runs `-New` as SYSTEM to refresh the installed Reparo runtime from its configured source. |
 | `Run-Reparo-AllowReboot-System.cmd` | Runs `-AllowReboot` as SYSTEM; Windows Update may reboot if it requires one. |

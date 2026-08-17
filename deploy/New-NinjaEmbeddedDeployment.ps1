@@ -14,7 +14,7 @@ param(
     [string]$DeploymentLabel = 'NinjaOne',
     [string]$NinjaCustomFieldName = 'Reparo',
     [switch]$DisableNinjaCustomField,
-    [ValidateSet('Dynamic', 'InstallOnly', 'OfflineInstallOnly', 'ReportOnly', 'Update', 'ForceAllowReboot', 'Kill')]
+    [ValidateSet('Dynamic', 'InstallOnly', 'OfflineInstallOnly', 'ReportOnly', 'Update', 'Force', 'ForceAllowReboot', 'Kill')]
     [string]$FixedAction = 'InstallOnly'
 )
 
@@ -404,6 +404,18 @@ if ($FixedAction -ne 'Dynamic') {
 `$RefreshFromGitHub = 'true'
 `$RemoteReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
 `$ReparoArguments = @('-Force', '-AllowReboot')
+"@
+        }
+        'Force' {
+            @"
+`$InstallRoot = "`$env:ProgramData\Reparo"
+`$LogRoot = "`$env:ProgramData\Reparo\Logs"
+`$InstallOnly = 'false'
+`$ReportOnly = 'false'
+`$Offline = 'false'
+`$RefreshFromGitHub = 'true'
+`$RemoteReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
+`$ReparoArguments = @('-Force')
 "@
         }
         'Kill' {
