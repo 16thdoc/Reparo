@@ -63,6 +63,7 @@ parameters. Pick the separate script that performs the action you want.
 | `Ninja-Embedded-Offline.ps1` | Installs the embedded runtime without contacting GitHub, then writes the version field. |
 | `Ninja-Reparo-GitHub.ps1` | Downloads reviewed Reparo 1.2.6.3 from its pinned GitHub commit, installs/refreshes it, then writes the version field. No maintenance run. |
 | `Ninja-Reparo-Force.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force`. No reboot permission is granted. |
+| `Ninja-Reparo-Force-Installed.ps1` | Runs `Reparo -Force` only from an existing runtime, then refreshes the version field. It does not download or install Reparo. |
 | `Ninja-Reparo-Force-AllowReboot.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force -AllowReboot`. Windows Update may reboot only if required. |
 | `Ninja-Reparo-Kill.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Kill` to stop stuck Reparo and known updater processes. No reboot. |
 | `Ninja-Reparo-Uninstall.ps1` | Stops Reparo processes, removes its runtime/PATH/logs/diagnostics, then clears the version field. No reboot. |
