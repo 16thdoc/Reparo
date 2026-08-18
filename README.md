@@ -468,9 +468,9 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 Expected shape:
 
 ```text
-Reparo 1.2.6.7
+Reparo 1.2.6.8
 Source: C:\ProgramData\Reparo\Reparo.ps1
-  "The logs have stopped screaming."
+  "There is no problem that cannot be solved with a well-placed semicolon."
   - Reparo maintenance log
 ```
 
