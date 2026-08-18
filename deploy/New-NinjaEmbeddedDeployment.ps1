@@ -352,8 +352,8 @@ if ($FixedAction -ne 'Dynamic') {
 `$LogRoot = "`$env:ProgramData\Reparo\Logs"
 `$InstallOnly = 'true'
 `$ReportOnly = 'false'
-`$Offline = 'false'
-`$RefreshFromGitHub = 'true'
+`$Offline = 'true'
+`$RefreshFromGitHub = 'false'
 `$RemoteReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
 `$ReparoArguments = @()
 "@
@@ -376,8 +376,8 @@ if ($FixedAction -ne 'Dynamic') {
 `$LogRoot = "`$env:ProgramData\Reparo\Logs"
 `$InstallOnly = 'false'
 `$ReportOnly = 'false'
-`$Offline = 'false'
-`$RefreshFromGitHub = 'true'
+`$Offline = 'true'
+`$RefreshFromGitHub = 'false'
 `$RemoteReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
 `$ReparoArguments = @('-Force', '-AllowReboot')
 "@
@@ -388,8 +388,8 @@ if ($FixedAction -ne 'Dynamic') {
 `$LogRoot = "`$env:ProgramData\Reparo\Logs"
 `$InstallOnly = 'false'
 `$ReportOnly = 'false'
-`$Offline = 'false'
-`$RefreshFromGitHub = 'true'
+`$Offline = 'true'
+`$RefreshFromGitHub = 'false'
 `$RemoteReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
 `$ReparoArguments = @('-Force')
 "@
@@ -400,8 +400,8 @@ if ($FixedAction -ne 'Dynamic') {
 `$LogRoot = "`$env:ProgramData\Reparo\Logs"
 `$InstallOnly = 'false'
 `$ReportOnly = 'false'
-`$Offline = 'false'
-`$RefreshFromGitHub = 'true'
+`$Offline = 'true'
+`$RefreshFromGitHub = 'false'
 `$RemoteReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
 `$ReparoArguments = @('-Kill')
 "@

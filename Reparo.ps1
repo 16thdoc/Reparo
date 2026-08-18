@@ -132,7 +132,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.6.3'
+$script:ReparoVersion = '1.2.6.4'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -248,6 +248,7 @@ function Get-ReparoVersionFlavor {
         '1.2.6.1' = [pscustomobject]@{ Quote = 'Get away from her, you bitch!'; Source = 'Aliens'; Art = '  RIPLEY: runtime-host installers ejected from the upgrade airlock' }
         '1.2.6.2' = [pscustomobject]@{ Quote = 'I have come here to chew bubblegum and kick ass... and I''m all out of bubblegum.'; Source = 'They Live'; Art = '  WINGET: escaped backtick imp vaporized with extreme prejudice' }
         '1.2.6.3' = [pscustomobject]@{ Quote = 'The only winning move is not to play.'; Source = 'WarGames'; Art = '  SCANSNAP: vendor update landmine marked and bypassed' }
+        '1.2.6.4' = [pscustomobject]@{ Quote = 'I say we take off and nuke the entire site from orbit. It''s the only way to be sure.'; Source = 'Aliens'; Art = '  WINGET: PowerShell dependency parasite cut loose from the airlock' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -2929,33 +2930,19 @@ Log: $script:ReparoLogPath
 "@
 
     try {
-        if (-not (Get-Command Repair-WinGetPackageManager -ErrorAction SilentlyContinue)) {
-            if (Get-Command Install-Module -ErrorAction SilentlyContinue) {
-                Write-ReparoLog '[INFO] Microsoft.WinGet.Client not found; attempting install from PSGallery.'
-                if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
-                    Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
-                }
-
-                if (-not (Ensure-ReparoNuGetProvider)) {
-                    Write-ReparoLog '[WARN] NuGet provider unavailable; skipping Microsoft.WinGet.Client bootstrap.'
-                    return $false
-                }
-
-                Install-Module -Name 'Microsoft.WinGet.Client' -Force -AllowClobber -Scope AllUsers -Repository 'PSGallery' -ErrorAction Stop | Out-Null
-                Import-Module 'Microsoft.WinGet.Client' -Force -ErrorAction Stop
+        # App Installer registration is the normal repair path and works in both
+        # Windows PowerShell 5.1 and PowerShell 7. Do this first: most managed
+        # endpoints run Reparo under Windows PowerShell and must not require pwsh.
+        $appxRegistrationError = $null
+        if (Get-Command Add-AppxPackage -ErrorAction SilentlyContinue) {
+            try {
+                Write-ReparoLog '[ACTION] Re-registering Microsoft.DesktopAppInstaller.'
+                Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction Stop | Out-Null
             }
-        }
-
-        if (Get-Command Repair-WinGetPackageManager -ErrorAction SilentlyContinue) {
-            Write-ReparoLog '[ACTION] Repair-WinGetPackageManager -Force -Latest'
-            Repair-WinGetPackageManager -Force -Latest -ErrorAction Stop | Out-Null
-        }
-        elseif (Get-Command Add-AppxPackage -ErrorAction SilentlyContinue) {
-            Write-ReparoLog '[ACTION] Re-registering Microsoft.DesktopAppInstaller.'
-            Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction Stop | Out-Null
-        }
-        else {
-            throw 'Neither Repair-WinGetPackageManager nor Add-AppxPackage is available.'
+            catch {
+                $appxRegistrationError = $_.Exception.Message
+                Write-ReparoLog ("[WARN] Microsoft.DesktopAppInstaller registration failed: {0}" -f $appxRegistrationError)
+            }
         }
 
         if (Get-Command winget -ErrorAction SilentlyContinue) {
@@ -2968,6 +2955,64 @@ Computer: $env:COMPUTERNAME
 PID: $PID
 Log: $script:ReparoLogPath
 "@
+            return $true
+        }
+
+        # Repair-WinGetPackageManager is not supported by Windows PowerShell 5.1.
+        # Invoke it only from a PowerShell 7 host when one is already installed;
+        # Windows PowerShell endpoints retain the AppX-only repair path above.
+        $pwshPath = $null
+        if ($PSVersionTable.PSVersion.Major -ge 7) {
+            $pwshPath = (Get-Process -Id $PID).Path
+        }
+        else {
+            $programFilesRoot = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
+            $machinePwsh = Join-Path $programFilesRoot 'PowerShell\7\pwsh.exe'
+            if (Test-Path -LiteralPath $machinePwsh -PathType Leaf) {
+                $pwshPath = $machinePwsh
+            }
+            else {
+                $pwshCommand = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($pwshCommand) { $pwshPath = $pwshCommand.Source }
+            }
+        }
+
+        if ($pwshPath) {
+            Write-ReparoLog ("[ACTION] Attempting Microsoft.WinGet.Client repair through PowerShell 7: {0}" -f $pwshPath)
+            $repairCommand = @'
+$ErrorActionPreference = 'Stop'
+if (-not (Get-Command Repair-WinGetPackageManager -ErrorAction SilentlyContinue)) {
+    if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
+        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+    }
+    # This runs unattended under Ninja/SYSTEM. Bootstrap NuGet explicitly so
+    # PowerShellGet cannot pause the run behind an interactive Y/N prompt.
+    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers -ErrorAction Stop | Out-Null
+    Install-Module -Name Microsoft.WinGet.Client -Force -AllowClobber -Scope AllUsers -Repository PSGallery -ErrorAction Stop
+    Import-Module Microsoft.WinGet.Client -Force -ErrorAction Stop
+}
+Repair-WinGetPackageManager -Force -Latest -ErrorAction Stop
+'@
+            $repairOutput = @(& $pwshPath -NoProfile -ExecutionPolicy Bypass -Command $repairCommand 2>&1)
+            $repairExitCode = $LASTEXITCODE
+            foreach ($line in $repairOutput) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                    Write-ReparoLog ("[WINGET-REPAIR] {0}" -f $line)
+                }
+            }
+            if ($repairExitCode -ne 0) {
+                Write-ReparoLog ("[WARN] Microsoft.WinGet.Client repair exited with code {0}." -f $repairExitCode)
+            }
+        }
+        elseif ($appxRegistrationError) {
+            Write-ReparoLog '[INFO] PowerShell 7 is not installed; no Microsoft.WinGet.Client repair was attempted after the AppX registration failure.'
+        }
+        else {
+            Write-ReparoLog '[INFO] PowerShell 7 is not installed; AppX registration was the only required WinGet repair path.'
+        }
+
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-ReparoLog '[DONE] winget repair completed successfully through PowerShell 7.'
             return $true
         }
 

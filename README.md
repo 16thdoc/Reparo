@@ -95,7 +95,7 @@ reinstalling the exact damaged Pip version in the same user or machine scope, th
 retries the normal upgrade. Other Pip failures remain fatal and are reported without
 being disguised as metadata damage.
 
-Reparo does not install package managers from scratch. It only uses tools that are already present, then skips the sections that are not available. Use `-7Zip` only when you explicitly want Reparo to install the `7zip.7zip` winget package if it is missing, or update it when present.
+Reparo uses tools already present, then skips unavailable sections. The exception is a missing WinGet: Reparo first re-registers the built-in App Installer using the host's native AppX tooling, which works in Windows PowerShell 5.1 and PowerShell 7. If that does not recover WinGet and PowerShell 7 is already installed, it may use `Microsoft.WinGet.Client` for a secondary repair; it never requires PowerShell 7 solely to run the normal AppX repair. The PS7 fallback explicitly bootstraps NuGet without prompting, so Ninja/SYSTEM runs remain unattended. Use `-7Zip` only when you explicitly want Reparo to install the `7zip.7zip` winget package if it is missing, or update it when present.
 
 Winget packages whose publisher changes installer technology are reported as pending a
 manual uninstall/reinstall; Reparo will not blindly remove user software. Chocolatey
@@ -298,9 +298,11 @@ it first, optionally checks GitHub for a newer runtime, then runs Reparo. A bloc
 GitHub refresh is a warning rather than a failed maintenance run.
 
 The generated Ninja artifacts and `Ninja-Reparo-GitHub.ps1` update the device text
-custom field named `Reparo` with the installed runtime version. Use the fixed artifacts
-without Ninja script options or arguments; Ninja can map imported options positionally
-and corrupt deployment paths.
+custom field named `Reparo` with the installed runtime version. Fixed artifacts embed a
+SHA-256-verified release payload and do not refresh from `main`: that embedded payload
+is the fleet pin, so advance a fleet by importing a newly generated artifact after its
+pilot succeeds. Use the fixed artifacts without Ninja script options or arguments;
+Ninja can map imported options positionally and corrupt deployment paths.
 
 The complete Ninja/ScreenConnect operator guidance is in
 `deploy/RMM-Operator-Guide.md`.

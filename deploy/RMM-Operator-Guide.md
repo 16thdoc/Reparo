@@ -31,7 +31,7 @@ Desktop\Reparo\
    ```
 
 5. After the pilot succeeds, use `Ninja\Ninja-Embedded.ps1` for normal
-   install/refresh-and-report deployment.
+   pinned install/refresh-and-report deployment.
 
 ### ScreenConnect: normal toolbox use
 
@@ -59,20 +59,22 @@ parameters. Pick the separate script that performs the action you want.
 
 | Ninja file | What it does |
 | --- | --- |
-| `Ninja-Embedded.ps1` | Installs/refreshes Reparo, then writes the installed version to the Ninja device field `Reparo`. No maintenance run. |
+| `Ninja-Embedded.ps1` | Installs the hash-verified Reparo release embedded in the artifact, then writes the installed version to the Ninja device field `Reparo`. No maintenance run or GitHub refresh. |
 | `Ninja-Embedded-Offline.ps1` | Installs the embedded runtime without contacting GitHub, then writes the version field. |
 | `Ninja-Reparo-GitHub.ps1` | Downloads reviewed Reparo 1.2.6.3 from its pinned GitHub commit, installs/refreshes it, then writes the version field. No maintenance run. |
-| `Ninja-Reparo-Force.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force`. No reboot permission is granted. |
+| `Ninja-Reparo-Force.ps1` | Installs the hash-verified embedded release, updates the version field, then runs `Reparo -Force`. No reboot permission is granted. |
 | `Ninja-Reparo-Force-Installed.ps1` | Runs `Reparo -Force` only from an existing runtime, then refreshes the version field. It does not download or install Reparo. |
-| `Ninja-Reparo-Force-AllowReboot.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force -AllowReboot`. Windows Update may reboot only if required. |
+| `Ninja-Reparo-Force-AllowReboot.ps1` | Installs the hash-verified embedded release, updates the version field, then runs `Reparo -Force -AllowReboot`. Windows Update may reboot only if required. |
 | `Ninja-Reparo-Force-Installed-AllowReboot.ps1` | Runs `Reparo -Force -AllowReboot` only from an existing runtime, then refreshes the version field. It does not download or install Reparo. |
-| `Ninja-Reparo-Kill.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Kill` to stop stuck Reparo and known updater processes. No reboot. |
+| `Ninja-Reparo-Kill.ps1` | Installs the hash-verified embedded release, updates the version field, then runs `Reparo -Kill` to stop stuck Reparo and known updater processes. No reboot. |
 | `Ninja-Reparo-Uninstall.ps1` | Stops Reparo processes, removes its runtime/PATH/logs/diagnostics, then clears the version field. No reboot. |
 | `Ninja-Reparo-Diagnostic.ps1` | Read-only inspection of runtime, logs, PATH, execution context, Ninja field support, version, and hash. |
 | `Ninja-ScanSnap-Report.ps1` | Read-only ScanSnap inventory. It writes installed ScanSnap product names and versions to the Ninja device text field `scansnapVersion`. |
 
-All Ninja artifacts run as **SYSTEM**. They are suitable for normal RMM deployment;
-do not paste extra command-line flags into their Ninja configuration.
+All Ninja artifacts run as **SYSTEM**. Fixed embedded payloads are release-pinned by
+SHA-256 and do not refresh from `main`; deploy a newly generated artifact to advance
+the fleet to a new Reparo release. They are suitable for normal RMM deployment; do
+not paste extra command-line flags into their Ninja configuration.
 
 ## E10 — full operational guide
 
