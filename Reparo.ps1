@@ -132,7 +132,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.6.8'
+$script:ReparoVersion = '1.2.6.9'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -253,6 +253,7 @@ function Get-ReparoVersionFlavor {
         '1.2.6.6' = [pscustomobject]@{ Quote = 'Mostly harmless.'; Source = 'The Hitchhiker''s Guide to the Galaxy'; Art = '  DEBUG: forensic crumbs preserved for the postmortem' }
         '1.2.6.7' = [pscustomobject]@{ Quote = 'The logs have stopped screaming.'; Source = 'Reparo maintenance log'; Art = '  SUMMARY: exit-code ghosts tagged and filed' }
         '1.2.6.8' = [pscustomobject]@{ Quote = 'There is no problem that cannot be solved with a well-placed semicolon.'; Source = 'Reparo maintenance log'; Art = '  WINGET: three-headed installer hydra classified' }
+        '1.2.6.9' = [pscustomobject]@{ Quote = 'The truth is out there. The logs are right here.'; Source = 'Reparo maintenance log'; Art = '  LEDGER: skipped packages removed from the victory parade' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -3512,7 +3513,7 @@ function New-ReparoWingetUpgradeQueueCommand {
         [void]$commands.Add(("`$wingetOutput = @(winget upgrade --id {0} --exact --source {1} --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1)" -f $id, $source))
         [void]$commands.Add("`$wingetExitCode = `$LASTEXITCODE")
         [void]$commands.Add("`$wingetOutput | ForEach-Object { Write-Output `$_ }")
-        [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)installer cannot be run from an administrator context') { Write-Warning ('Winget package requires a non-elevated session: ' + " + $id + "); `$nonElevatedPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)No applicable upgrade found|does not apply to your system or requirements') { Write-Warning ('Winget package is not applicable on this system: ' + " + $id + "); `$notApplicablePackages += " + $id + " } else { `$failedPackages += " + $id + ' } }'))
+        [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Output ('REPARO-WINGET-SKIP manual ' + " + $id + "); Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)installer cannot be run from an administrator context') { Write-Output ('REPARO-WINGET-SKIP non-elevated ' + " + $id + "); Write-Warning ('Winget package requires a non-elevated session: ' + " + $id + "); `$nonElevatedPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)No applicable upgrade found|does not apply to your system or requirements') { Write-Output ('REPARO-WINGET-SKIP not-applicable ' + " + $id + "); Write-Warning ('Winget package is not applicable on this system: ' + " + $id + "); `$notApplicablePackages += " + $id + " } else { `$failedPackages += " + $id + ' } }'))
     }
 
     if ($commands.Count -eq 2) {
@@ -5468,12 +5469,12 @@ function Invoke-ReparoCommandStep {
         $notApplicableWingetReason = Get-ReparoWingetNotApplicableReason -Output $output
         $nonElevatedWingetPackageIds = @(
             $output |
-                ForEach-Object { [regex]::Match([string]$_, 'Winget package requires a non-elevated session:\s*(?<Id>\S+)') } |
+                ForEach-Object { [regex]::Match([string]$_, '(?:Winget package requires a non-elevated session:|REPARO-WINGET-SKIP non-elevated)\s*(?<Id>\S+)') } |
                 Where-Object { $_.Success } |
                 ForEach-Object { $_.Groups['Id'].Value } |
                 Select-Object -Unique
         )
-        $notApplicableWingetPackageIds = @($output | ForEach-Object { [regex]::Match([string]$_, 'Winget package is not applicable on this system:\s*(?<Id>\S+)') } | Where-Object { $_.Success } | ForEach-Object { $_.Groups['Id'].Value } | Select-Object -Unique)
+        $notApplicableWingetPackageIds = @($output | ForEach-Object { [regex]::Match([string]$_, '(?:Winget package is not applicable on this system:|REPARO-WINGET-SKIP not-applicable)\s*(?<Id>\S+)') } | Where-Object { $_.Success } | ForEach-Object { $_.Groups['Id'].Value } | Select-Object -Unique)
         if ($manualWingetReason) {
             Write-Warning $manualWingetReason
             Write-ReparoLog ("[WARN] {0}" -f $manualWingetReason)
