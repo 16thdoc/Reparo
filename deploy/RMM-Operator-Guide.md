@@ -61,6 +61,7 @@ parameters. Pick the separate script that performs the action you want.
 | --- | --- |
 | `Ninja-Embedded.ps1` | Installs/refreshes Reparo, then writes the installed version to the Ninja device field `Reparo`. No maintenance run. |
 | `Ninja-Embedded-Offline.ps1` | Installs the embedded runtime without contacting GitHub, then writes the version field. |
+| `Ninja-Reparo-GitHub.ps1` | Downloads reviewed Reparo 1.2.6.2 from its pinned GitHub commit, installs/refreshes it, then writes the version field. No maintenance run. |
 | `Ninja-Reparo-ReportOnly.ps1` | Reads the installed runtime and updates only the Ninja `Reparo` field. |
 | `Ninja-Reparo-Update.ps1` | Installs/refreshes Reparo and updates the version field. No machine maintenance run. |
 | `Ninja-Reparo-Force.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force`. No reboot permission is granted. |
@@ -154,6 +155,20 @@ Ninja-Reparo-Update.ps1
 
 This refreshes only the Reparo runtime and version field. It does not run Windows
 Update, winget, or any other machine maintenance.
+
+#### GitHub-backed install/refresh only
+
+Use:
+
+```text
+Ninja-Reparo-GitHub.ps1
+```
+
+It is a compact, parameter-free Ninja script: it downloads the reviewed Reparo 1.2.6.2
+source from its pinned GitHub commit, invokes `-New` to install or refresh the
+ProgramData runtime, and updates the `Reparo` device text field. It does not run
+maintenance. Change its URL only when promoting a reviewed replacement release, then
+import that reviewed script into Ninja.
 
 #### Refresh only the version custom field
 

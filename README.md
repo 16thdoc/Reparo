@@ -279,7 +279,13 @@ For production stability, prefer a tag or commit-pinned raw URL instead of `main
 $bootstrapUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/v1.0.0/Reparo.ps1'
 ```
 
-The same bootstrapper is also included at `deploy/Ninja-GitHub.ps1`.
+`deploy/Ninja-Reparo-GitHub.ps1` is the parameter-free Ninja variant: it performs
+this install/refresh flow and sets the Ninja device text custom field `Reparo` to the
+installed version without running maintenance. Its `$reparoUrl` is pinned to the
+reviewed Reparo 1.2.6.2 commit for fleet rollout; update that URL only with a reviewed
+replacement release. The broader
+`deploy/Ninja-GitHub.ps1` also updates that field when run in Ninja, while retaining
+its command-line maintenance options for direct operator use.
 
 ### Option 4: Offline-first regular Ninja automation
 
@@ -291,11 +297,11 @@ Ninja PowerShell script. It embeds and verifies a reviewed Reparo payload, insta
 it first, optionally checks GitHub for a newer runtime, then runs Reparo. A blocked
 GitHub refresh is a warning rather than a failed maintenance run.
 
-The generated Ninja artifacts update the device text custom field named `Reparo` with
-the installed runtime version. `Ninja-Reparo-ReportOnly.ps1` refreshes only that field
-without installing, refreshing, or running Reparo. Use the fixed artifacts without
-Ninja script options or arguments; Ninja can map imported options positionally and
-corrupt deployment paths.
+The generated Ninja artifacts and `Ninja-Reparo-GitHub.ps1` update the device text
+custom field named `Reparo` with the installed runtime version.
+`Ninja-Reparo-ReportOnly.ps1` refreshes only that field without installing, refreshing,
+or running Reparo. Use the fixed artifacts without Ninja script options or arguments;
+Ninja can map imported options positionally and corrupt deployment paths.
 
 The complete Ninja/ScreenConnect operator guidance is in
 `deploy/RMM-Operator-Guide.md`.

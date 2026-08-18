@@ -5,12 +5,13 @@ NinjaOne-friendly bootstrapper for installing/updating and running Reparo from a
 .DESCRIPTION
 Downloads a temporary Reparo bootstrap copy, uses Reparo -New to install or
 update the ProgramData runtime copy with validation and backup handling, then
-runs the installed copy with the requested mode. Use a version tag or commit URL
-for broad production deployment.
+runs the installed copy with the requested mode. When run by NinjaOne, it also
+updates the Reparo device text custom field with the installed runtime version.
+Use a version tag or commit URL for broad production deployment.
 #>
 [CmdletBinding()]
 param(
-    [string]$ReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1',
+    [string]$ReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/c5ac40cce0deab76441cca204f3f43104c4de07a/Reparo.ps1',
     [string]$InstallRoot = "$env:ProgramData\Reparo",
     [switch]$Preview,
     [switch]$Update = $true,
@@ -133,6 +134,35 @@ function Write-NinjaParameterBlock {
     }
 }
 
+function Update-NinjaReparoCustomField {
+    param(
+        [Parameter(Mandatory)]
+        [string]$ReparoPath
+    )
+
+    # This bootstrapper is also useful outside Ninja. Do nothing when Ninja's
+    # device-property command is unavailable rather than making a successful
+    # local install look like a failure.
+    $propertySetter = Get-Command -Name Ninja-Property-Set -ErrorAction SilentlyContinue
+    if (-not $propertySetter) {
+        Write-Host 'Ninja custom field update skipped: Ninja-Property-Set is unavailable.'
+        return
+    }
+
+    $version = 'Installed (version unreadable)'
+    $match = Select-String -LiteralPath $ReparoPath -Pattern "ReparoVersion\s*=\s*'([^']+)'" | Select-Object -First 1
+    if ($match -and $match.Matches[0].Groups[1].Value) {
+        $version = $match.Matches[0].Groups[1].Value
+    }
+
+    & $propertySetter.Name -Name 'Reparo' -Value $version
+    if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+        throw "Ninja-Property-Set failed with exit code $LASTEXITCODE."
+    }
+
+    Write-Host "Ninja custom field 'Reparo' set to: $version"
+}
+
 Write-Host '=== Ninja Reparo Bootstrap ==='
 Write-Host "Computer: $env:COMPUTERNAME"
 Write-Host "User: $([Security.Principal.WindowsIdentity]::GetCurrent().Name)"
@@ -222,6 +252,11 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "Bootstrap install failed with code: $LASTEXITCODE"
     exit $LASTEXITCODE
 }
+
+if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+    throw "Reparo installation reported success but the runtime was not found: $scriptPath"
+}
+Update-NinjaReparoCustomField -ReparoPath $scriptPath
 
 $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-LogRoot', $LogRoot)
 
