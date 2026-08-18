@@ -62,6 +62,7 @@ parameters. Pick the separate script that performs the action you want.
 | `Ninja-Embedded.ps1` | Installs the hash-verified Reparo release embedded in the artifact, then writes the installed version to the Ninja device field `Reparo`. No maintenance run or GitHub refresh. |
 | `Ninja-Embedded-Offline.ps1` | Installs the embedded runtime without contacting GitHub, then writes the version field. |
 | `Ninja-Reparo-GitHub.ps1` | Fetches the reviewed release-channel manifest, verifies its immutable commit-pinned Reparo SHA-256, installs/refreshes it, then writes the version field. No maintenance run. |
+| `Ninja-Reparo-Force-GitHub.ps1` | **Canonical recurring Ninja maintenance runner.** Fetches the reviewed release-channel manifest, validates the immutable SHA-256, installs/refreshes Reparo, then runs `-Force`. Import once; ordinary releases advance only `reparo-release.json`, not this Ninja script. |
 | `Ninja-Reparo-ReportOnly.ps1` | Reads the installed runtime version and updates only the Ninja `Reparo` field. No download, install, refresh, or maintenance run. |
 | `Ninja-Reparo-Force.ps1` | Installs the hash-verified embedded release, updates the version field, then runs `Reparo -Force`. No reboot permission is granted. |
 | `Ninja-Reparo-Force-Installed.ps1` | Runs `Reparo -Force` only from an existing runtime, then refreshes the version field. It does not download or install Reparo. |
