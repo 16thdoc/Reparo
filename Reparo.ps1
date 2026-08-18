@@ -132,7 +132,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.6.4'
+$script:ReparoVersion = '1.2.6.5'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -249,6 +249,7 @@ function Get-ReparoVersionFlavor {
         '1.2.6.2' = [pscustomobject]@{ Quote = 'I have come here to chew bubblegum and kick ass... and I''m all out of bubblegum.'; Source = 'They Live'; Art = '  WINGET: escaped backtick imp vaporized with extreme prejudice' }
         '1.2.6.3' = [pscustomobject]@{ Quote = 'The only winning move is not to play.'; Source = 'WarGames'; Art = '  SCANSNAP: vendor update landmine marked and bypassed' }
         '1.2.6.4' = [pscustomobject]@{ Quote = 'I say we take off and nuke the entire site from orbit. It''s the only way to be sure.'; Source = 'Aliens'; Art = '  WINGET: PowerShell dependency parasite cut loose from the airlock' }
+        '1.2.6.5' = [pscustomobject]@{ Quote = 'I can''t lie to you about your chances, but... you have my sympathies.'; Source = 'Aliens'; Art = '  UPDATE: false failures spaced out the airlock' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -3491,6 +3492,9 @@ function New-ReparoWingetUpgradeQueueCommand {
 
     [void]$commands.Add("if (`$manualPackages.Count -gt 0) { Write-Warning ('Winget packages pending manual uninstall/reinstall: ' + (`$manualPackages -join ', ')) }")
     [void]$commands.Add("if (`$failedPackages.Count -gt 0) { Write-Error ('winget upgrades failed: ' + (`$failedPackages -join ', ')); exit 1 }")
+    # A child PowerShell host otherwise inherits the last winget process exit code,
+    # including expected installer-technology migration failures we classified as manual.
+    [void]$commands.Add('exit 0')
     return ($commands -join [Environment]::NewLine)
 }
 
@@ -5759,8 +5763,13 @@ $protectedChocoPatternLiteral = ConvertTo-ReparoPowerShellLiteral -Value '(?i)\b
 $chocoCommand = @"
 `$lockedPackages = $chocoLockLiteral
 `$protectedPackagePattern = $protectedChocoPatternLiteral
-`$outdated = @(choco outdated --limit-output --no-color 2>`$null)
-if (`$LASTEXITCODE -ne 0) { throw "Chocolatey outdated query failed with exit code `$LASTEXITCODE" }
+`$outdated = @(choco outdated --limit-output --no-color 2>&1)
+`$chocoOutdatedExitCode = `$LASTEXITCODE
+# Chocolatey's enhanced exit codes use 2 to say that updates are available.
+if (`$chocoOutdatedExitCode -notin @(0, 2)) {
+    `$chocoOutdatedDetail = (`$outdated | ForEach-Object { [string]`$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace(`$_) }) -join '; '
+    throw "Chocolatey outdated query failed with exit code `$chocoOutdatedExitCode. Output: `$chocoOutdatedDetail"
+}
 `$eligiblePackages = 0
 foreach (`$line in `$outdated) {
     if (`$line -notmatch '\|') { continue }

@@ -98,10 +98,11 @@ being disguised as metadata damage.
 Reparo uses tools already present, then skips unavailable sections. The exception is a missing WinGet: Reparo first re-registers the built-in App Installer using the host's native AppX tooling, which works in Windows PowerShell 5.1 and PowerShell 7. If that does not recover WinGet and PowerShell 7 is already installed, it may use `Microsoft.WinGet.Client` for a secondary repair; it never requires PowerShell 7 solely to run the normal AppX repair. The PS7 fallback explicitly bootstraps NuGet without prompting, so Ninja/SYSTEM runs remain unattended. Use `-7Zip` only when you explicitly want Reparo to install the `7zip.7zip` winget package if it is missing, or update it when present.
 
 Winget packages whose publisher changes installer technology are reported as pending a
-manual uninstall/reinstall; Reparo will not blindly remove user software. Chocolatey
-updates are queued from `choco outdated` rather than `choco upgrade all`, so stale
-local package records whose source package has been removed do not fail the entire
-maintenance pass.
+manual uninstall/reinstall; Reparo will not blindly remove user software or mark that
+expected manual step as a failed maintenance section. Chocolatey's enhanced exit code
+`2` means updates were found, not that discovery failed; Reparo accepts it and queues
+updates from `choco outdated` rather than `choco upgrade all`, so stale local package
+records whose source package has been removed do not fail the entire maintenance pass.
 
 Install or update the live ProgramData copy from GitHub:
 
@@ -462,9 +463,9 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 Expected shape:
 
 ```text
-Reparo 1.2.6.4
+Reparo 1.2.6.5
 Source: C:\ProgramData\Reparo\Reparo.ps1
-  "I say we take off and nuke the entire site from orbit. It's the only way to be sure."
+  "I can't lie to you about your chances, but... you have my sympathies."
   - Aliens
 ```
 
