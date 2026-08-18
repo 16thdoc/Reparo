@@ -67,6 +67,7 @@ parameters. Pick the separate script that performs the action you want.
 | `Ninja-Reparo-Kill.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Kill` to stop stuck Reparo and known updater processes. No reboot. |
 | `Ninja-Reparo-Uninstall.ps1` | Stops Reparo processes, removes its runtime/PATH/logs/diagnostics, then clears the version field. No reboot. |
 | `Ninja-Reparo-Diagnostic.ps1` | Read-only inspection of runtime, logs, PATH, execution context, Ninja field support, version, and hash. |
+| `Ninja-ScanSnap-Report.ps1` | Read-only ScanSnap inventory. It writes installed ScanSnap product names and versions to the Ninja device text field `ScanSnap`. |
 
 All Ninja artifacts run as **SYSTEM**. They are suitable for normal RMM deployment;
 do not paste extra command-line flags into their Ninja configuration.
@@ -175,6 +176,19 @@ C:\ProgramData\Reparo-Ninja-Diagnostics
 ```
 
 That directory captures the embedded child installer stdout/stderr.
+
+#### Inventory ScanSnap versions
+
+Use:
+
+```text
+Ninja-ScanSnap-Report.ps1
+```
+
+Create a Ninja device **text** custom field named `ScanSnap` first. The script reads
+both uninstall registry views, reports every installed product whose display name
+contains `ScanSnap`, and updates that field. It does not update, pin, or otherwise
+touch the scanner software.
 
 ### 4. ScreenConnect deployment details
 
