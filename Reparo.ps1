@@ -2714,7 +2714,11 @@ if ($Install -or $New -or $Latest) {
     if ($script:ReparoIsWindows -and -not $Install -and -not $Preview -and $isDefaultInstallRoot) {
         $installedReparoPath = Join-Path $InstallRoot 'Reparo.ps1'
         Write-Host 'Checking Winget/App Installer after Reparo installation.' -ForegroundColor Cyan
-        & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installedReparoPath -WingetDiscover -InstallNuGetProvider:$InstallNuGetProvider
+        $wingetRepairArguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $installedReparoPath, '-WingetDiscover')
+        # The default is true; do not serialize a Boolean through powershell.exe as
+        # the literal System.String value. Pass only an intentional opt-out.
+        if (-not $InstallNuGetProvider) { $wingetRepairArguments += '-InstallNuGetProvider:$false' }
+        & powershell.exe @wingetRepairArguments
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "Post-install Winget repair/discovery exited with code $LASTEXITCODE. Reparo was installed successfully; see its log for the repair result."
         }
