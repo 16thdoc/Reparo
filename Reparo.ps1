@@ -836,6 +836,43 @@ $script:ReparoSyslogClient = $null
 $script:ReparoSyslogWriter = $null
 $script:ReparoSyslogFailureReported = $false
 $script:ReparoSettingsPath = Join-Path $InstallRoot 'reparo-settings.json'
+$script:ReparoWingetHealthPath = Join-Path $InstallRoot 'winget-health.json'
+$script:ReparoWingetHealthStatus = $null
+
+function Set-ReparoWingetHealth {
+    param(
+        [ValidateSet('OK', 'USER', 'FAIL')][string]$Status,
+        [string]$Detail
+    )
+
+    $script:ReparoWingetHealthStatus = $Status
+    $record = [ordered]@{
+        Status     = $Status
+        CheckedAt  = (Get-Date).ToString('o')
+        Computer   = $env:COMPUTERNAME
+        Reparo     = $script:ReparoVersion
+        Detail     = $Detail
+        Log        = $script:ReparoLogPath
+    }
+    try {
+        $parent = Split-Path -Parent $script:ReparoWingetHealthPath
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+        $temp = "$script:ReparoWingetHealthPath.$PID.tmp"
+        $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temp -Encoding UTF8
+        Move-Item -LiteralPath $temp -Destination $script:ReparoWingetHealthPath -Force
+        Write-ReparoLog ("[WINGET-HEALTH] {0}: {1}" -f $Status, $Detail)
+    }
+    catch { Write-ReparoLog ("[WARN] Unable to persist Winget health: {0}" -f $_.Exception.Message) }
+
+    $setter = Get-Command Ninja-Property-Set -ErrorAction SilentlyContinue
+    if ($setter) {
+        try {
+            & $setter.Name -Name 'Reparo' -Value ("{0} | WG:{1}" -f $script:ReparoVersion, $Status)
+            Write-ReparoLog ("[WINGET-HEALTH] Ninja Reparo field updated to WG:{0}." -f $Status)
+        }
+        catch { Write-ReparoLog ("[WARN] Unable to update Ninja Reparo field: {0}" -f $_.Exception.Message) }
+    }
+}
 $script:ReparoSyslogConfiguredThisRun = $false
 
 function Write-ReparoDebug {
@@ -3214,6 +3251,9 @@ Repair-WinGetPackageManager -Force -Latest -ErrorAction Stop
         if ([string]::IsNullOrWhiteSpace($detail)) { $detail = $_.Exception.Message }
         Write-ReparoLog ("[WARN] winget repair/registration failed: {0}" -f $detail)
         Write-ReparoDebug ("winget repair path failed: {0}" -f $detail)
+        if ($detail -match '(?i)Local System account is not allowed') {
+            Set-ReparoWingetHealth -Status USER -Detail 'App Installer deployment requires an interactive user context; SYSTEM cannot perform this AppX operation.'
+        }
         # NuGet/PowerShellGet itself is often the broken dependency. Do not let that
         # secondary repair lane prevent the independent direct App Installer fallback.
         try {
@@ -5851,6 +5891,7 @@ if ($runWingetSections) {
     }
 
     if ($hasWinget) {
+        Set-ReparoWingetHealth -Status OK -Detail 'winget is available and runnable.'
         if ($Winget -or $WingetDiscover) {
             Invoke-ReparoWingetDiscovery -PreviewOnly:$Preview
         }
@@ -5874,6 +5915,9 @@ if ($runWingetSections) {
         }
     }
     else {
+        if ($script:ReparoWingetHealthStatus -ne 'USER') {
+            Set-ReparoWingetHealth -Status FAIL -Detail 'winget was not found or could not be repaired.'
+        }
         Write-Skip 'winget not found or could not be repaired; skipping Winget sections'
         Write-ReparoLog '[SKIP] winget not found or could not be repaired; skipping Winget sections'
         Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget' -Version '-' -Method 'Winget' -Reason 'winget not found or could not be repaired'
