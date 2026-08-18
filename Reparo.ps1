@@ -80,6 +80,11 @@ param(
     [switch]$Kill,
     [Alias('KUN')]
     [string[]]$KillUpdaterNames,
+    [Alias('MsiCleanup')]
+    [switch]$Msi,
+    [ValidateRange(1, 10080)]
+    [int]$StaleMsiMinutes = 60,
+    [switch]$Aggressive,
     [Alias('IT')]
     [switch]$IgnoreTimeouts,
     [ValidateRange(0, [int]::MaxValue)]
@@ -1104,6 +1109,28 @@ Log: $script:ReparoLogPath
     }
 
     Invoke-ReparoKillUpdaterProcesses -ProcessNames $KillUpdaterNames
+    if ($Msi) { Invoke-ReparoMsiCleanup }
+}
+
+function Invoke-ReparoMsiCleanup {
+    if (-not $script:ReparoIsWindows) { throw '-Msi is supported on Windows only.' }
+    $cutoff = (Get-Date).AddMinutes(-$StaleMsiMinutes)
+    $ownMsiPids = @(Get-CimInstance Win32_Process -Filter "Name='msiexec.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.ParentProcessId -eq $PID } | Select-Object -ExpandProperty ProcessId)
+    $inventory = @(Get-CimInstance Win32_Process -Filter "Name='msiexec.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
+        $line = [string]$_.CommandLine; $created = $_.CreationDate
+        $service = $line -match '(?i)msiexec\.exe\s+/V\s*$'; $embedded = $line -match '(?i)\s-Embedding(?:\s|$)'; $direct = $line -match '(?i)\s/(i|x|package|update|uninstall)(?:\s|$|"|'' )|\s/f[a-z]*\s'
+        [pscustomobject]@{ ProcessId=[int]$_.ProcessId; ParentId=[int]$_.ParentProcessId; Created=$created; CommandLine=$line; IsServiceHost=$service; IsWorker=($embedded -or $direct); Eligible=(($created -and $created -lt $cutoff) -or ($Aggressive -and -not $created)); Protected=($ownMsiPids -contains [int]$_.ProcessId) }
+    })
+    $targets = @($inventory | Where-Object { $_.Eligible -and $_.IsWorker -and -not $_.Protected })
+    $targets += @($inventory | Where-Object { $_.Eligible -and $_.IsServiceHost -and -not $_.Protected -and ($targets.ParentId -contains $_.ProcessId) })
+    $targets = @($targets | Sort-Object ProcessId -Unique)
+    Write-ReparoLog ("[MSI] Threshold={0}m Aggressive={1} Inventory={2} Targets={3}" -f $StaleMsiMinutes, $Aggressive, $inventory.Count, $targets.Count)
+    $inventory | Format-Table ProcessId,ParentId,Created,IsServiceHost,IsWorker,Eligible,Protected -AutoSize
+    if ($Preview) { Write-Skip ("MSI cleanup preview: {0} eligible stale process(es)." -f $targets.Count); return }
+    foreach ($target in @($targets | Where-Object { -not $_.IsServiceHost }) + @($targets | Where-Object IsServiceHost)) {
+        try { Stop-Process -Id $target.ProcessId -Force -ErrorAction Stop; Write-Done "Stopped stale MSI PID $($target.ProcessId)"; Write-ReparoLog "[MSI] Stopped PID $($target.ProcessId)" }
+        catch { Write-Warning "Unable to stop stale MSI PID $($target.ProcessId): $($_.Exception.Message)"; Write-ReparoLog "[MSI-WARN] PID $($target.ProcessId): $($_.Exception.Message)" }
+    }
 }
 
 function Test-ReparoScriptParse {
@@ -2684,7 +2711,7 @@ if ($Install -or $New -or $Latest) {
         [IO.Path]::GetFullPath($defaultInstallRoot).TrimEnd('\\'),
         [StringComparison]::OrdinalIgnoreCase
     )
-    if ($script:ReparoIsWindows -and -not $Preview -and $isDefaultInstallRoot) {
+    if ($script:ReparoIsWindows -and -not $Install -and -not $Preview -and $isDefaultInstallRoot) {
         $installedReparoPath = Join-Path $InstallRoot 'Reparo.ps1'
         Write-Host 'Checking Winget/App Installer after Reparo installation.' -ForegroundColor Cyan
         & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installedReparoPath -WingetDiscover -InstallNuGetProvider:$InstallNuGetProvider
@@ -2693,6 +2720,12 @@ if ($Install -or $New -or $Latest) {
         }
     }
 
+    Complete-ReparoUtilityLog -Status $(if ($Preview) { 'PREVIEW' } else { 'COMPLETE' })
+    return
+}
+
+if ($Msi -and -not $Kill) {
+    Invoke-ReparoMsiCleanup
     Complete-ReparoUtilityLog -Status $(if ($Preview) { 'PREVIEW' } else { 'COMPLETE' })
     return
 }
@@ -3160,6 +3193,13 @@ Repair-WinGetPackageManager -Force -Latest -ErrorAction Stop
 
         if (Get-Command winget -ErrorAction SilentlyContinue) {
             Write-ReparoLog '[DONE] winget repair completed successfully through PowerShell 7.'
+            return $true
+        }
+
+        # Last resort: the direct App Installer bundle path covers systems where
+        # registration and Microsoft.WinGet.Client repair both failed.
+        if (Invoke-ReparoWingetRepair) {
+            Write-ReparoLog '[DONE] winget repair completed through the direct App Installer fallback.'
             return $true
         }
 
