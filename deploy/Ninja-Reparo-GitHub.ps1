@@ -7,8 +7,9 @@ Parameter-free NinjaOne automation. Downloads Reparo from the configured public 
 source, runs its transactional -New installer, and writes the installed version to the
 Ninja device text custom field named Reparo. It performs no machine maintenance.
 
-The source URL is pinned to the reviewed Reparo 1.2.6.4 release commit. Update it only
-when promoting a reviewed replacement release for the fleet.
+The stable script fetches the reviewed release-channel manifest, then downloads only
+the immutable commit URL and SHA-256 recorded there. Update the manifest when
+promoting a reviewed replacement release; Ninja does not need a script re-import.
 #>
 [CmdletBinding()]
 param()
@@ -17,7 +18,48 @@ $ErrorActionPreference = 'Stop'
 $installRoot = Join-Path $env:ProgramData 'Reparo'
 $runtimePath = Join-Path $installRoot 'Reparo.ps1'
 $bootstrapPath = Join-Path $installRoot 'Reparo.bootstrap.ps1'
-$reparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/a022f0c98d6f7058bf95d55a0c10a50d1d80b83a/Reparo.ps1'
+$releaseChannelUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json'
+
+function Get-DeploymentSha256 {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        return ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '')
+    }
+    finally {
+        $stream.Dispose()
+        $sha256.Dispose()
+    }
+}
+
+function Get-ReparoReleaseManifest {
+    param([Parameter(Mandatory)][string]$Uri)
+
+    $manifest = (Invoke-WebRequest -Uri $Uri -UseBasicParsing).Content | ConvertFrom-Json -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($manifest.version) -or $manifest.version -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+        throw "Release manifest has an invalid version: $($manifest.version)"
+    }
+    if ([string]::IsNullOrWhiteSpace($manifest.commit) -or $manifest.commit -notmatch '^[0-9a-f]{40}$') {
+        throw "Release manifest has an invalid commit: $($manifest.commit)"
+    }
+    if ([string]::IsNullOrWhiteSpace($manifest.sha256) -or $manifest.sha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+        throw "Release manifest has an invalid SHA-256: $($manifest.sha256)"
+    }
+
+    $expectedReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/{0}/Reparo.ps1' -f $manifest.commit
+    if ($manifest.reparoUrl -ne $expectedReparoUrl) {
+        throw "Release manifest Reparo URL must be the immutable commit URL: $expectedReparoUrl"
+    }
+
+    return [pscustomobject]@{
+        Version   = $manifest.version
+        Commit    = $manifest.commit
+        ReparoUrl = $manifest.reparoUrl
+        Sha256    = $manifest.sha256.ToUpperInvariant()
+    }
+}
 
 function Update-NinjaReparoCustomField {
     param([Parameter(Mandatory)][string]$ReparoPath)
@@ -47,19 +89,29 @@ if ([Net.ServicePointManager]::SecurityProtocol -notmatch 'Tls12') {
 
 Write-Host '=== Ninja Reparo GitHub Deploy ==='
 Write-Host "Computer: $env:COMPUTERNAME"
-Write-Host "Source: $reparoUrl"
+Write-Host "Release channel: $releaseChannelUrl"
 Write-Host "Install root: $installRoot"
 
 New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+Write-Host 'Resolving the reviewed Reparo release channel.'
+$release = Get-ReparoReleaseManifest -Uri $releaseChannelUrl
+Write-Host "Release: $($release.Version) ($($release.Commit))"
+Write-Host "Source: $($release.ReparoUrl)"
 Write-Host "Downloading Reparo bootstrap: $bootstrapPath"
-Invoke-WebRequest -Uri $reparoUrl -OutFile $bootstrapPath -UseBasicParsing
+Invoke-WebRequest -Uri $release.ReparoUrl -OutFile $bootstrapPath -UseBasicParsing
+
+$actualSha256 = Get-DeploymentSha256 -Path $bootstrapPath
+if ($actualSha256 -ne $release.Sha256) {
+    throw "Reparo bootstrap SHA-256 mismatch. Expected $($release.Sha256); got $actualSha256."
+}
+Write-Host "Bootstrap SHA-256 verified: $actualSha256"
 
 if (Get-Command Unblock-File -ErrorAction SilentlyContinue) {
     Unblock-File -Path $bootstrapPath
 }
 
 Write-Host 'Installing or refreshing the Reparo runtime.'
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrapPath -New -InstallRoot $installRoot -SourceUrl $reparoUrl
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrapPath -New -InstallRoot $installRoot -SourceUrl $release.ReparoUrl
 if ($LASTEXITCODE -ne 0) {
     throw "Reparo GitHub install failed with exit code $LASTEXITCODE."
 }

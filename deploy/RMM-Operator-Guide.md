@@ -61,7 +61,7 @@ parameters. Pick the separate script that performs the action you want.
 | --- | --- |
 | `Ninja-Embedded.ps1` | Installs the hash-verified Reparo release embedded in the artifact, then writes the installed version to the Ninja device field `Reparo`. No maintenance run or GitHub refresh. |
 | `Ninja-Embedded-Offline.ps1` | Installs the embedded runtime without contacting GitHub, then writes the version field. |
-| `Ninja-Reparo-GitHub.ps1` | Downloads reviewed Reparo 1.2.6.4 from its pinned GitHub commit, installs/refreshes it, then writes the version field. No maintenance run. |
+| `Ninja-Reparo-GitHub.ps1` | Fetches the reviewed release-channel manifest, verifies its immutable commit-pinned Reparo SHA-256, installs/refreshes it, then writes the version field. No maintenance run. |
 | `Ninja-Reparo-Force.ps1` | Installs the hash-verified embedded release, updates the version field, then runs `Reparo -Force`. No reboot permission is granted. |
 | `Ninja-Reparo-Force-Installed.ps1` | Runs `Reparo -Force` only from an existing runtime, then refreshes the version field. It does not download or install Reparo. |
 | `Ninja-Reparo-Force-AllowReboot.ps1` | Installs the hash-verified embedded release, updates the version field, then runs `Reparo -Force -AllowReboot`. Windows Update may reboot only if required. |
@@ -156,11 +156,11 @@ Use:
 Ninja-Reparo-GitHub.ps1
 ```
 
-It is a compact, parameter-free Ninja script: it downloads the reviewed Reparo 1.2.6.4
-source from its pinned GitHub commit, invokes `-New` to install or refresh the
-ProgramData runtime, and updates the `Reparo` device text field. It does not run
-maintenance. Change its URL only when promoting a reviewed replacement release, then
-import that reviewed script into Ninja.
+It is a compact, parameter-free Ninja script: it fetches the reviewed release-channel
+manifest, downloads the immutable commit-pinned Reparo source recorded there, verifies
+its SHA-256, invokes `-New` to install or refresh the ProgramData runtime, and updates
+the `Reparo` device text field. It does not run maintenance. Promote a reviewed release
+by updating `deploy/reparo-release.json`; no Ninja script re-import is needed.
 
 #### Diagnose odd behavior
 
