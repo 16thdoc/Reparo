@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 $installRoot = Join-Path $env:ProgramData 'Reparo'
 $runtimePath = Join-Path $installRoot 'Reparo.ps1'
 $bootstrapPath = Join-Path $installRoot 'Reparo.bootstrap.ps1'
-$releaseChannelUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json'
+$releaseChannelUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/refs/heads/main/deploy/reparo-release.json'
 
 function Get-DeploymentSha256 {
     param([Parameter(Mandatory)][string]$Path)
