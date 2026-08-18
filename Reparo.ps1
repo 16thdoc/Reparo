@@ -3271,6 +3271,28 @@ function Get-ReparoWingetManualInterventionReason {
     return $null
 }
 
+function Get-ReparoWingetNonElevatedSessionReason {
+    param([object[]]$Output)
+
+    $text = ($Output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+    if ($text -match '(?i)installer cannot be run from an administrator context') {
+        return 'Winget found a newer version, but its installer requires a non-elevated user session.'
+    }
+
+    return $null
+}
+
+function Get-ReparoWingetNotApplicableReason {
+    param([object[]]$Output)
+
+    $text = ($Output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+    if ($text -match '(?i)No applicable upgrade found|does not apply to your system or requirements') {
+        return 'Winget found a newer version, but it does not apply to this system or its current requirements.'
+    }
+
+    return $null
+}
+
 function Invoke-ReparoWingetRepair {
     if (Test-ReparoExecutable -Name 'winget' -Arguments @('--version')) {
         return $true
@@ -3566,6 +3588,7 @@ function New-ReparoWingetUpgradeQueueCommand {
 
     [void]$commands.Add("`$failedPackages = @()")
     [void]$commands.Add("`$manualPackages = @()")
+    [void]$commands.Add("`$nonElevatedPackages = @()")
     foreach ($update in $updates) {
         if ($excluded | Where-Object { $_ -ieq $update.Id }) {
             [void]$commands.Add(("Write-Host {0}" -f (ConvertTo-ReparoPowerShellLiteral -Value ("Skipping excluded winget package: {0}" -f $update.Id))))
@@ -3582,7 +3605,7 @@ function New-ReparoWingetUpgradeQueueCommand {
         [void]$commands.Add(("`$wingetOutput = @(winget upgrade --id {0} --exact --source {1} --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1)" -f $id, $source))
         [void]$commands.Add("`$wingetExitCode = `$LASTEXITCODE")
         [void]$commands.Add("`$wingetOutput | ForEach-Object { Write-Output `$_ }")
-        [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } else { `$failedPackages += " + $id + ' } }'))
+        [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Output ('REPARO-WINGET-SKIP manual ' + " + $id + "); Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)installer cannot be run from an administrator context') { Write-Output ('REPARO-WINGET-SKIP non-elevated ' + " + $id + "); Write-Warning ('Winget package requires a non-elevated session: ' + " + $id + "); `$nonElevatedPackages += " + $id + " } else { `$failedPackages += " + $id + ' } }'))
     }
 
     if ($commands.Count -eq 2) {
@@ -3590,7 +3613,9 @@ function New-ReparoWingetUpgradeQueueCommand {
     }
 
     [void]$commands.Add("if (`$manualPackages.Count -gt 0) { Write-Warning ('Winget packages pending manual uninstall/reinstall: ' + (`$manualPackages -join ', ')) }")
+    [void]$commands.Add("if (`$nonElevatedPackages.Count -gt 0) { Write-Warning ('Winget packages pending a non-elevated session: ' + (`$nonElevatedPackages -join ', ')) }")
     [void]$commands.Add("if (`$failedPackages.Count -gt 0) { Write-Error ('winget upgrades failed: ' + (`$failedPackages -join ', ')); exit 1 }")
+    [void]$commands.Add('exit 0')
     return ($commands -join [Environment]::NewLine)
 }
 
@@ -5208,6 +5233,37 @@ function Write-ReparoSummaryTable {
     }
 }
 
+function Write-ReparoSummaryNextSteps {
+    $skipped = @($script:ReparoSummary['Skipped'].ToArray())
+    $failed = @($script:ReparoSummary['Failed'].ToArray())
+    $nonElevatedWinget = @($skipped | Where-Object { $_.Method -like 'winget*' -and $_.Reason -match 'non-elevated user session' })
+    $manualWinget = @($skipped | Where-Object { $_.Method -like 'winget*' -and $_.Reason -match 'manual uninstall/reinstall' })
+
+    if ($failed.Count -eq 0 -and $nonElevatedWinget.Count -eq 0 -and $manualWinget.Count -eq 0 -and -not $script:ReparoPendingRebootDetected) { return }
+
+    Write-Host ''
+    Write-Host 'Next steps' -ForegroundColor Magenta
+    Write-ReparoLog '[SUMMARY] Next steps'
+    if ($nonElevatedWinget.Count -gt 0) {
+        $packages = ($nonElevatedWinget | Select-Object -ExpandProperty Software -Unique) -join ', '
+        $message = "Run Winget from a normal, non-elevated PowerShell session for: $packages. Command: reparo -Include Winget"
+        Write-Host ("  - {0}" -f $message)
+        Write-ReparoLog ("[SUMMARY] NEXT {0}" -f $message)
+    }
+    if ($manualWinget.Count -gt 0) {
+        $packages = ($manualWinget | Select-Object -ExpandProperty Software -Unique) -join ', '
+        $message = "Winget requires manual uninstall/reinstall for: $packages. Reparo left the installed software untouched."
+        Write-Host ("  - {0}" -f $message)
+        Write-ReparoLog ("[SUMMARY] NEXT {0}" -f $message)
+    }
+    if ($failed.Count -gt 0) {
+        $sections = ($failed | Select-Object -ExpandProperty Software -Unique) -join ', '
+        $message = "Review failed section diagnostics for: $sections. The final log preserves the exact command output when a section fails."
+        Write-Host ("  - {0}" -f $message)
+        Write-ReparoLog ("[SUMMARY] NEXT {0}" -f $message)
+    }
+}
+
 function Write-ReparoSummary {
     Write-Host ''
     Write-Host 'REPARO summary' -ForegroundColor Magenta
@@ -5326,6 +5382,7 @@ function Invoke-ReparoTimedCommand {
 
     if ($timedOut) {
         Write-ReparoLog ("[CMD-TIMEOUT] {0} timed out after {1}s elapsed={2}" -f $Section, $TimeoutSeconds, $stopwatch.Elapsed)
+        Write-ReparoLog ("[DIAGNOSTIC] Retained {0} artifacts after timeout: command={1}; output={2}" -f $Section, $commandScriptPath, $commandOutputPath)
         Write-ReparoEventLog -EventId 1201 -EntryType Warning -Message @"
 Reparo command timed out.
 
@@ -5347,7 +5404,15 @@ Log: $script:ReparoLogPath
 
     Write-ReparoLog ("[CMD-END] {0} exit={1} elapsed={2}" -f $Section, $process.ExitCode, $stopwatch.Elapsed)
     Write-ReparoDebug ("{0} completed with exit={1} elapsed={2} outputLines={3}" -f $Section, $process.ExitCode, $stopwatch.Elapsed, $output.Count)
-    Remove-Item -LiteralPath $commandOutputPath, $commandScriptPath -Force -ErrorAction SilentlyContinue
+    # Preserve exact child-host behavior for debug and failed-section forensics.
+    if ($script:ReparoDebug -or $process.ExitCode -ne 0) {
+        Write-ReparoLog ("[DIAGNOSTIC] Retained {0} artifacts: command={1}; output={2}" -f $Section, $commandScriptPath, $commandOutputPath)
+    }
+
+    Write-ReparoSummaryNextSteps
+    else {
+        Remove-Item -LiteralPath $commandOutputPath, $commandScriptPath -Force -ErrorAction SilentlyContinue
+    }
 
     [pscustomobject]@{
         TimedOut = $false
@@ -5476,6 +5541,14 @@ function Invoke-ReparoCommandStep {
                 ForEach-Object { $_.Groups['Id'].Value } |
                 Select-Object -Unique
         )
+        $nonElevatedWingetReason = Get-ReparoWingetNonElevatedSessionReason -Output $output
+        $nonElevatedWingetPackageIds = @(
+            $output |
+                ForEach-Object { [regex]::Match([string]$_, '(?:Winget package requires a non-elevated session:|REPARO-WINGET-SKIP non-elevated)\s*(?<Id>\S+)') } |
+                Where-Object { $_.Success } |
+                ForEach-Object { $_.Groups['Id'].Value } |
+                Select-Object -Unique
+        )
         if ($manualWingetReason) {
             Write-Warning $manualWingetReason
             Write-ReparoLog ("[WARN] {0}" -f $manualWingetReason)
@@ -5487,6 +5560,19 @@ function Invoke-ReparoCommandStep {
                 }
             }
             $pendingUpdates = @($pendingUpdates | Where-Object { $manualWingetPackageIds -notcontains $_.Id })
+        }
+
+        if ($nonElevatedWingetReason) {
+            Write-Warning $nonElevatedWingetReason
+            Write-ReparoLog ("[WARN] {0}" -f $nonElevatedWingetReason)
+            Add-ReparoSummaryNote $nonElevatedWingetReason
+            foreach ($packageId in $nonElevatedWingetPackageIds) {
+                $nonElevatedUpdate = @($pendingUpdates | Where-Object { $_.Id -ieq $packageId } | Select-Object -First 1)
+                if ($nonElevatedUpdate.Count -gt 0) {
+                    Add-ReparoSummaryRecord -Bucket Skipped -Software $nonElevatedUpdate[0].Software -CurrentVersion $nonElevatedUpdate[0].CurrentVersion -Version $nonElevatedUpdate[0].Version -Method $nonElevatedUpdate[0].Method -Reason 'requires a non-elevated user session'
+                }
+            }
+            $pendingUpdates = @($pendingUpdates | Where-Object { $nonElevatedWingetPackageIds -notcontains $_.Id })
         }
 
         if ($result.TimedOut) {
@@ -5859,8 +5945,13 @@ $protectedChocoPatternLiteral = ConvertTo-ReparoPowerShellLiteral -Value '(?i)\b
 $chocoCommand = @"
 `$lockedPackages = $chocoLockLiteral
 `$protectedPackagePattern = $protectedChocoPatternLiteral
-`$outdated = @(choco outdated --limit-output --no-color 2>`$null)
-if (`$LASTEXITCODE -ne 0) { throw "Chocolatey outdated query failed with exit code `$LASTEXITCODE" }
+`$outdated = @(choco outdated --limit-output --no-color 2>&1)
+`$chocoOutdatedExitCode = `$LASTEXITCODE
+# Chocolatey's enhanced exit codes use 2 to say that updates are available.
+if (`$chocoOutdatedExitCode -notin @(0, 2)) {
+    `$chocoOutdatedDetail = (`$outdated | ForEach-Object { [string]`$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace(`$_) }) -join '; '
+    throw "Chocolatey outdated query failed with exit code `$chocoOutdatedExitCode. Output: `$chocoOutdatedDetail"
+}
 `$eligiblePackages = 0
 foreach (`$line in `$outdated) {
     if (`$line -notmatch '\|') { continue }
@@ -6624,11 +6715,11 @@ if (Test-ReparoSectionSelected 'WindowsUpdate') {
         if ($hasWindowsUpdate -or (Ensure-ReparoPSWindowsUpdate)) {
             if ($AllowReboot) {
                 Write-ReparoLog '[INFO] WindowsUpdate reboot handling: AllowReboot requested; passing -AutoReboot.'
-                $windowsUpdateCommand = 'Import-Module PSWindowsUpdate; Get-WindowsUpdate -AcceptAll -Install -AutoReboot'
+                $windowsUpdateCommand = '$ErrorActionPreference = ''Stop''; Import-Module PSWindowsUpdate -ErrorAction Stop; Get-WindowsUpdate -AcceptAll -Install -AutoReboot -ErrorAction Stop; $global:LASTEXITCODE = 0'
             }
             else {
                 Write-ReparoLog '[INFO] WindowsUpdate reboot handling: defaulting to -IgnoreReboot.'
-                $windowsUpdateCommand = 'Import-Module PSWindowsUpdate; Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot'
+                $windowsUpdateCommand = '$ErrorActionPreference = ''Stop''; Import-Module PSWindowsUpdate -ErrorAction Stop; Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot -ErrorAction Stop; $global:LASTEXITCODE = 0'
             }
 
             Invoke-ReparoCommandStep -Section 'WindowsUpdate' -PresenceCmd '' -Command $windowsUpdateCommand -TimeoutSeconds $WindowsUpdateTimeoutSeconds
