@@ -103,6 +103,11 @@ expected manual step as a failed maintenance section. Chocolatey's enhanced exit
 `2` means updates were found, not that discovery failed; Reparo accepts it and queues
 updates from `choco outdated` rather than `choco upgrade all`, so stale local package
 records whose source package has been removed do not fail the entire maintenance pass.
+Some Winget installers explicitly refuse an elevated session. Reparo reports those as
+skipped packages (not a failed Winget section) and prints the recovery command in the
+final summary. Run `reparo -Include Winget` from a normal, non-elevated PowerShell
+session for those packages; run `reparo -Include WindowsUpdate` from an elevated
+session when Windows Update is also needed.
 
 Install or update the live ProgramData copy from GitHub:
 

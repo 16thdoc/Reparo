@@ -16,11 +16,43 @@ $wingetQueue = [regex]::Match($source, '(?s)function New-ReparoWingetUpgradeQueu
 if (-not $wingetQueue.Success) { throw 'Could not locate the WinGet upgrade queue builder.' }
 foreach ($required in @(
     'Winget package requires manual uninstall/reinstall:',
+    'Winget package requires a non-elevated session:',
+    'Winget packages pending a non-elevated session:',
     '`$failedPackages.Count -gt 0',
     '[void]$commands.Add(''exit 0'')'
 )) {
     if (-not $wingetQueue.Value.Contains($required)) {
         throw "WinGet manual-migration exit handling is absent: $required"
+    }
+}
+
+$wingetElevation = [regex]::Match($source, '(?s)function Get-ReparoWingetNonElevatedSessionReason \{.*?(?=function Invoke-ReparoWingetRepair)')
+if (-not $wingetElevation.Success) { throw 'Could not locate the WinGet non-elevated-session classifier.' }
+if (-not $wingetElevation.Value.Contains('installer cannot be run from an administrator context')) {
+    throw 'WinGet elevated-installer detection is absent.'
+}
+
+$windowsUpdate = [regex]::Match($source, '(?s)if \(Test-ReparoSectionSelected ''WindowsUpdate''\) \{.*')
+if (-not $windowsUpdate.Success) { throw 'Could not locate the Windows Update section.' }
+foreach ($required in @(
+    "`$ErrorActionPreference = ''Stop''",
+    'Get-WindowsUpdate -AcceptAll -Install -AutoReboot -ErrorAction Stop; $global:LASTEXITCODE = 0',
+    'Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot -ErrorAction Stop; $global:LASTEXITCODE = 0'
+)) {
+    if (-not $windowsUpdate.Value.Contains($required)) {
+        throw "Windows Update exit-code handling is absent: $required"
+    }
+}
+
+$summaryGuidance = [regex]::Match($source, '(?s)function Write-ReparoSummaryNextSteps \{.*?(?=function Write-ReparoSummary \{)')
+if (-not $summaryGuidance.Success) { throw 'Could not locate final-summary next-step guidance.' }
+foreach ($required in @(
+    'non-elevated user session',
+    'reparo -Include Winget',
+    'Review failed section diagnostics'
+)) {
+    if (-not $summaryGuidance.Value.Contains($required)) {
+        throw "Final-summary guidance is absent: $required"
     }
 }
 
@@ -36,4 +68,4 @@ foreach ($required in @(
     }
 }
 
-Write-Host 'Reparo Winget manual-migration and Chocolatey enhanced-exit handling passed.' -ForegroundColor Green
+Write-Host 'Reparo Winget elevation/manual-migration, Windows Update exit, and Chocolatey handling passed.' -ForegroundColor Green
