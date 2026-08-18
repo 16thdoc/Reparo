@@ -259,7 +259,7 @@ function Get-ReparoVersionFlavor {
         '1.2.6.9' = [pscustomobject]@{ Quote = 'The truth is out there. The logs are right here.'; Source = 'Reparo maintenance log'; Art = '  LEDGER: skipped packages removed from the victory parade' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
-        '1.3.0.0' = [pscustomobject]@{ Quote = 'Before we get started, does anyone want to get out?'; Source = 'Aliens'; Art = '  DROP SHIP: offline install, pinned release, and recovery ladder locked in' }
+        '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
