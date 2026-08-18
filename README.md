@@ -298,10 +298,9 @@ it first, optionally checks GitHub for a newer runtime, then runs Reparo. A bloc
 GitHub refresh is a warning rather than a failed maintenance run.
 
 The generated Ninja artifacts and `Ninja-Reparo-GitHub.ps1` update the device text
-custom field named `Reparo` with the installed runtime version.
-`Ninja-Reparo-ReportOnly.ps1` refreshes only that field without installing, refreshing,
-or running Reparo. Use the fixed artifacts without Ninja script options or arguments;
-Ninja can map imported options positionally and corrupt deployment paths.
+custom field named `Reparo` with the installed runtime version. Use the fixed artifacts
+without Ninja script options or arguments; Ninja can map imported options positionally
+and corrupt deployment paths.
 
 The complete Ninja/ScreenConnect operator guidance is in
 `deploy/RMM-Operator-Guide.md`.

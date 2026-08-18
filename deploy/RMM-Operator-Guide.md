@@ -62,12 +62,9 @@ parameters. Pick the separate script that performs the action you want.
 | `Ninja-Embedded.ps1` | Installs/refreshes Reparo, then writes the installed version to the Ninja device field `Reparo`. No maintenance run. |
 | `Ninja-Embedded-Offline.ps1` | Installs the embedded runtime without contacting GitHub, then writes the version field. |
 | `Ninja-Reparo-GitHub.ps1` | Downloads reviewed Reparo 1.2.6.2 from its pinned GitHub commit, installs/refreshes it, then writes the version field. No maintenance run. |
-| `Ninja-Reparo-ReportOnly.ps1` | Reads the installed runtime and updates only the Ninja `Reparo` field. |
-| `Ninja-Reparo-Update.ps1` | Installs/refreshes Reparo and updates the version field. No machine maintenance run. |
 | `Ninja-Reparo-Force.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force`. No reboot permission is granted. |
 | `Ninja-Reparo-Force-AllowReboot.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force -AllowReboot`. Windows Update may reboot only if required. |
 | `Ninja-Reparo-Kill.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Kill` to stop stuck Reparo and known updater processes. No reboot. |
-| `Ninja-Reparo-New.ps1` | Runs native `Reparo -New` only against an existing runtime, then updates the version field. It does not bootstrap a missing install. |
 | `Ninja-Reparo-Uninstall.ps1` | Stops Reparo processes, removes its runtime/PATH/logs/diagnostics, then clears the version field. No reboot. |
 | `Ninja-Reparo-Diagnostic.ps1` | Read-only inspection of runtime, logs, PATH, execution context, Ninja field support, version, and hash. |
 
@@ -145,17 +142,6 @@ Ninja-Embedded-Offline.ps1
 It installs only the Reparo payload embedded in the artifact. It makes no
 GitHub request.
 
-#### Refresh Reparo only
-
-Use:
-
-```text
-Ninja-Reparo-Update.ps1
-```
-
-This refreshes only the Reparo runtime and version field. It does not run Windows
-Update, winget, or any other machine maintenance.
-
 #### GitHub-backed install/refresh only
 
 Use:
@@ -169,17 +155,6 @@ source from its pinned GitHub commit, invokes `-New` to install or refresh the
 ProgramData runtime, and updates the `Reparo` device text field. It does not run
 maintenance. Change its URL only when promoting a reviewed replacement release, then
 import that reviewed script into Ninja.
-
-#### Refresh only the version custom field
-
-Use:
-
-```text
-Ninja-Reparo-ReportOnly.ps1
-```
-
-It sets Ninja's device text custom field named `Reparo` to the installed runtime
-version. It does not install, refresh, or run Reparo.
 
 #### Diagnose odd behavior
 
@@ -253,8 +228,8 @@ deployment.
 ### 6. Current deployment safety rules
 
 - Default RMM deployment is install-only.
-- `Ninja-Reparo-Update.ps1` refreshes Reparo only; use the explicitly named
-  `Ninja-Reparo-Force-AllowReboot.ps1` for broad maintenance.
+- `Ninja-Reparo-GitHub.ps1` installs or refreshes Reparo only; use the explicitly
+  named `Ninja-Reparo-Force-AllowReboot.ps1` for broad maintenance.
 - `-Force` is a maintenance-window/hands-on tool, not a fleet default.
 - `-Force -Reboot` deliberately reboots after completion.
 - Do not add Ninja parameters/options to fixed artifacts.
