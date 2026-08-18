@@ -61,13 +61,13 @@ parameters. Pick the separate script that performs the action you want.
 | --- | --- |
 | `Ninja-Embedded.ps1` | Installs/refreshes Reparo, then writes the installed version to the Ninja device field `Reparo`. No maintenance run. |
 | `Ninja-Embedded-Offline.ps1` | Installs the embedded runtime without contacting GitHub, then writes the version field. |
-| `Ninja-Reparo-GitHub.ps1` | Downloads reviewed Reparo 1.2.6.2 from its pinned GitHub commit, installs/refreshes it, then writes the version field. No maintenance run. |
+| `Ninja-Reparo-GitHub.ps1` | Downloads reviewed Reparo 1.2.6.3 from its pinned GitHub commit, installs/refreshes it, then writes the version field. No maintenance run. |
 | `Ninja-Reparo-Force.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force`. No reboot permission is granted. |
 | `Ninja-Reparo-Force-AllowReboot.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Force -AllowReboot`. Windows Update may reboot only if required. |
 | `Ninja-Reparo-Kill.ps1` | Installs/refreshes, updates the version field, then runs `Reparo -Kill` to stop stuck Reparo and known updater processes. No reboot. |
 | `Ninja-Reparo-Uninstall.ps1` | Stops Reparo processes, removes its runtime/PATH/logs/diagnostics, then clears the version field. No reboot. |
 | `Ninja-Reparo-Diagnostic.ps1` | Read-only inspection of runtime, logs, PATH, execution context, Ninja field support, version, and hash. |
-| `Ninja-ScanSnap-Report.ps1` | Read-only ScanSnap inventory. It writes installed ScanSnap product names and versions to the Ninja device text field `ScanSnap`. |
+| `Ninja-ScanSnap-Report.ps1` | Read-only ScanSnap inventory. It writes installed ScanSnap product names and versions to the Ninja device text field `scansnapVersion`. |
 
 All Ninja artifacts run as **SYSTEM**. They are suitable for normal RMM deployment;
 do not paste extra command-line flags into their Ninja configuration.
@@ -151,7 +151,7 @@ Use:
 Ninja-Reparo-GitHub.ps1
 ```
 
-It is a compact, parameter-free Ninja script: it downloads the reviewed Reparo 1.2.6.2
+It is a compact, parameter-free Ninja script: it downloads the reviewed Reparo 1.2.6.3
 source from its pinned GitHub commit, invokes `-New` to install or refresh the
 ProgramData runtime, and updates the `Reparo` device text field. It does not run
 maintenance. Change its URL only when promoting a reviewed replacement release, then
@@ -185,7 +185,8 @@ Use:
 Ninja-ScanSnap-Report.ps1
 ```
 
-Create a Ninja device **text** custom field named `ScanSnap` first. The script reads
+Create a Ninja device **text** custom field named `scansnapVersion` first (its visible
+label may remain `ScanSnap`). The script reads
 both uninstall registry views, reports every installed product whose display name
 contains `ScanSnap`, and updates that field. It does not update, pin, or otherwise
 touch the scanner software.

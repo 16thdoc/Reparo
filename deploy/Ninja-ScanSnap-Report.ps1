@@ -12,7 +12,7 @@ ScanSnap or Reparo.
 param()
 
 $ErrorActionPreference = 'Stop'
-$customFieldName = 'ScanSnap'
+$customFieldName = 'scansnapVersion'
 $uninstallPath = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
 $records = New-Object System.Collections.Generic.List[object]
 

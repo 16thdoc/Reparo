@@ -282,7 +282,7 @@ $bootstrapUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/v1.0.0/Reparo.
 `deploy/Ninja-Reparo-GitHub.ps1` is the parameter-free Ninja variant: it performs
 this install/refresh flow and sets the Ninja device text custom field `Reparo` to the
 installed version without running maintenance. Its `$reparoUrl` is pinned to the
-reviewed Reparo 1.2.6.2 commit for fleet rollout; update that URL only with a reviewed
+reviewed Reparo 1.2.6.3 commit for fleet rollout; update that URL only with a reviewed
 replacement release. The broader
 `deploy/Ninja-GitHub.ps1` also updates that field when run in Ninja, while retaining
 its command-line maintenance options for direct operator use.
