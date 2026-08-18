@@ -11,7 +11,7 @@ Use a version tag or commit URL for broad production deployment.
 #>
 [CmdletBinding()]
 param(
-    [string]$ReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/b03af4325f6bc8bfc4baed18add6c7d111c8c3f1/Reparo.ps1',
+    [string]$ReparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/1fa3dd4eccc3cc7f7d7097db15d3084d1e3b2702/Reparo.ps1',
     [string]$InstallRoot = "$env:ProgramData\Reparo",
     [switch]$Preview,
     [switch]$Update = $true,
