@@ -282,7 +282,7 @@ $bootstrapUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/v1.0.0/Reparo.
 `deploy/Ninja-Reparo-GitHub.ps1` is the parameter-free Ninja variant: it performs
 this install/refresh flow and sets the Ninja device text custom field `Reparo` to the
 installed version without running maintenance. Its `$reparoUrl` is pinned to the
-reviewed Reparo 1.2.6.3 commit for fleet rollout; update that URL only with a reviewed
+reviewed Reparo 1.2.6.4 commit for fleet rollout; update that URL only with a reviewed
 replacement release. The broader
 `deploy/Ninja-GitHub.ps1` also updates that field when run in Ninja, while retaining
 its command-line maintenance options for direct operator use.
@@ -461,10 +461,10 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 Expected shape:
 
 ```text
-Reparo 1.2.6.3
+Reparo 1.2.6.4
 Source: C:\ProgramData\Reparo\Reparo.ps1
-  "The only winning move is not to play."
-  - WarGames
+  "I say we take off and nuke the entire site from orbit. It's the only way to be sure."
+  - Aliens
 ```
 
 The quote body and source can change every release. The indentation, surrounding quote marks, and `  - Source` attribution line should not.

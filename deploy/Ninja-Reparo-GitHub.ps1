@@ -7,7 +7,7 @@ Parameter-free NinjaOne automation. Downloads Reparo from the configured public 
 source, runs its transactional -New installer, and writes the installed version to the
 Ninja device text custom field named Reparo. It performs no machine maintenance.
 
-The source URL is pinned to the reviewed Reparo 1.2.6.3 release commit. Update it only
+The source URL is pinned to the reviewed Reparo 1.2.6.4 release commit. Update it only
 when promoting a reviewed replacement release for the fleet.
 #>
 [CmdletBinding()]
@@ -17,7 +17,7 @@ $ErrorActionPreference = 'Stop'
 $installRoot = Join-Path $env:ProgramData 'Reparo'
 $runtimePath = Join-Path $installRoot 'Reparo.ps1'
 $bootstrapPath = Join-Path $installRoot 'Reparo.bootstrap.ps1'
-$reparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/963ffdaa4ffc3467d5b9f7ad2a1e060c4793b3f2/Reparo.ps1'
+$reparoUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/a022f0c98d6f7058bf95d55a0c10a50d1d80b83a/Reparo.ps1'
 
 function Update-NinjaReparoCustomField {
     param([Parameter(Mandatory)][string]$ReparoPath)
