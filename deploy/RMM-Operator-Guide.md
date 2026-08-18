@@ -65,6 +65,7 @@ parameters. Pick the separate script that performs the action you want.
 | `Ninja-Reparo-ReportOnly.ps1` | Reads the installed runtime version and updates only the Ninja `Reparo` field. No download, install, refresh, or maintenance run. |
 | `Ninja-Reparo-Force.ps1` | Installs the hash-verified embedded release, updates the version field, then runs `Reparo -Force`. No reboot permission is granted. |
 | `Ninja-Reparo-Force-Installed.ps1` | Runs `Reparo -Force` only from an existing runtime, then refreshes the version field. It does not download or install Reparo. |
+| `Ninja-Reparo-Force-Debug-Installed.ps1` | Runs `Reparo -Force -Debug` only from an existing runtime, refreshes the version field, and retains every child command/output artifact under `C:\ProgramData\Reparo\Logs`. It does not download or install Reparo. |
 | `Ninja-Reparo-Force-AllowReboot.ps1` | Installs the hash-verified embedded release, updates the version field, then runs `Reparo -Force -AllowReboot`. Windows Update may reboot only if required. |
 | `Ninja-Reparo-Force-Installed-AllowReboot.ps1` | Runs `Reparo -Force -AllowReboot` only from an existing runtime, then refreshes the version field. It does not download or install Reparo. |
 | `Ninja-Reparo-Kill.ps1` | Installs the hash-verified embedded release, updates the version field, then runs `Reparo -Kill` to stop stuck Reparo and known updater processes. No reboot. |

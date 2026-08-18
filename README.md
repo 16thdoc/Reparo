@@ -463,10 +463,10 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 Expected shape:
 
 ```text
-Reparo 1.2.6.5
+Reparo 1.2.6.6
 Source: C:\ProgramData\Reparo\Reparo.ps1
-  "I can't lie to you about your chances, but... you have my sympathies."
-  - Aliens
+  "Mostly harmless."
+  - The Hitchhiker's Guide to the Galaxy
 ```
 
 The quote body and source can change every release. The indentation, surrounding quote marks, and `  - Source` attribution line should not.
@@ -675,7 +675,7 @@ Long-running child commands emit `[CMD-WAIT]` heartbeat lines while they are sti
 Use `-Tail` or its alias `-Log` to follow the active log when used by itself. When combined with a run mode, it prints the tail of the current run's log file at the end of execution.
 Use `-TailLines` to increase or reduce the initial tail window.
 Use `-Status` to see whether Reparo is currently running and which log file it is writing. The status probe excludes its own helper process so it does not report itself as the active run, and it will show stale `_RUNNING.log` files when a run ended before finalization.
-Use `-Debug` when you want extra trace lines in the log for mode selection, command launch details, and bootstrap behavior. In Ninja, the wrapper now forwards `-Debug` through to Reparo.
+Use `-Debug` when you want extra trace lines in the log for mode selection, command launch details, and bootstrap behavior. It also preserves the generated child `*.command.ps1` and raw `*.out.log` artifacts beside the main run log. Reparo preserves those artifacts for any failed or timed-out section even without `-Debug`; ordinary successful sections clean them up. In Ninja, use `Ninja-Reparo-Force-Debug-Installed.ps1` to run an installed runtime with `-Force -Debug` and refresh the device version field.
 Use `-WingetDiscover` when you want to refresh the winget discovery list without running live upgrades.
 Use `-Kill` when a run is stuck; it stops matched Reparo process trees and then sweeps known updater front ends so orphaned `winget.exe` or similar package-manager processes are not left running. Reparo does not kill generic shells or installer engines by default; add extra process base names with `-KillUpdaterNames` when you intentionally want that broader cleanup.
 Use `-IgnoreTimeouts` when you explicitly want to suppress timeout enforcement even if timeout values are supplied.

@@ -21,7 +21,7 @@ $linuxContent = Get-Content -LiteralPath $linuxSource -Raw
 foreach ($entry in @(
     @{ Name = 'Version'; Pattern = "(?m)^REPARO_LINUX_VERSION='(?<Value>[^']+)'$"; Expected = $windowsVersion },
     @{ Name = 'Quote'; Pattern = '(?m)^REPARO_VERSION_QUOTE=(?<Delimiter>[''"])(?<Value>.+)\k<Delimiter>$'; Expected = $windowsQuote },
-    @{ Name = 'Quote source'; Pattern = "(?m)^REPARO_VERSION_SOURCE='(?<Value>[^']+)'$"; Expected = $windowsQuoteSource }
+    @{ Name = 'Quote source'; Pattern = '(?m)^REPARO_VERSION_SOURCE=(?<Delimiter>[''"])(?<Value>.+)\k<Delimiter>$'; Expected = $windowsQuoteSource }
 )) {
     if ($linuxContent -notmatch $entry.Pattern) { throw "Could not read native Linux Reparo $($entry.Name)." }
     $linuxValue = $matches.Value.Trim()

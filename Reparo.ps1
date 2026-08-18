@@ -132,7 +132,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.6.5'
+$script:ReparoVersion = '1.2.6.6'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -250,6 +250,7 @@ function Get-ReparoVersionFlavor {
         '1.2.6.3' = [pscustomobject]@{ Quote = 'The only winning move is not to play.'; Source = 'WarGames'; Art = '  SCANSNAP: vendor update landmine marked and bypassed' }
         '1.2.6.4' = [pscustomobject]@{ Quote = 'I say we take off and nuke the entire site from orbit. It''s the only way to be sure.'; Source = 'Aliens'; Art = '  WINGET: PowerShell dependency parasite cut loose from the airlock' }
         '1.2.6.5' = [pscustomobject]@{ Quote = 'I can''t lie to you about your chances, but... you have my sympathies.'; Source = 'Aliens'; Art = '  UPDATE: false failures spaced out the airlock' }
+        '1.2.6.6' = [pscustomobject]@{ Quote = 'Mostly harmless.'; Source = 'The Hitchhiker''s Guide to the Galaxy'; Art = '  DEBUG: forensic crumbs preserved for the postmortem' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -5230,6 +5231,7 @@ function Invoke-ReparoTimedCommand {
 
     if ($timedOut) {
         Write-ReparoLog ("[CMD-TIMEOUT] {0} timed out after {1}s elapsed={2}" -f $Section, $TimeoutSeconds, $stopwatch.Elapsed)
+        Write-ReparoLog ("[DIAGNOSTIC] Retained {0} artifacts after timeout: command={1}; output={2}" -f $Section, $commandScriptPath, $commandOutputPath)
         Write-ReparoEventLog -EventId 1201 -EntryType Warning -Message @"
 Reparo command timed out.
 
@@ -5251,7 +5253,15 @@ Log: $script:ReparoLogPath
 
     Write-ReparoLog ("[CMD-END] {0} exit={1} elapsed={2}" -f $Section, $process.ExitCode, $stopwatch.Elapsed)
     Write-ReparoDebug ("{0} completed with exit={1} elapsed={2} outputLines={3}" -f $Section, $process.ExitCode, $stopwatch.Elapsed, $output.Count)
-    Remove-Item -LiteralPath $commandOutputPath, $commandScriptPath -Force -ErrorAction SilentlyContinue
+    # Keep the original child script and raw output when an operator explicitly
+    # requests debug traces or when the section fails. The main log has a copy,
+    # but these artifacts preserve exact child-host behavior for forensic review.
+    if ($script:ReparoDebug -or $process.ExitCode -ne 0) {
+        Write-ReparoLog ("[DIAGNOSTIC] Retained {0} artifacts: command={1}; output={2}" -f $Section, $commandScriptPath, $commandOutputPath)
+    }
+    else {
+        Remove-Item -LiteralPath $commandOutputPath, $commandScriptPath -Force -ErrorAction SilentlyContinue
+    }
 
     [pscustomobject]@{
         TimedOut = $false
