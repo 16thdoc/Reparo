@@ -132,7 +132,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.6.7'
+$script:ReparoVersion = '1.2.6.8'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -252,6 +252,7 @@ function Get-ReparoVersionFlavor {
         '1.2.6.5' = [pscustomobject]@{ Quote = 'I can''t lie to you about your chances, but... you have my sympathies.'; Source = 'Aliens'; Art = '  UPDATE: false failures spaced out the airlock' }
         '1.2.6.6' = [pscustomobject]@{ Quote = 'Mostly harmless.'; Source = 'The Hitchhiker''s Guide to the Galaxy'; Art = '  DEBUG: forensic crumbs preserved for the postmortem' }
         '1.2.6.7' = [pscustomobject]@{ Quote = 'The logs have stopped screaming.'; Source = 'Reparo maintenance log'; Art = '  SUMMARY: exit-code ghosts tagged and filed' }
+        '1.2.6.8' = [pscustomobject]@{ Quote = 'There is no problem that cannot be solved with a well-placed semicolon.'; Source = 'Reparo maintenance log'; Art = '  WINGET: three-headed installer hydra classified' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -3187,6 +3188,17 @@ function Get-ReparoWingetNonElevatedSessionReason {
     return $null
 }
 
+function Get-ReparoWingetNotApplicableReason {
+    param([object[]]$Output)
+
+    $text = ($Output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+    if ($text -match '(?i)No applicable upgrade found|does not apply to your system or requirements') {
+        return 'Winget found a newer version, but it does not apply to this system or its current requirements.'
+    }
+
+    return $null
+}
+
 function Invoke-ReparoWingetRepair {
     if (Test-ReparoExecutable -Name 'winget' -Arguments @('--version')) {
         return $true
@@ -3483,6 +3495,7 @@ function New-ReparoWingetUpgradeQueueCommand {
     [void]$commands.Add("`$failedPackages = @()")
     [void]$commands.Add("`$manualPackages = @()")
     [void]$commands.Add("`$nonElevatedPackages = @()")
+    [void]$commands.Add("`$notApplicablePackages = @()")
     foreach ($update in $updates) {
         if ($excluded | Where-Object { $_ -ieq $update.Id }) {
             [void]$commands.Add(("Write-Host {0}" -f (ConvertTo-ReparoPowerShellLiteral -Value ("Skipping excluded winget package: {0}" -f $update.Id))))
@@ -3499,7 +3512,7 @@ function New-ReparoWingetUpgradeQueueCommand {
         [void]$commands.Add(("`$wingetOutput = @(winget upgrade --id {0} --exact --source {1} --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1)" -f $id, $source))
         [void]$commands.Add("`$wingetExitCode = `$LASTEXITCODE")
         [void]$commands.Add("`$wingetOutput | ForEach-Object { Write-Output `$_ }")
-        [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)installer cannot be run from an administrator context') { Write-Warning ('Winget package requires a non-elevated session: ' + " + $id + "); `$nonElevatedPackages += " + $id + " } else { `$failedPackages += " + $id + ' } }'))
+        [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)installer cannot be run from an administrator context') { Write-Warning ('Winget package requires a non-elevated session: ' + " + $id + "); `$nonElevatedPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)No applicable upgrade found|does not apply to your system or requirements') { Write-Warning ('Winget package is not applicable on this system: ' + " + $id + "); `$notApplicablePackages += " + $id + " } else { `$failedPackages += " + $id + ' } }'))
     }
 
     if ($commands.Count -eq 2) {
@@ -3508,6 +3521,7 @@ function New-ReparoWingetUpgradeQueueCommand {
 
     [void]$commands.Add("if (`$manualPackages.Count -gt 0) { Write-Warning ('Winget packages pending manual uninstall/reinstall: ' + (`$manualPackages -join ', ')) }")
     [void]$commands.Add("if (`$nonElevatedPackages.Count -gt 0) { Write-Warning ('Winget packages pending a non-elevated session: ' + (`$nonElevatedPackages -join ', ')) }")
+    [void]$commands.Add("if (`$notApplicablePackages.Count -gt 0) { Write-Warning ('Winget packages not applicable on this system: ' + (`$notApplicablePackages -join ', ')) }")
     [void]$commands.Add("if (`$failedPackages.Count -gt 0) { Write-Error ('winget upgrades failed: ' + (`$failedPackages -join ', ')); exit 1 }")
     # A child PowerShell host otherwise inherits the last winget process exit code,
     # including expected installer-technology migration failures we classified as manual.
@@ -5133,8 +5147,9 @@ function Write-ReparoSummaryNextSteps {
     $skipped = @($script:ReparoSummary['Skipped'].ToArray())
     $failed = @($script:ReparoSummary['Failed'].ToArray())
     $nonElevatedWinget = @($skipped | Where-Object { $_.Method -like 'winget*' -and $_.Reason -match 'non-elevated user session' })
+    $manualWinget = @($skipped | Where-Object { $_.Method -like 'winget*' -and $_.Reason -match 'manual uninstall/reinstall' })
 
-    if ($failed.Count -eq 0 -and $nonElevatedWinget.Count -eq 0 -and -not $script:ReparoPendingRebootDetected) {
+    if ($failed.Count -eq 0 -and $nonElevatedWinget.Count -eq 0 -and $manualWinget.Count -eq 0 -and -not $script:ReparoPendingRebootDetected) {
         return
     }
 
@@ -5145,6 +5160,13 @@ function Write-ReparoSummaryNextSteps {
     if ($nonElevatedWinget.Count -gt 0) {
         $packages = ($nonElevatedWinget | Select-Object -ExpandProperty Software -Unique) -join ', '
         $message = "Run Winget from a normal, non-elevated PowerShell session for: $packages. Command: reparo -Include Winget"
+        Write-Host ("  - {0}" -f $message)
+        Write-ReparoLog ("[SUMMARY] NEXT {0}" -f $message)
+    }
+
+    if ($manualWinget.Count -gt 0) {
+        $packages = ($manualWinget | Select-Object -ExpandProperty Software -Unique) -join ', '
+        $message = "Winget requires manual uninstall/reinstall for: $packages. Reparo left the installed software untouched."
         Write-Host ("  - {0}" -f $message)
         Write-ReparoLog ("[SUMMARY] NEXT {0}" -f $message)
     }
@@ -5443,6 +5465,7 @@ function Invoke-ReparoCommandStep {
                 Select-Object -Unique
         )
         $nonElevatedWingetReason = Get-ReparoWingetNonElevatedSessionReason -Output $output
+        $notApplicableWingetReason = Get-ReparoWingetNotApplicableReason -Output $output
         $nonElevatedWingetPackageIds = @(
             $output |
                 ForEach-Object { [regex]::Match([string]$_, 'Winget package requires a non-elevated session:\s*(?<Id>\S+)') } |
@@ -5450,6 +5473,7 @@ function Invoke-ReparoCommandStep {
                 ForEach-Object { $_.Groups['Id'].Value } |
                 Select-Object -Unique
         )
+        $notApplicableWingetPackageIds = @($output | ForEach-Object { [regex]::Match([string]$_, 'Winget package is not applicable on this system:\s*(?<Id>\S+)') } | Where-Object { $_.Success } | ForEach-Object { $_.Groups['Id'].Value } | Select-Object -Unique)
         if ($manualWingetReason) {
             Write-Warning $manualWingetReason
             Write-ReparoLog ("[WARN] {0}" -f $manualWingetReason)
@@ -5474,6 +5498,16 @@ function Invoke-ReparoCommandStep {
                 }
             }
             $pendingUpdates = @($pendingUpdates | Where-Object { $nonElevatedWingetPackageIds -notcontains $_.Id })
+        }
+
+        if ($notApplicableWingetReason) {
+            Write-Warning $notApplicableWingetReason
+            Write-ReparoLog ("[WARN] {0}" -f $notApplicableWingetReason)
+            foreach ($packageId in $notApplicableWingetPackageIds) {
+                $notApplicableUpdate = @($pendingUpdates | Where-Object { $_.Id -ieq $packageId } | Select-Object -First 1)
+                if ($notApplicableUpdate.Count -gt 0) { Add-ReparoSummaryRecord -Bucket Skipped -Software $notApplicableUpdate[0].Software -CurrentVersion $notApplicableUpdate[0].CurrentVersion -Version $notApplicableUpdate[0].Version -Method $notApplicableUpdate[0].Method -Reason 'newer version does not apply to this system or requirements' }
+            }
+            $pendingUpdates = @($pendingUpdates | Where-Object { $notApplicableWingetPackageIds -notcontains $_.Id })
         }
 
         if ($result.TimedOut) {
