@@ -459,15 +459,23 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 Expected shape:
 
 ```text
-Reparo 1.2.6.2
+Reparo 1.2.6.3
 Source: C:\ProgramData\Reparo\Reparo.ps1
-  "I have come here to chew bubblegum and kick ass... and I'm all out of bubblegum."
-  - They Live
+  "The only winning move is not to play."
+  - WarGames
 ```
 
 The quote body and source can change every release. The indentation, surrounding quote marks, and `  - Source` attribution line should not.
 
 ## App version checks and locks
+
+### ScanSnap protection
+
+Reparo skips package-manager updates whose package ID or display name matches
+`ScanSnap`, regardless of installed version. This protects mixed ScanSnap Home fleets
+from Reparo-managed Winget or Chocolatey updates; it does not suppress ScanSnap's own
+vendor updater or updates initiated by another management tool. This is intentionally
+Windows-only because ScanSnap is not part of the native Linux runner's package scope.
 
 Check an installed version:
 

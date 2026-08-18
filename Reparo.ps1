@@ -132,7 +132,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.6.2'
+$script:ReparoVersion = '1.2.6.3'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -247,6 +247,7 @@ function Get-ReparoVersionFlavor {
         '1.2.6.0' = [pscustomobject]@{ Quote = 'Sometimes, dead is better.'; Source = 'Pet Sematary'; Art = '  PKI: certificate crypt sealed; no resurrection clause' }
         '1.2.6.1' = [pscustomobject]@{ Quote = 'Get away from her, you bitch!'; Source = 'Aliens'; Art = '  RIPLEY: runtime-host installers ejected from the upgrade airlock' }
         '1.2.6.2' = [pscustomobject]@{ Quote = 'I have come here to chew bubblegum and kick ass... and I''m all out of bubblegum.'; Source = 'They Live'; Art = '  WINGET: escaped backtick imp vaporized with extreme prejudice' }
+        '1.2.6.3' = [pscustomobject]@{ Quote = 'The only winning move is not to play.'; Source = 'WarGames'; Art = '  SCANSNAP: vendor update landmine marked and bypassed' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -3426,6 +3427,12 @@ function New-ReparoWingetUpgradeQueueCommand {
             continue
         }
 
+        $protectedExclusion = Get-ReparoProtectedPackageExclusion -Id $update.Id -Software $update.Software
+        if ($protectedExclusion) {
+            [void]$commands.Add(("Write-Host {0}" -f (ConvertTo-ReparoPowerShellLiteral -Value ("Skipping protected package: {0} ({1}). {2}" -f $update.Software, $update.Id, $protectedExclusion.Reason))))
+            continue
+        }
+
         $id = ConvertTo-ReparoPowerShellLiteral -Value $update.Id
         [void]$commands.Add(("`$wingetOutput = @(winget upgrade --id {0} --exact --source {1} --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1)" -f $id, $source))
         [void]$commands.Add("`$wingetExitCode = `$LASTEXITCODE")
@@ -3540,6 +3547,25 @@ function Test-ReparoPackageVersionLocked {
         if (-not $packageMatches) { continue }
 
         return $lock
+    }
+
+    return $null
+}
+
+function Get-ReparoProtectedPackageExclusion {
+    param(
+        [AllowNull()][string]$Id,
+        [AllowNull()][string]$Software
+    )
+
+    # ScanSnap's vendor updater and package identities vary across client fleets.
+    # Reparo must never upgrade it merely because a package manager discovers it.
+    foreach ($exclusion in @(
+        [pscustomobject]@{ Pattern = '(?i)\bScanSnap\b'; Reason = 'ScanSnap is excluded from Reparo-managed updates.' }
+    )) {
+        if (($Id -and $Id -match $exclusion.Pattern) -or ($Software -and $Software -match $exclusion.Pattern)) {
+            return $exclusion
+        }
     }
 
     return $null
@@ -5684,8 +5710,10 @@ Invoke-ReparoCommandStep -Section 'Scoop' -PresenceCmd 'scoop' -Command $scoopCo
 
 $lockedChocoIds = @(Get-ReparoLockedPackageIds -Method 'choco')
 $chocoLockLiteral = '@({0})' -f ((@($lockedChocoIds | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))
+$protectedChocoPatternLiteral = ConvertTo-ReparoPowerShellLiteral -Value '(?i)\bScanSnap\b'
 $chocoCommand = @"
 `$lockedPackages = $chocoLockLiteral
+`$protectedPackagePattern = $protectedChocoPatternLiteral
 `$outdated = @(choco outdated --limit-output --no-color 2>`$null)
 if (`$LASTEXITCODE -ne 0) { throw "Chocolatey outdated query failed with exit code `$LASTEXITCODE" }
 `$eligiblePackages = 0
@@ -5695,6 +5723,10 @@ foreach (`$line in `$outdated) {
     if ([string]::IsNullOrWhiteSpace(`$packageId)) { continue }
     if (`$lockedPackages -contains `$packageId) {
         Write-Host "Skipping locked Chocolatey package: `$packageId"
+        continue
+    }
+    if (`$packageId -match `$protectedPackagePattern) {
+        Write-Host "Skipping protected ScanSnap Chocolatey package: `$packageId"
         continue
     }
 
