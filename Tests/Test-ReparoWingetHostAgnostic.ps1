@@ -22,11 +22,28 @@ foreach ($required in @(
     'Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe',
     'Repair-WinGetPackageManager is not supported by Windows PowerShell 5.1',
     'PowerShell 7 is not installed; no Microsoft.WinGet.Client repair was attempted',
-    'Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers -ErrorAction Stop',
-    "& `$pwshPath -NoProfile -ExecutionPolicy Bypass -Command `$repairCommand"
+    'Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ForceBootstrap -Scope AllUsers -Confirm:$false -ErrorAction Stop',
+    'Import-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction Stop',
+    'Install-Module -Name Microsoft.WinGet.Client -Force -AllowClobber -Scope AllUsers -Repository PSGallery -Confirm:$false -ErrorAction Stop',
+    "& `$pwshPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command `$repairCommand"
 )) {
     if (-not $body.Contains($required)) {
         throw "WinGet host-agnostic repair contract is absent: $required"
+    }
+}
+
+$installBlock = [regex]::Match($source, '(?s)if \(\$New\) \{.*?(?=if \(\$Kill\) \{)')
+if (-not $installBlock.Success) {
+    throw 'Could not locate the Reparo install path.'
+}
+
+foreach ($required in @(
+    "Join-Path `$env:ProgramData 'Reparo'",
+    "-File `$installedReparoPath -WingetDiscover -InstallNuGetProvider:`$InstallNuGetProvider",
+    '-NonInteractive'
+)) {
+    if (-not $installBlock.Value.Contains($required)) {
+        throw "Reparo install does not perform the unattended Winget repair/discovery contract: $required"
     }
 }
 

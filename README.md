@@ -95,19 +95,13 @@ reinstalling the exact damaged Pip version in the same user or machine scope, th
 retries the normal upgrade. Other Pip failures remain fatal and are reported without
 being disguised as metadata damage.
 
-Reparo uses tools already present, then skips unavailable sections. The exception is a missing WinGet: Reparo first re-registers the built-in App Installer using the host's native AppX tooling, which works in Windows PowerShell 5.1 and PowerShell 7. If that does not recover WinGet and PowerShell 7 is already installed, it may use `Microsoft.WinGet.Client` for a secondary repair; it never requires PowerShell 7 solely to run the normal AppX repair. The PS7 fallback explicitly bootstraps NuGet without prompting, so Ninja/SYSTEM runs remain unattended. Use `-7Zip` only when you explicitly want Reparo to install the `7zip.7zip` winget package if it is missing, or update it when present.
+Reparo uses tools already present, then skips unavailable sections. The exception is a missing WinGet: Reparo first re-registers the built-in App Installer using the host's native AppX tooling, which works in Windows PowerShell 5.1 and PowerShell 7. If that does not recover WinGet and PowerShell 7 is already installed, it may use `Microsoft.WinGet.Client` for a secondary repair; it never requires PowerShell 7 solely to run the normal AppX repair. The PS7 fallback explicitly bootstraps and imports NuGet with forced, noninteractive flags before installing its repair module, so Ninja/SYSTEM runs cannot hang at the PowerShellGet NuGet prompt. A normal `-Install`/`-New` at the ProgramData runtime also performs a Winget repair and discovery check after installing Reparo. Use `-7Zip` only when you explicitly want Reparo to install the `7zip.7zip` winget package if it is missing, or update it when present.
 
 Winget packages whose publisher changes installer technology are reported as pending a
-manual uninstall/reinstall; Reparo will not blindly remove user software or mark that
-expected manual step as a failed maintenance section. Chocolatey's enhanced exit code
-`2` means updates were found, not that discovery failed; Reparo accepts it and queues
-updates from `choco outdated` rather than `choco upgrade all`, so stale local package
-records whose source package has been removed do not fail the entire maintenance pass.
-Some Winget installers explicitly refuse an elevated session. Reparo reports those as
-skipped packages (not a failed Winget section) and prints the recovery command in the
-final summary. Run `reparo -Include Winget` from a normal, non-elevated PowerShell
-session for those packages; run `reparo -Include WindowsUpdate` from an elevated
-session when Windows Update is also needed.
+manual uninstall/reinstall; Reparo will not blindly remove user software. Chocolatey
+updates are queued from `choco outdated` rather than `choco upgrade all`, so stale
+local package records whose source package has been removed do not fail the entire
+maintenance pass.
 
 Install or update the live ProgramData copy from GitHub:
 
@@ -451,6 +445,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Tail` | Follows the active Reparo log when used by itself. When combined with a run mode, it prints the tail of that run's log at the end. |
 | `-TailLines <count>` | Controls how many existing log lines `-Tail` prints before following. Default: `400`. |
 | `-Time <when>` / `-At <when>` | Windows only. Creates a one-shot Task Scheduler task that runs the requested Reparo invocation as `SYSTEM` with highest privileges, then deletes itself. Clock inputs (`11:45pm`, `11pm`, `23:00`, `23:00:30`) use the next local occurrence. Delay inputs accept compact/long forms (`30s`, `30m`, `5h`, `2d`, `90min`) and positive decimals such as `1.5h`. Requires elevation. It rejects `-Preview`, `-Status`, `-Tail`, `-Kill`, `-Sweep`, and `-DeleteStale`. |
+| `-Task Daily <time>` / `-Task Hourly <interval>` | Creates or updates a persistent managed-update schedule. On Windows it is a SYSTEM Task Scheduler job; on Linux it is the current user's crontab entry. `reparo -Task Daily 6am` runs daily at 06:00. `reparo -Task Hourly 12hr` runs every 12 hours. With no maintenance switch it schedules `-Update`; append `-Force` to schedule the full pass. It rejects utility/install/preview modes. |
 | `-Syslog <host[:port]>` | Persistently sets and uses a TCP syslog listener. Default port is `514`, so `-Syslog 192.168.50.31` and `-Syslog 192.168.50.31:514` target the same port. Use `-Syslog off` or `-Syslog disable` to clear the saved target. |
 | `-Status` | Shows whether Reparo is currently running, points at the active log file, and prints the registry evidence behind any pending reboot flag. |
 | `-IgnoreTimeouts` | Disables timeout enforcement even when timeout parameters are supplied. |
@@ -468,10 +463,10 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 Expected shape:
 
 ```text
-Reparo 1.2.6.8
+Reparo 1.2.7.0
 Source: C:\ProgramData\Reparo\Reparo.ps1
-  "There is no problem that cannot be solved with a well-placed semicolon."
-  - Reparo maintenance log
+  "The future is not set. There is no fate but what we make."
+  - Terminator 2: Judgment Day
 ```
 
 The quote body and source can change every release. The indentation, surrounding quote marks, and `  - Source` attribution line should not.
@@ -680,7 +675,7 @@ Long-running child commands emit `[CMD-WAIT]` heartbeat lines while they are sti
 Use `-Tail` or its alias `-Log` to follow the active log when used by itself. When combined with a run mode, it prints the tail of the current run's log file at the end of execution.
 Use `-TailLines` to increase or reduce the initial tail window.
 Use `-Status` to see whether Reparo is currently running and which log file it is writing. The status probe excludes its own helper process so it does not report itself as the active run, and it will show stale `_RUNNING.log` files when a run ended before finalization.
-Use `-Debug` when you want extra trace lines in the log for mode selection, command launch details, and bootstrap behavior. It also preserves the generated child `*.command.ps1` and raw `*.out.log` artifacts beside the main run log. Reparo preserves those artifacts for any failed or timed-out section even without `-Debug`; ordinary successful sections clean them up. In Ninja, use `Ninja-Reparo-Force-Debug-Installed.ps1` to run an installed runtime with `-Force -Debug` and refresh the device version field.
+Use `-Debug` when you want extra trace lines in the log for mode selection, command launch details, and bootstrap behavior. In Ninja, the wrapper now forwards `-Debug` through to Reparo.
 Use `-WingetDiscover` when you want to refresh the winget discovery list without running live upgrades.
 Use `-Kill` when a run is stuck; it stops matched Reparo process trees and then sweeps known updater front ends so orphaned `winget.exe` or similar package-manager processes are not left running. Reparo does not kill generic shells or installer engines by default; add extra process base names with `-KillUpdaterNames` when you intentionally want that broader cleanup.
 Use `-IgnoreTimeouts` when you explicitly want to suppress timeout enforcement even if timeout values are supplied.

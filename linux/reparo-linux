@@ -6,9 +6,9 @@ set -u
 umask 077
 
 # Native and Windows runners share one Reparo release number and version flavor.
-REPARO_LINUX_VERSION='1.2.6.9'
-REPARO_VERSION_QUOTE="The truth is out there. The logs are right here."
-REPARO_VERSION_SOURCE="Reparo maintenance log"
+REPARO_LINUX_VERSION='1.2.7.0'
+REPARO_VERSION_QUOTE='The future is not set. There is no fate but what we make.'
+REPARO_VERSION_SOURCE='Terminator 2: Judgment Day'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
@@ -28,6 +28,7 @@ Reparo Linux - native maintenance runner
 Usage:
   reparo [--update] [--preview] [--force] [--include SECTION ...]
   reparo --new | --install | --status | --kill | --tail [--tail-lines COUNT]
+  reparo --task daily 6am | --task hourly 12hr
   reparo --version | --help
 
 Modes:
@@ -44,6 +45,11 @@ Modes:
   --tail                   Follow the newest Reparo Linux log.
   --tail-lines COUNT       Print this many lines before following a log. Default: 120.
   --new / --install        Download and run the native Linux installer.
+  --task DAILY TIME         Create/update this user's cron entry for `reparo --update`
+                            every day at TIME (for example `6am` or `18:30`).
+  --task HOURLY INTERVAL    Create/update this user's cron entry at a whole-hour
+                            interval (for example `1hr` or `12hr`). Add --force to
+                            schedule the full developer-tool pass instead.
   --version                Show the shared Reparo release identity.
   --help                   Show this help.
 
@@ -145,6 +151,49 @@ run_native_installer() {
     if sh "$bootstrap_path" --verbose; then status=0; else status=$?; fi
     rm -rf "$bootstrap_dir"
     return "$status"
+}
+
+configure_persistent_task() {
+    command_exists crontab || die 'crontab is required to create a Linux Reparo task'
+    [ "$TASK_COUNT" -eq 2 ] || die '--task needs exactly a frequency and time/interval; use --task daily 6am or --task hourly 12hr'
+
+    frequency=$(printf '%s' "$TASK_FREQUENCY" | tr '[:upper:]' '[:lower:]')
+    value=$TASK_VALUE
+    case "$frequency" in
+        daily)
+            clock=$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')
+            case "$clock" in
+                12am) cron_hour=0; cron_minute=0 ;;
+                12pm) cron_hour=12; cron_minute=0 ;;
+                [1-9]am|1[0-1]am) cron_hour=${clock%am}; cron_minute=0 ;;
+                [1-9]pm|1[0-1]pm) cron_hour=$(( ${clock%pm} + 12 )); cron_minute=0 ;;
+                [0-1][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9]) cron_hour=${clock%:*}; cron_minute=${clock#*:} ;;
+                *) die '--task daily needs a clock time such as 6am or 18:30' ;;
+            esac
+            cron_schedule="$cron_minute $cron_hour * * *"
+            ;;
+        hourly)
+            hours=${value%hr}
+            case "$value" in *hr) ;; *) die '--task hourly needs a whole-hour interval such as 1hr or 12hr' ;; esac
+            case "$hours" in ''|*[!0-9]*) die '--task hourly interval must be a whole number of hours' ;; esac
+            [ "$hours" -ge 1 ] && [ "$hours" -le 23 ] || die '--task hourly intervals must be from 1hr through 23hr'
+            cron_schedule="0 */$hours * * *"
+            ;;
+        *) die "Unsupported --task frequency: $TASK_FREQUENCY (use daily or hourly)" ;;
+    esac
+
+    runner=$0
+    case "$runner" in /*) ;; *) runner=$(command -v reparo 2>/dev/null || printf '%s' "$runner") ;; esac
+    case "$runner" in /*) ;; *) die 'Cannot determine an absolute reparo path for cron; run the installed reparo command' ;; esac
+    scheduled_action='--update'
+    [ "$FORCE" -eq 1 ] && scheduled_action='--force'
+    marker='# Reparo managed task'
+    temp_crontab=$(mktemp "${TMPDIR:-/tmp}/reparo-crontab.XXXXXX") || die 'Cannot create temporary crontab'
+    (crontab -l 2>/dev/null || true) | grep -F -v "$marker" >"$temp_crontab" || true
+    printf '%s %s %s %s\n' "$cron_schedule" "$runner" "$scheduled_action" "$marker" >>"$temp_crontab"
+    crontab "$temp_crontab" || { rm -f "$temp_crontab"; die 'Could not install the Reparo crontab entry'; }
+    rm -f "$temp_crontab"
+    printf '%s\n' "Created/updated user cron task: $cron_schedule $runner $scheduled_action"
 }
 
 normalize_section() {
@@ -475,6 +524,12 @@ parse_args() {
             tail|t|log) ACTION=tail ;;
             version|v) ACTION=version ;;
             new|n|install|i) ACTION=install ;;
+            task)
+                ACTION=task
+                shift; [ "$#" -gt 0 ] || die '--task needs a frequency'
+                TASK_FREQUENCY=$1; TASK_COUNT=1
+                shift; [ "$#" -gt 0 ] || die '--task needs a time or interval'
+                TASK_VALUE=$1; TASK_COUNT=2 ;;
             help|h) ACTION=help ;;
             tail-lines|taillines|tl)
                 shift; [ "$#" -gt 0 ] || die '--tail-lines needs a positive number'
@@ -500,6 +555,9 @@ parse_args() {
 }
 
 ACTION=update
+TASK_FREQUENCY=''
+TASK_VALUE=''
+TASK_COUNT=0
 parse_args "$@"
 build_protected_processes
 case "$ACTION" in
@@ -512,6 +570,7 @@ case "$ACTION" in
         exit 0
         ;;
     install) run_native_installer; exit $? ;;
+    task) configure_persistent_task; exit $? ;;
     status) show_status; exit 0 ;;
     kill) kill_reparo_processes; exit 0 ;;
     tail) tail_log; exit 0 ;;
