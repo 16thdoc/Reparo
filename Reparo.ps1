@@ -18,8 +18,10 @@ param(
     [switch]$Help,
     [Alias('V')]
     [switch]$Version,
-    [Alias('Install', 'N')]
+    [switch]$Install,
     [switch]$New,
+    [Alias('N')]
+    [switch]$Latest,
     [Alias('P')]
     [switch]$Preview,
     [Alias('WU')]
@@ -133,7 +135,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.2.7.0'
+$script:ReparoVersion = '1.3.0.0'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -256,6 +258,8 @@ function Get-ReparoVersionFlavor {
         '1.2.6.8' = [pscustomobject]@{ Quote = 'There is no problem that cannot be solved with a well-placed semicolon.'; Source = 'Reparo maintenance log'; Art = '  WINGET: three-headed installer hydra classified' }
         '1.2.6.9' = [pscustomobject]@{ Quote = 'The truth is out there. The logs are right here.'; Source = 'Reparo maintenance log'; Art = '  LEDGER: skipped packages removed from the victory parade' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
+        '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
+        '1.3.0.0' = [pscustomobject]@{ Quote = 'Before we get started, does anyone want to get out?'; Source = 'Aliens'; Art = '  DROP SHIP: offline install, pinned release, and recovery ladder locked in' }
     }
 
     if ($versionFlavors.ContainsKey($Version)) {
@@ -513,7 +517,9 @@ Usage:
   reparo -Kill
   reparo -Kill -KillUpdaterNames winget msiexec
   reparo -Update
-  reparo -Install
+  reparo -Install                 # offline self-install from this Reparo.ps1
+  reparo -New                     # reviewed manifest-pinned release
+  reparo -N                       # newest main, intentionally unpinned
    reparo -11
    reparo -7
   reparo -Preview -Update
@@ -599,7 +605,9 @@ Modes:
   -Syslog <host[:port]> Persistently set and use a TCP syslog listener. Default port: 514.
                        Example: -Syslog 192.168.50.31:514
                        Use -Syslog off or -Syslog disable to clear the saved target.
-  -Install, -New        Install/update C:\ProgramData\Reparo\Reparo.ps1 with parse validation.
+   -Install,-I           Offline: install this executing Reparo.ps1 into ProgramData.
+   -New                  Install/update the reviewed manifest-pinned release.
+   -N,-Latest            Install/update directly from main; intentionally unpinned.
    -Force               Run all sections except PowerShell 7, including developer toolchains and WSL apt handling.
                         Use -7 explicitly for the PowerShell 7 MSI update.
   -Kill                Stop running Reparo PowerShell processes and known updater front ends.
@@ -2584,7 +2592,9 @@ Log: $script:ReparoLogPath
 
 function Test-ReparoOperationalModeRequested {
     $modeParameters = @(
+        'Install',
         'New',
+        'Latest',
         'Kill',
         'Status',
         'Sweep',
@@ -2640,8 +2650,29 @@ if (Invoke-ReparoPersistentTask) {
     return
 }
 
-if ($New) {
-    Invoke-ReparoNew -TargetRoot $InstallRoot -Url $SourceUrl -SkipBackup:$NoBackup -WhatIfOnly:$Preview
+if ($Install -or $New -or $Latest) {
+    $installSource = $null
+    $installMode = if ($Install) { 'offline self-install' } elseif ($New) { 'reviewed pinned release' } else { 'latest main (unpinned)' }
+    if ($Install) {
+        $installSource = $PSCommandPath
+    }
+    elseif ($New) {
+        $manifestUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/refs/heads/main/deploy/reparo-release.json'
+        try {
+            $manifest = Invoke-RestMethod -Uri $manifestUrl -Headers @{ 'User-Agent' = 'Reparo' } -UseBasicParsing -ErrorAction Stop
+            if ($manifest.commit -notmatch '^[0-9a-f]{40}$' -or $manifest.reparoUrl -ne ('https://raw.githubusercontent.com/16thdoc/Reparo/{0}/Reparo.ps1' -f $manifest.commit)) {
+                throw 'Release manifest is not pinned to a valid immutable Reparo source commit.'
+            }
+            $installSource = [string]$manifest.reparoUrl
+        }
+        catch { throw "Unable to resolve the reviewed Reparo release: $($_.Exception.Message)" }
+    }
+    else {
+        $installSource = $SourceUrl
+    }
+
+    Write-Info "Reparo install mode: $installMode"
+    Invoke-ReparoNew -TargetRoot $InstallRoot -Url $installSource -SkipBackup:$NoBackup -WhatIfOnly:$Preview
 
     # A normal ProgramData install is also the best moment to repair a missing or
     # broken App Installer. Use the freshly installed runtime so the repair path is
@@ -3010,6 +3041,28 @@ Log: $script:ReparoLogPath
     }
 }
 
+function Resolve-ReparoPowerShell7Path {
+    $programFilesRoot = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
+    $machinePwsh = Join-Path $programFilesRoot 'PowerShell\7\pwsh.exe'
+    if (Test-Path -LiteralPath $machinePwsh -PathType Leaf) { return $machinePwsh }
+    $pwshCommand = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($pwshCommand) { return $pwshCommand.Source }
+    return $null
+}
+
+function Install-ReparoPowerShell7ForWingetRepair {
+    if (-not (Test-ReparoCurrentProcessElevated)) {
+        Write-ReparoLog '[WARN] PowerShell 7 is absent and Winget repair cannot install it without elevation.'
+        return $null
+    }
+
+    Write-ReparoLog '[ACTION] Winget repair escalation: installing the official PowerShell 7 MSI directly.'
+    $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath -PowerShell7Only -LogRoot $LogRoot 2>&1)
+    foreach ($line in $output) { if (-not [string]::IsNullOrWhiteSpace([string]$line)) { Write-ReparoLog ("[POWERSHELL7-REPAIR] {0}" -f $line) } }
+    if ($LASTEXITCODE -ne 0) { Write-ReparoLog ("[WARN] PowerShell 7 repair escalation exited with code {0}." -f $LASTEXITCODE) }
+    return Resolve-ReparoPowerShell7Path
+}
+
 function Ensure-ReparoWinget {
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-ReparoDebug 'winget already available.'
@@ -3063,16 +3116,10 @@ Log: $script:ReparoLogPath
             $pwshPath = (Get-Process -Id $PID).Path
         }
         else {
-            $programFilesRoot = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
-            $machinePwsh = Join-Path $programFilesRoot 'PowerShell\7\pwsh.exe'
-            if (Test-Path -LiteralPath $machinePwsh -PathType Leaf) {
-                $pwshPath = $machinePwsh
-            }
-            else {
-                $pwshCommand = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-                if ($pwshCommand) { $pwshPath = $pwshCommand.Source }
-            }
+            $pwshPath = Resolve-ReparoPowerShell7Path
         }
+
+        if (-not $pwshPath) { $pwshPath = Install-ReparoPowerShell7ForWingetRepair }
 
         if ($pwshPath) {
             Write-ReparoLog ("[ACTION] Attempting Microsoft.WinGet.Client repair through PowerShell 7: {0}" -f $pwshPath)
@@ -5882,10 +5929,13 @@ try {
     Write-Host "Installing PowerShell 7 machine-wide MSI: `$latestVersionText"
     Invoke-WebRequest -Uri `$asset.browser_download_url -OutFile `$msiPath -UseBasicParsing
 
-    `$msiArguments = "/package ```"`$msiPath```" /quiet /norestart ADD_PATH=1 REGISTER_MANIFEST=1 USE_MU=1 ENABLE_MU=1"
-    `$installer = Start-Process -FilePath 'msiexec.exe' -ArgumentList `$msiArguments -Wait -PassThru
-    if (`$installer.ExitCode -notin @(0, 3010)) {
-        throw "PowerShell MSI installation failed with exit code `$(`$installer.ExitCode)."
+    # Invoke msiexec directly rather than through Start-Process. It gives the child
+    # runner a definitive exit code and avoids console-handle weirdness after DONE.
+    `$msiArguments = @('/i', `$msiPath, '/quiet', '/norestart', 'ADD_PATH=1', 'REGISTER_MANIFEST=1', 'USE_MU=1', 'ENABLE_MU=1')
+    & msiexec.exe @msiArguments
+    `$msiExitCode = `$LASTEXITCODE
+    if (`$msiExitCode -notin @(0, 3010)) {
+        throw "PowerShell MSI installation failed with exit code `$msiExitCode."
     }
 }
 finally {

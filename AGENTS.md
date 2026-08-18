@@ -13,10 +13,9 @@ identity and version-output flavor synchronized.
 
 Before publishing or deploying a Windows fleet release, review the source and
 deployment changes, assess Windows/native Linux parity, and run the relevant tests.
-After changing `Reparo.ps1`, regenerate the embedded Ninja and ScreenConnect
-artifacts with `deploy\New-NinjaEmbeddedDeployment.ps1`.
+After changing `Reparo.ps1`, update the release manifest and test the canonical
+single-script offline install path; RMM wrapper artifacts are intentionally retired.
 
-Inspect `git status` and `git diff` before committing. Commit regenerated artifacts
-and relevant documentation with their source change; do not leave stale generated
-deployment artifacts behind. Push the reviewed release, then pilot the normal
-deployment artifact before broad rollout.
+Inspect `git status` and `git diff` before committing. Commit the source, release
+manifest, and relevant documentation together. Push the reviewed release, then pilot
+the canonical `Reparo.ps1 -Install` path before broad rollout.

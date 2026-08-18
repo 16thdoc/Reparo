@@ -13,7 +13,7 @@ $originalMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 function Invoke-ReparoNewTest {
     param([Parameter(Mandatory)][string]$CandidatePath, [switch]$ExpectFailure)
 
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sourcePath -New -SourceUrl $CandidatePath -InstallRoot $installRoot -LogRoot $logRoot
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sourcePath -Latest -SourceUrl $CandidatePath -InstallRoot $installRoot -LogRoot $logRoot
     $exitCode = $LASTEXITCODE
     if ($ExpectFailure -and $exitCode -eq 0) { throw 'Broken candidate unexpectedly deployed successfully.' }
     if (-not $ExpectFailure -and $exitCode -ne 0) { throw "Known-good candidate failed deployment with exit code $exitCode." }
@@ -21,6 +21,9 @@ function Invoke-ReparoNewTest {
 
 try {
     New-Item -ItemType Directory -Path $testRoot | Out-Null
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sourcePath -Install -InstallRoot $installRoot -LogRoot $logRoot
+    if ($LASTEXITCODE -ne 0) { throw "Offline -Install failed with exit code $LASTEXITCODE." }
+    if (-not (Test-Path -LiteralPath (Join-Path $installRoot 'Reparo.ps1') -PathType Leaf)) { throw 'Offline -Install did not create the runtime.' }
     Invoke-ReparoNewTest -CandidatePath $sourcePath
 
     $installedPath = Join-Path $installRoot 'Reparo.ps1'
@@ -37,7 +40,7 @@ try {
     $finalHash = (Get-FileHash -LiteralPath $installedPath -Algorithm SHA256).Hash
     if ($finalHash -ne $baselineHash) { throw 'Failed deployment did not restore the previous runtime.' }
 
-    Write-Host 'Reparo transactional -New integration test passed.' -ForegroundColor Green
+    Write-Host 'Reparo transactional -Latest integration test passed.' -ForegroundColor Green
 }
 finally {
     [Environment]::SetEnvironmentVariable('Path', $originalUserPath, 'User')

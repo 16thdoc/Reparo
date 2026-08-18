@@ -95,7 +95,7 @@ reinstalling the exact damaged Pip version in the same user or machine scope, th
 retries the normal upgrade. Other Pip failures remain fatal and are reported without
 being disguised as metadata damage.
 
-Reparo uses tools already present, then skips unavailable sections. The exception is a missing WinGet: Reparo first re-registers the built-in App Installer using the host's native AppX tooling, which works in Windows PowerShell 5.1 and PowerShell 7. If that does not recover WinGet and PowerShell 7 is already installed, it may use `Microsoft.WinGet.Client` for a secondary repair; it never requires PowerShell 7 solely to run the normal AppX repair. The PS7 fallback explicitly bootstraps and imports NuGet with forced, noninteractive flags before installing its repair module, so Ninja/SYSTEM runs cannot hang at the PowerShellGet NuGet prompt. A normal `-Install`/`-New` at the ProgramData runtime also performs a Winget repair and discovery check after installing Reparo. Use `-7Zip` only when you explicitly want Reparo to install the `7zip.7zip` winget package if it is missing, or update it when present.
+Reparo uses tools already present, then skips unavailable sections. For a missing WinGet it re-registers App Installer, repairs it through `Microsoft.WinGet.Client` when PowerShell 7 is present, and—only when elevated/SYSTEM—installs the official PowerShell 7 MSI directly as the next repair rung before retrying. NuGet bootstrap/import and every repair child host are forced noninteractive. A normal ProgramData install also performs Winget repair/discovery after installing Reparo. Use `-7Zip` only when you explicitly want Reparo to install the `7zip.7zip` winget package if it is missing, or update it when present.
 
 Winget packages whose publisher changes installer technology are reported as pending a
 manual uninstall/reinstall; Reparo will not blindly remove user software. Chocolatey
@@ -103,7 +103,7 @@ updates are queued from `choco outdated` rather than `choco upgrade all`, so sta
 local package records whose source package has been removed do not fail the entire
 maintenance pass.
 
-Install or update the live ProgramData copy from GitHub:
+Install the currently staged `Reparo.ps1` into ProgramData without a network request:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Install
@@ -135,6 +135,11 @@ reparo -Search
 reparo -List
 reparo -Search git
 ```
+
+Lifecycle commands are deliberately distinct: `reparo -Install` installs the currently
+executing file offline; `reparo -New` downloads the reviewed immutable release pinned in
+`deploy/reparo-release.json`; `reparo -N` / `reparo -Latest` downloads the current `main`
+copy intentionally without a release pin.
 
 Preview the managed-client update pass:
 
@@ -189,11 +194,9 @@ Recommended rollout pattern:
 
 ## Deployment integrity
 
-The generated Ninja and ScreenConnect artifacts carry a SHA-256 hash of their bundled
-Reparo payload and refuse to install it if the extracted bytes do not match. GitHub
-updates use the repository source URL configured by the deployment artifact. Follow
-`RELEASE.md` when publishing a fleet release; consolidated Ninja/ScreenConnect
-instructions are in `deploy/RMM-Operator-Guide.md`.
+Reparo's canonical deployment is the single `Reparo.ps1` source file followed by
+`-Install`; retired Ninja and ScreenConnect wrappers are intentionally absent. Follow
+`RELEASE.md` when publishing a pinned release for `-New`.
 
 ### Ninja deployment options
 
