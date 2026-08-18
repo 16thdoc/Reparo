@@ -3210,8 +3210,22 @@ Repair-WinGetPackageManager -Force -Latest -ErrorAction Stop
         throw 'winget is still unavailable after repair/registration.'
     }
     catch {
-        Write-ReparoLog ("[WARN] winget repair/registration failed: {0}" -f $_.Exception.Message)
-        Write-ReparoDebug ("winget repair path failed: {0}" -f $_.Exception.Message)
+        $detail = ($_ | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = $_.Exception.Message }
+        Write-ReparoLog ("[WARN] winget repair/registration failed: {0}" -f $detail)
+        Write-ReparoDebug ("winget repair path failed: {0}" -f $detail)
+        # NuGet/PowerShellGet itself is often the broken dependency. Do not let that
+        # secondary repair lane prevent the independent direct App Installer fallback.
+        try {
+            Write-ReparoLog '[ACTION] Attempting direct App Installer fallback after repair-lane failure.'
+            if (Invoke-ReparoWingetRepair) {
+                Write-ReparoLog '[DONE] winget repaired through the direct App Installer fallback after repair-lane failure.'
+                return $true
+            }
+        }
+        catch {
+            Write-ReparoLog ("[WARN] Direct App Installer fallback failed: {0}" -f (($_ | Out-String).Trim()))
+        }
         Write-ReparoEventLog -EventId 1522 -EntryType Warning -Message @"
 Reparo repair failed: winget.
 
