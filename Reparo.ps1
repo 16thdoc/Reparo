@@ -22,6 +22,7 @@ param(
     [switch]$New,
     [Alias('N')]
     [switch]$Latest,
+    [switch]$Ninja,
     [Alias('P')]
     [switch]$Preview,
     [Alias('WU')]
@@ -872,6 +873,27 @@ function Set-ReparoWingetHealth {
         }
         catch { Write-ReparoLog ("[WARN] Unable to update Ninja Reparo field: {0}" -f $_.Exception.Message) }
     }
+}
+
+function Update-ReparoNinjaField {
+    $status = 'UNKNOWN'
+    if (Test-Path -LiteralPath $script:ReparoWingetHealthPath) {
+        try {
+            $health = Get-Content -LiteralPath $script:ReparoWingetHealthPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            if ($health.Status -in @('OK', 'USER', 'FAIL')) { $status = $health.Status }
+        }
+        catch { Write-ReparoLog ("[WARN] Unable to read Winget health state: {0}" -f $_.Exception.Message) }
+    }
+    $value = "{0} | WG:{1}" -f $script:ReparoVersion, $status
+    $setter = Get-Command Ninja-Property-Set -ErrorAction SilentlyContinue
+    if (-not $setter) {
+        Write-Info "Ninja-Property-Set is unavailable; would publish: $value"
+        return $false
+    }
+    & $setter.Name -Name 'Reparo' -Value $value
+    Write-Done "Ninja Reparo field updated: $value"
+    Write-ReparoLog "[NINJA] Reparo field updated: $value"
+    return $true
 }
 $script:ReparoSyslogConfiguredThisRun = $false
 
@@ -2711,6 +2733,12 @@ if (Invoke-ReparoSchedule) {
 }
 
 if (Invoke-ReparoPersistentTask) {
+    return
+}
+
+if ($Ninja) {
+    Update-ReparoNinjaField | Out-Null
+    Complete-ReparoUtilityLog -Status 'COMPLETE'
     return
 }
 
