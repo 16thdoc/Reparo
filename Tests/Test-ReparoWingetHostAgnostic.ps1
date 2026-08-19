@@ -25,7 +25,10 @@ foreach ($required in @(
     'Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ForceBootstrap -Scope AllUsers -Confirm:$false -ErrorAction Stop',
     'Import-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction Stop',
     'Install-Module -Name Microsoft.WinGet.Client -Force -AllowClobber -Scope AllUsers -Repository PSGallery -Confirm:$false -ErrorAction Stop',
-    "& `$pwshPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command `$repairCommand"
+    "& `$pwshPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command `$repairCommand",
+    "`$requiresInteractiveUser = ((`$detail -match '(?i)Local System account is not allowed') -or (`$appxRegistrationError -match '(?i)Local System account is not allowed'))",
+    "Set-ReparoWingetHealth -Status USER -Detail 'App Installer deployment requires an interactive user context; SYSTEM cannot perform this AppX operation.'",
+    "Write-ReparoLog '[SKIP] Direct App Installer fallback skipped because Local System cannot perform this AppX operation.'"
 )) {
     if (-not $body.Contains($required)) {
         throw "WinGet host-agnostic repair contract is absent: $required"

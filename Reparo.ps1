@@ -142,7 +142,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.0.8'
+$script:ReparoVersion = '1.3.0.9'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -272,6 +272,7 @@ function Get-ReparoVersionFlavor {
         '1.3.0.6' = [pscustomobject]@{ Quote = 'A dream is not the same as a plan.'; Source = 'Reparo maintenance log'; Art = '  NINJA: installed version sent to the device ledger' }
         '1.3.0.7' = [pscustomobject]@{ Quote = 'The cache is a lie.'; Source = 'Reparo maintenance log'; Art = '  MANIFEST: stale ghosts evicted from the release channel' }
         '1.3.0.8' = [pscustomobject]@{ Quote = 'The truth is in the logs.'; Source = 'Reparo maintenance log'; Art = '  WINGET: health check raised from the dead' }
+        '1.3.0.9' = [pscustomobject]@{ Quote = 'The first rule of bureaucracy is: blame the user.'; Source = 'Reparo maintenance log'; Art = '  SYSTEM: wrong sacrificial context detected' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -3369,8 +3370,11 @@ Repair-WinGetPackageManager -Force -Latest -ErrorAction Stop
         if ([string]::IsNullOrWhiteSpace($detail)) { $detail = $_.Exception.Message }
         Write-ReparoLog ("[WARN] winget repair/registration failed: {0}" -f $detail)
         Write-ReparoDebug ("winget repair path failed: {0}" -f $detail)
-        if ($detail -match '(?i)Local System account is not allowed') {
+        $requiresInteractiveUser = (($detail -match '(?i)Local System account is not allowed') -or ($appxRegistrationError -match '(?i)Local System account is not allowed'))
+        if ($requiresInteractiveUser) {
             Set-ReparoWingetHealth -Status USER -Detail 'App Installer deployment requires an interactive user context; SYSTEM cannot perform this AppX operation.'
+            Write-ReparoLog '[SKIP] Direct App Installer fallback skipped because Local System cannot perform this AppX operation.'
+            return $false
         }
         # NuGet/PowerShellGet itself is often the broken dependency. Do not let that
         # secondary repair lane prevent the independent direct App Installer fallback.
