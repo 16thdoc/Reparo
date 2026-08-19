@@ -141,7 +141,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.0.4'
+$script:ReparoVersion = '1.3.0.5'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -267,6 +267,7 @@ function Get-ReparoVersionFlavor {
         '1.3.0.2' = [pscustomobject]@{ Quote = 'Every ghost has properties if you know where to look.'; Source = 'Reparo maintenance log'; Art = '  SCOOP: object specter parsed without a séance' }
         '1.3.0.3' = [pscustomobject]@{ Quote = 'The machine is alive; it is merely being quiet about it.'; Source = 'Reparo maintenance log'; Art = '  WU: heartbeat monitor wired into the crypt' }
         '1.3.0.4' = [pscustomobject]@{ Quote = 'Tuesday belongs to the patch goblins now.'; Source = 'Reparo maintenance log'; Art = '  CLOCK: self-update ritual scheduled for the weekly haunt' }
+        '1.3.0.5' = [pscustomobject]@{ Quote = 'I know this; it''s Unix.'; Source = 'Jurassic Park'; Art = '  UNIX: patch daemon finds its way through the velociraptor enclosure' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
