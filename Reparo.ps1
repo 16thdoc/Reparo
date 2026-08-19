@@ -141,7 +141,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.0.1'
+$script:ReparoVersion = '1.3.0.2'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -264,6 +264,7 @@ function Get-ReparoVersionFlavor {
         '1.2.6.8' = [pscustomobject]@{ Quote = 'There is no problem that cannot be solved with a well-placed semicolon.'; Source = 'Reparo maintenance log'; Art = '  WINGET: three-headed installer hydra classified' }
         '1.2.6.9' = [pscustomobject]@{ Quote = 'The truth is out there. The logs are right here.'; Source = 'Reparo maintenance log'; Art = '  LEDGER: skipped packages removed from the victory parade' }
         '1.3.0.1' = [pscustomobject]@{ Quote = 'The dead speak only when you put the braces back.'; Source = 'Reparo maintenance log'; Art = '  BRACES: orphaned else returned to its crypt' }
+        '1.3.0.2' = [pscustomobject]@{ Quote = 'Every ghost has properties if you know where to look.'; Source = 'Reparo maintenance log'; Art = '  SCOOP: object specter parsed without a séance' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -3720,6 +3721,26 @@ function Get-ReparoPendingUpdates {
                 $output = @(scoop status 2>&1)
                 $updates = New-Object System.Collections.Generic.List[object]
                 foreach ($item in $output) {
+                    # Scoop 0.5.3 emits PSCustomObjects with spaced property names;
+                    # consume those directly instead of parsing their @{...} display text.
+                    $nameProperty = $item.PSObject.Properties['Name']
+                    $installedProperty = $item.PSObject.Properties['Installed Version']
+                    $availableProperty = $item.PSObject.Properties['Latest Version']
+                    if ($nameProperty -and $installedProperty -and $availableProperty) {
+                        $name = ([string]$nameProperty.Value).Trim()
+                        $installed = ([string]$installedProperty.Value).Trim()
+                        $available = ([string]$availableProperty.Value).Trim()
+                        if (-not [string]::IsNullOrWhiteSpace($name) -and -not [string]::IsNullOrWhiteSpace($installed) -and -not [string]::IsNullOrWhiteSpace($available)) {
+                            [void]$updates.Add([pscustomobject]@{
+                                Software       = $name
+                                CurrentVersion = $installed
+                                Version        = $available
+                                Method         = 'scoop'
+                            })
+                        }
+                        continue
+                    }
+
                     $line = ([string]$item).Trim()
                     if ([string]::IsNullOrWhiteSpace($line)) { continue }
                     if ($line -match '^(Name|[-]+)\s+') { continue }
