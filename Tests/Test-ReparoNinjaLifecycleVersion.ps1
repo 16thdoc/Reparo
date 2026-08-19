@@ -11,7 +11,9 @@ foreach ($required in @(
     'function Publish-ReparoInstalledNinjaVersion',
     'param([string]$Version = $script:ReparoVersion)',
     'return Update-ReparoNinjaField -Version $matches.Version.Trim()',
-    'Publish-ReparoInstalledNinjaVersion -TargetRoot $InstallRoot | Out-Null'
+    'Publish-ReparoInstalledNinjaVersion -TargetRoot $InstallRoot | Out-Null',
+    "[Alias('WG')]`n    [switch]`$WingetHealth",
+    '$WingetDiscover = $true'
 )) {
     if (-not $source.Contains($required)) {
         throw "Ninja lifecycle version publishing contract is absent: $required"

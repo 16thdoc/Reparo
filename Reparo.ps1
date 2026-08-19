@@ -37,10 +37,11 @@ param(
     [switch]$WslApt,
     [Alias('U')]
     [switch]$Update,
-    [Alias('WG')]
     [switch]$Winget,
     [Alias('WD')]
     [switch]$WingetDiscover,
+    [Alias('WG')]
+    [switch]$WingetHealth,
     [Alias('List', 'L')]
     [switch]$Search,
     [Alias('VL')]
@@ -141,7 +142,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.0.7'
+$script:ReparoVersion = '1.3.0.8'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -270,6 +271,7 @@ function Get-ReparoVersionFlavor {
         '1.3.0.5' = [pscustomobject]@{ Quote = 'I know this; it''s Unix.'; Source = 'Jurassic Park'; Art = '  UNIX: patch daemon finds its way through the velociraptor enclosure' }
         '1.3.0.6' = [pscustomobject]@{ Quote = 'A dream is not the same as a plan.'; Source = 'Reparo maintenance log'; Art = '  NINJA: installed version sent to the device ledger' }
         '1.3.0.7' = [pscustomobject]@{ Quote = 'The cache is a lie.'; Source = 'Reparo maintenance log'; Art = '  MANIFEST: stale ghosts evicted from the release channel' }
+        '1.3.0.8' = [pscustomobject]@{ Quote = 'The truth is in the logs.'; Source = 'Reparo maintenance log'; Art = '  WINGET: health check raised from the dead' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -536,8 +538,9 @@ Usage:
    reparo -11
    reparo -7
   reparo -Preview -Update
-  reparo -Winget
-  reparo -WingetDiscover
+   reparo -Winget
+   reparo -WingetDiscover
+   reparo -WG
   reparo -List
   reparo -Search git
   reparo -List git
@@ -570,8 +573,10 @@ Modes:
   -Winget              Run a winget-focused pass. Reparo attempts to repair/register App Installer,
                        logs discovery output, then runs the Winget sections. In preview mode,
                        discovery still runs so you can refresh the visible upgrade list.
-  -WingetDiscover      Repair/register winget if needed, then run only winget discovery commands.
-                       This refreshes the visible upgrade list without starting live installs.
+   -WingetDiscover      Repair/register winget if needed, then run only winget discovery commands.
+                        This refreshes the visible upgrade list without starting live installs.
+   -WG                  Repair/check winget without package upgrades, persist its health state,
+                        and publish Reparo version plus WG status to Ninja when available.
   -Search,-List,-S,-L  Inventory software Reparo -Force can update, with installed versions.
                        Optional terms filter by name, id, method, source, or version.
   -VersionLock         Inline lock specs: method:id=version. Example: winget:Git.Git=2.51.0.
@@ -774,6 +779,14 @@ if ($Windows11Upgrade) {
     $Include = @('Windows11Upgrade')
 }
 
+if ($WingetHealth -and -not $script:ReparoIsWindows) {
+    throw '-WG is supported on Windows only because it checks the Windows App Installer/winget runtime.'
+}
+
+if ($WingetHealth) {
+    $WingetDiscover = $true
+}
+
 if ($Winget) {
     $Include = @(
         'Winget'
@@ -818,7 +831,7 @@ elseif ($Update) {
     }
     $Include = $updateSections
 }
-if (-not $script:ReparoIsWindows -and -not ($Update -or $Force -or $Include -or $Winget -or $WingetDiscover -or $Windows11Upgrade -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $WindowsUpdate -or $WslApt -or $SevenZip)) {
+if (-not $script:ReparoIsWindows -and -not ($Update -or $Force -or $Include -or $Winget -or $WingetDiscover -or $WingetHealth -or $Windows11Upgrade -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $WindowsUpdate -or $WslApt -or $SevenZip)) {
     $Include = $linuxPackageSections
 }
 
@@ -2758,6 +2771,7 @@ function Test-ReparoOperationalModeRequested {
         'Update',
         'Winget',
         'WingetDiscover',
+        'WingetHealth',
         'Search',
         'AddVersionLock',
         'ListVersionLocks',
@@ -2905,7 +2919,7 @@ if ($DeleteStale) {
     return
 }
 
-if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $Force -or $Preview -or $WindowsUpdate -or $Windows11Upgrade -or $WslApt -or $SevenZip -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
+if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $WingetHealth -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $Force -or $Preview -or $WindowsUpdate -or $Windows11Upgrade -or $WslApt -or $SevenZip -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan

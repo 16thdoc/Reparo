@@ -388,6 +388,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-7` / `-PowerShell7` | Runs only the machine-wide PowerShell 7 MSI section. It is intended to be launched from Windows PowerShell 5.1 and does not update the host process. |
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |
 | `-WingetDiscover` | Repairs/refreshes winget if needed and runs only winget discovery commands. |
+| `-WG` | Windows only. Repairs/checks App Installer and winget without package upgrades, records `OK`, `USER`, or `FAIL` in `C:\ProgramData\Reparo\winget-health.json`, and when run through Ninja publishes `<Reparo version> \| WG:<status>` to its `Reparo` custom field. |
 | `-Search` / `-List` / `-L` | Inventories applications Reparo `-Force` can update and prints installed versions, available versions when known, update method, source, lock status, and a ready-to-copy `LockSpec`. Add terms after the switch to filter, for example `reparo -Search git` or `reparo -List git`. |
 | `-VersionLock <spec>` | Adds an inline version lock for this run. Format: `method:id=version`, for example `winget:Git.Git=2.51.0`. |
 | `-AddVersionLock <spec>` / `-SaveVersionLock <spec>` / `-AVL <spec>` | Persists a Reparo-side version lock to the local workstation lock file, then exits. Use this for machine-specific exclusions such as ScanSnap. |
