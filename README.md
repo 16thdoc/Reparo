@@ -248,7 +248,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -U
 
 ### Option 3: Refresh from GitHub with `-Ninja`
 
-Use this when the endpoint can reach GitHub. `-Ninja` downloads the reviewed, immutable release pinned by `deploy/reparo-release.json` to `C:\ProgramData\Reparo\Reparo.ps1`, with parse validation and rollback handling, then publishes the installed version plus saved WinGet health to Ninja's `Reparo` device text field. It publishes `Update Failed` if the refresh transaction fails.
+Use this when the endpoint can reach GitHub. `-Ninja` downloads the reviewed, immutable release pinned by `deploy/reparo-release.json` to `C:\ProgramData\Reparo\Reparo.ps1`, with parse validation and rollback handling, then publishes the installed version plus saved WinGet health to Ninja's `Reparo` device text field. SYSTEM deployments deliberately skip post-install WinGet/App Installer discovery so they do not overwrite an interactive-user `WG:OK` with the known SYSTEM context limitation. It publishes `Update Failed` if the refresh transaction fails.
 
 Ninja script body:
 

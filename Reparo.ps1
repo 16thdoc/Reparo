@@ -142,7 +142,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.1.0'
+$script:ReparoVersion = '1.3.1.1'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -274,6 +274,7 @@ function Get-ReparoVersionFlavor {
         '1.3.0.8' = [pscustomobject]@{ Quote = 'The truth is in the logs.'; Source = 'Reparo maintenance log'; Art = '  WINGET: health check raised from the dead' }
         '1.3.0.9' = [pscustomobject]@{ Quote = 'The first rule of bureaucracy is: blame the user.'; Source = 'Reparo maintenance log'; Art = '  SYSTEM: wrong sacrificial context detected' }
         '1.3.1.0' = [pscustomobject]@{ Quote = 'One ring to rule them all.'; Source = 'The Lord of the Rings'; Art = '  NINJA: duplicate updater fed to the volcano' }
+        '1.3.1.1' = [pscustomobject]@{ Quote = 'The best way out is always through.'; Source = 'Robert Frost'; Art = '  WINGET: SYSTEM no longer rewrites user truth' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -2889,7 +2890,7 @@ if ($Install -or $New -or $Latest) {
     if ($script:ReparoIsWindows -and $Install -and -not $Preview -and $isDefaultInstallRoot) {
         Install-ReparoSelfUpdateTask -TargetRoot $InstallRoot
     }
-    if ($script:ReparoIsWindows -and -not $Install -and -not $Preview -and $isDefaultInstallRoot) {
+    if ($script:ReparoIsWindows -and -not $Install -and -not $Preview -and $isDefaultInstallRoot -and -not (Test-ReparoSystemIdentity)) {
         $installedReparoPath = Join-Path $InstallRoot 'Reparo.ps1'
         Write-Host 'Checking Winget/App Installer after Reparo installation.' -ForegroundColor Cyan
         $wingetRepairArguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $installedReparoPath, '-WingetDiscover')
@@ -2900,6 +2901,9 @@ if ($Install -or $New -or $Latest) {
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "Post-install Winget repair/discovery exited with code $LASTEXITCODE. Reparo was installed successfully; see its log for the repair result."
         }
+    }
+    elseif ($script:ReparoIsWindows -and -not $Install -and -not $Preview -and $isDefaultInstallRoot) {
+        Write-Info 'Skipping post-install Winget/App Installer discovery under SYSTEM; preserving the saved interactive-user health state.'
     }
 
     Complete-ReparoUtilityLog -Status $(if ($Preview) { 'PREVIEW' } else { 'COMPLETE' })

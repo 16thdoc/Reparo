@@ -15,7 +15,9 @@ foreach ($required in @(
     "if (`$Ninja) {",
     "'-New', '-InstallRoot', `$InstallRoot",
     "& powershell.exe @ninjaInstallArguments",
-    "& `$setter.Name -Name 'Reparo' -Value 'Update Failed'"
+    "& `$setter.Name -Name 'Reparo' -Value 'Update Failed'",
+    "-and -not (Test-ReparoSystemIdentity)",
+    "Skipping post-install Winget/App Installer discovery under SYSTEM; preserving the saved interactive-user health state."
 )) {
     if (-not $source.Contains($required)) {
         throw "Ninja lifecycle version publishing contract is absent: $required"
