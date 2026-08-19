@@ -35,6 +35,19 @@ foreach ($required in @(
     }
 }
 
+foreach ($required in @(
+    "[ValidateSet('OK', 'USER', 'FAIL', 'OLD')][string]`$Status",
+    "if (`$health.Status -in @('OK', 'USER', 'FAIL', 'OLD')) { `$status = `$health.Status }",
+    "elseif (Test-ReparoWingetUnsupportedWindows) {",
+    'function Test-ReparoWingetUnsupportedWindows',
+    'Set-ReparoWingetHealth -Status OLD -Detail $legacyWingetDetail',
+    "Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget' -Version '-' -Method 'Winget' -Reason 'unsupported legacy Windows build'"
+)) {
+    if (-not $source.Contains($required)) {
+        throw "WinGet legacy Windows classification contract is absent: $required"
+    }
+}
+
 $installBlock = [regex]::Match($source, '(?s)if \(\$New\) \{.*?(?=if \(\$Kill\) \{)')
 if (-not $installBlock.Success) {
     throw 'Could not locate the Reparo install path.'

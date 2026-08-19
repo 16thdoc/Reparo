@@ -142,7 +142,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.1.2'
+$script:ReparoVersion = '1.3.1.3'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -276,6 +276,7 @@ function Get-ReparoVersionFlavor {
         '1.3.1.0' = [pscustomobject]@{ Quote = 'One ring to rule them all.'; Source = 'The Lord of the Rings'; Art = '  NINJA: duplicate updater fed to the volcano' }
         '1.3.1.1' = [pscustomobject]@{ Quote = 'The best way out is always through.'; Source = 'Robert Frost'; Art = '  WINGET: SYSTEM no longer rewrites user truth' }
         '1.3.1.2' = [pscustomobject]@{ Quote = 'Time is an illusion. Lunchtime doubly so.'; Source = 'The Hitchhiker''s Guide to the Galaxy'; Art = '  ORDER: function summoned before its own execution' }
+        '1.3.1.3' = [pscustomobject]@{ Quote = 'You can''t take the sky from me.'; Source = 'Firefly'; Art = '  WINGET: legacy server spared the AppX séance' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -584,6 +585,8 @@ Modes:
                          This refreshes the visible upgrade list without starting live installs.
   -WG                  Repair/check winget without package upgrades, persist its health state,
                          and publish Reparo version plus WG status to Ninja when available.
+                         WG:OK is healthy; USER needs an interactive user; OLD is unsupported
+                         Windows 8.1/Server 2012 R2-or-older; FAIL needs investigation.
   -Search,-List,-S,-L  Inventory software Reparo -Force can update, with installed versions.
                        Optional terms filter by name, id, method, source, or version.
   -VersionLock         Inline lock specs: method:id=version. Example: winget:Git.Git=2.51.0.
@@ -869,7 +872,7 @@ $script:ReparoWingetHealthStatus = $null
 
 function Set-ReparoWingetHealth {
     param(
-        [ValidateSet('OK', 'USER', 'FAIL')][string]$Status,
+        [ValidateSet('OK', 'USER', 'FAIL', 'OLD')][string]$Status,
         [string]$Detail
     )
 
@@ -909,9 +912,13 @@ function Update-ReparoNinjaField {
     if (Test-Path -LiteralPath $script:ReparoWingetHealthPath) {
         try {
             $health = Get-Content -LiteralPath $script:ReparoWingetHealthPath -Raw | ConvertFrom-Json -ErrorAction Stop
-            if ($health.Status -in @('OK', 'USER', 'FAIL')) { $status = $health.Status }
+            if ($health.Status -in @('OK', 'USER', 'FAIL', 'OLD')) { $status = $health.Status }
         }
         catch { Write-ReparoLog ("[WARN] Unable to read Winget health state: {0}" -f $_.Exception.Message) }
+    }
+    elseif (Test-ReparoWingetUnsupportedWindows) {
+        $status = 'OLD'
+        Write-ReparoLog '[WINGET-HEALTH] Reporting OLD because this Windows build does not support current WinGet/App Installer.'
     }
     $value = "{0} | WG:{1}" -f $Version, $status
     $setter = Get-Command Ninja-Property-Set -ErrorAction SilentlyContinue
@@ -930,6 +937,20 @@ function Test-ReparoSystemIdentity {
         return ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18')
     }
     catch {
+        return $false
+    }
+}
+
+function Test-ReparoWingetUnsupportedWindows {
+    if (-not $script:ReparoIsWindows) { return $false }
+
+    try {
+        $currentVersion = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+        $build = [int]$currentVersion.CurrentBuildNumber
+        return ($build -lt 10000)
+    }
+    catch {
+        Write-ReparoLog ("[WARN] Unable to determine Windows build for WinGet support: {0}" -f $_.Exception.Message)
         return $false
     }
 }
@@ -6055,6 +6076,15 @@ if ($FinalizeChocolateyRemoval) {
 }
 
 $runWingetSections = (Test-ReparoSectionSelected 'Winget') -or (Test-ReparoSectionSelected 'Winget(msstore)') -or $Winget -or $WingetDiscover
+if ($runWingetSections -and (Test-ReparoWingetUnsupportedWindows)) {
+    $legacyWingetDetail = 'WinGet/App Installer is unsupported on Windows 8.1, Windows Server 2012 R2, and older Windows builds.'
+    Set-ReparoWingetHealth -Status OLD -Detail $legacyWingetDetail
+    Write-Skip $legacyWingetDetail
+    Write-ReparoLog ("[SKIP] {0}" -f $legacyWingetDetail)
+    Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget' -Version '-' -Method 'Winget' -Reason 'unsupported legacy Windows build'
+    Add-ReparoSummaryRecord -Bucket Skipped -Software 'Winget(msstore)' -Version '-' -Method 'Winget(msstore)' -Reason 'unsupported legacy Windows build'
+    $runWingetSections = $false
+}
 if ($runWingetSections) {
     $hasWinget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
     Write-ReparoLog ("[CHECK] winget present: {0}" -f $hasWinget)
