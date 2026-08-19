@@ -141,7 +141,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.0.0'
+$script:ReparoVersion = '1.3.0.1'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -263,6 +263,7 @@ function Get-ReparoVersionFlavor {
         '1.2.6.7' = [pscustomobject]@{ Quote = 'The logs have stopped screaming.'; Source = 'Reparo maintenance log'; Art = '  SUMMARY: exit-code ghosts tagged and filed' }
         '1.2.6.8' = [pscustomobject]@{ Quote = 'There is no problem that cannot be solved with a well-placed semicolon.'; Source = 'Reparo maintenance log'; Art = '  WINGET: three-headed installer hydra classified' }
         '1.2.6.9' = [pscustomobject]@{ Quote = 'The truth is out there. The logs are right here.'; Source = 'Reparo maintenance log'; Art = '  LEDGER: skipped packages removed from the victory parade' }
+        '1.3.0.1' = [pscustomobject]@{ Quote = 'The dead speak only when you put the braces back.'; Source = 'Reparo maintenance log'; Art = '  BRACES: orphaned else returned to its crypt' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -5582,10 +5583,11 @@ Log: $script:ReparoLogPath
         Write-ReparoLog ("[DIAGNOSTIC] Retained {0} artifacts: command={1}; output={2}" -f $Section, $commandScriptPath, $commandOutputPath)
     }
 
-    Write-ReparoSummaryNextSteps
     else {
         Remove-Item -LiteralPath $commandOutputPath, $commandScriptPath -Force -ErrorAction SilentlyContinue
     }
+
+    Write-ReparoSummaryNextSteps
 
     [pscustomobject]@{
         TimedOut = $false

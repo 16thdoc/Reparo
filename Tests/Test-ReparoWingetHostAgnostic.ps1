@@ -39,8 +39,9 @@ if (-not $installBlock.Success) {
 
 foreach ($required in @(
     "Join-Path `$env:ProgramData 'Reparo'",
-    "-File `$installedReparoPath -WingetDiscover -InstallNuGetProvider:`$InstallNuGetProvider",
-    '-NonInteractive'
+    "`$wingetRepairArguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', `$installedReparoPath, '-WingetDiscover')",
+    "if (-not `$InstallNuGetProvider) { `$wingetRepairArguments += '-InstallNuGetProvider:`$false' }",
+    '& powershell.exe @wingetRepairArguments'
 )) {
     if (-not $installBlock.Value.Contains($required)) {
         throw "Reparo install does not perform the unattended Winget repair/discovery contract: $required"
