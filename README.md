@@ -284,6 +284,11 @@ Use `-N` / `-Latest` only when you intentionally want the current, unreviewed `m
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -N
 ```
 
+`deploy\Ninja-Reparo-VersionCheck.ps1` is a standalone Ninja regular-script payload.
+It reports `Not Installed` in Ninja's `Reparo` custom field when no ProgramData runtime
+exists. Otherwise it fetches and SHA-256 verifies the reviewed release, installs it, and
+publishes the installed version. A copy is kept on the operator Desktop for direct import.
+
 ### Option 4: Install/update over SSH
 
 For personal Windows machines that are reachable over OpenSSH, use the remote helper:
