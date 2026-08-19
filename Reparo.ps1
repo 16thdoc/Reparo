@@ -141,7 +141,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.0.5'
+$script:ReparoVersion = '1.3.0.6'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -268,6 +268,7 @@ function Get-ReparoVersionFlavor {
         '1.3.0.3' = [pscustomobject]@{ Quote = 'The machine is alive; it is merely being quiet about it.'; Source = 'Reparo maintenance log'; Art = '  WU: heartbeat monitor wired into the crypt' }
         '1.3.0.4' = [pscustomobject]@{ Quote = 'Tuesday belongs to the patch goblins now.'; Source = 'Reparo maintenance log'; Art = '  CLOCK: self-update ritual scheduled for the weekly haunt' }
         '1.3.0.5' = [pscustomobject]@{ Quote = 'I know this; it''s Unix.'; Source = 'Jurassic Park'; Art = '  UNIX: patch daemon finds its way through the velociraptor enclosure' }
+        '1.3.0.6' = [pscustomobject]@{ Quote = 'A dream is not the same as a plan.'; Source = 'Reparo maintenance log'; Art = '  NINJA: installed version sent to the device ledger' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -881,6 +882,8 @@ function Set-ReparoWingetHealth {
 }
 
 function Update-ReparoNinjaField {
+    param([string]$Version = $script:ReparoVersion)
+
     $status = 'UNKNOWN'
     if (Test-Path -LiteralPath $script:ReparoWingetHealthPath) {
         try {
@@ -889,7 +892,7 @@ function Update-ReparoNinjaField {
         }
         catch { Write-ReparoLog ("[WARN] Unable to read Winget health state: {0}" -f $_.Exception.Message) }
     }
-    $value = "{0} | WG:{1}" -f $script:ReparoVersion, $status
+    $value = "{0} | WG:{1}" -f $Version, $status
     $setter = Get-Command Ninja-Property-Set -ErrorAction SilentlyContinue
     if (-not $setter) {
         Write-Info "Ninja-Property-Set is unavailable; would publish: $value"
@@ -899,6 +902,27 @@ function Update-ReparoNinjaField {
     Write-Done "Ninja Reparo field updated: $value"
     Write-ReparoLog "[NINJA] Reparo field updated: $value"
     return $true
+}
+
+function Publish-ReparoInstalledNinjaVersion {
+    param([Parameter(Mandatory)][string]$TargetRoot)
+
+    if (-not (Get-Command Ninja-Property-Set -ErrorAction SilentlyContinue)) { return $false }
+
+    $installedScriptPath = Join-Path $TargetRoot 'Reparo.ps1'
+    try {
+        $versionOutput = & $installedScriptPath -Version *>&1 | Out-String
+        if ($LASTEXITCODE -notin @(0, $null) -or $versionOutput -notmatch '(?m)^Reparo (?<Version>\d+\.\d+\.\d+\.\d+)\r?$') {
+            throw "Installed Reparo.ps1 did not return a valid version: $versionOutput"
+        }
+
+        return Update-ReparoNinjaField -Version $matches.Version.Trim()
+    }
+    catch {
+        Write-Warning "Unable to publish the installed Reparo version to Ninja: $($_.Exception.Message)"
+        Write-ReparoLog "[NINJA-WARN] Unable to publish installed Reparo version: $($_.Exception.Message)"
+        return $false
+    }
 }
 $script:ReparoSyslogConfiguredThisRun = $false
 
@@ -2808,6 +2832,9 @@ if ($Install -or $New -or $Latest) {
 
     Write-Info "Reparo install mode: $installMode"
     Invoke-ReparoNew -TargetRoot $InstallRoot -Url $installSource -SkipBackup:$NoBackup -WhatIfOnly:$Preview
+    if (-not $Preview) {
+        Publish-ReparoInstalledNinjaVersion -TargetRoot $InstallRoot | Out-Null
+    }
 
     # A normal ProgramData install is also the best moment to repair a missing or
     # broken App Installer. Use the freshly installed runtime so the repair path is

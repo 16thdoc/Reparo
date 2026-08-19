@@ -248,7 +248,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -U
 
 ### Option 3: Install/update from GitHub with `-New`
 
-Use this when the repo is public, or when the endpoint has approved access to the raw file URL. The first command downloads the current `Reparo.ps1` to `C:\ProgramData\Reparo\Reparo.ps1` with parse validation and backup handling, then the second command runs the installed ProgramData copy.
+Use this when the endpoint can reach GitHub. The first command downloads the reviewed, immutable release pinned by `deploy/reparo-release.json` to `C:\ProgramData\Reparo\Reparo.ps1`, with parse validation and rollback handling; the second runs the installed ProgramData copy. When running under Ninja, `-Install`, `-New`, and `-N` publish the installed runtime version to the `Reparo` device text field when Ninja's property API is available.
 
 Ninja script body:
 
@@ -271,49 +271,20 @@ if (Get-Command Unblock-File -ErrorAction SilentlyContinue) {
     Unblock-File -Path $bootstrapPath
 }
 
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrapPath -New -InstallRoot $installRoot -SourceUrl $bootstrapUrl
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrapPath -New -InstallRoot $installRoot
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -Update
 exit $LASTEXITCODE
 ```
 
-For production stability, prefer a tag or commit-pinned raw URL instead of `main`:
+Use `-N` / `-Latest` only when you intentionally want the current, unreviewed `main` copy rather than the reviewed release pin:
 
 ```powershell
-$bootstrapUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/v1.0.0/Reparo.ps1'
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -N
 ```
 
-`deploy/Ninja-Reparo-GitHub.ps1` is the parameter-free Ninja variant: it performs
-this install/refresh flow and sets the Ninja device text custom field `Reparo` to the
-installed version without running maintenance. Its stable release-channel URL fetches
-a reviewed manifest, which pins the runtime to an immutable commit and SHA-256. Update
-`deploy/reparo-release.json` when promoting a reviewed replacement release; Ninja does
-not need a script re-import. The broader
-`deploy/Ninja-GitHub.ps1` also updates that field when run in Ninja, while retaining
-its command-line maintenance options for direct operator use.
-
-### Option 4: Offline-first regular Ninja automation
-
-Ninja regular scripts do not accept helper-file attachments, and Ninja Installer
-uploads accept only binary installer formats. Use the self-contained
-`deploy/Ninja-Embedded.ps1` instead. Generate it with
-`deploy/New-NinjaEmbeddedDeployment.ps1`, then import the generated file as a normal
-Ninja PowerShell script. It embeds and verifies a reviewed Reparo payload, installs
-it first, optionally checks GitHub for a newer runtime, then runs Reparo. A blocked
-GitHub refresh is a warning rather than a failed maintenance run.
-
-The generated Ninja artifacts and `Ninja-Reparo-GitHub.ps1` update the device text
-custom field named `Reparo` with the installed runtime version. Fixed artifacts embed a
-SHA-256-verified release payload and do not refresh from `main`: that embedded payload
-is the fleet pin, so advance a fleet by importing a newly generated artifact after its
-pilot succeeds. Use the fixed artifacts without Ninja script options or arguments;
-Ninja can map imported options positionally and corrupt deployment paths.
-
-The complete Ninja/ScreenConnect operator guidance is in
-`deploy/RMM-Operator-Guide.md`.
-
-### Option 5: Install/update over SSH
+### Option 4: Install/update over SSH
 
 For personal Windows machines that are reachable over OpenSSH, use the remote helper:
 
@@ -326,23 +297,6 @@ Pass multiple SSH aliases or hosts to install the same ProgramData runtime on se
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy\Install-ReparoRemote.ps1 -ComputerName marajade,laptop
 ```
-
-### Option 6: ScreenConnect / Backstage tools
-
-ScreenConnect-ready command files are included under `deploy\ScreenConnect`.
-
-| Tool | Purpose |
-| --- | --- |
-| `Install-Reparo.bat` | Installs or updates the ProgramData runtime from GitHub, repairs the `reparo.cmd` shim, and checks `reparo -Version`. |
-| `ScreenConnect-Reparo-Embedded-Offline.ps1` | Self-contained install/update with the embedded reviewed runtime; makes no GitHub request. |
-| `Run-Reparo-System.cmd` | Creates and starts a one-shot SYSTEM scheduled task that runs `C:\ProgramData\Reparo\Reparo.ps1 -Update`. |
-| `Run-Reparo-Force-System.cmd` | Creates and starts a one-shot SYSTEM scheduled task that runs `C:\ProgramData\Reparo\Reparo.ps1 -Force`. |
-| `Run-Reparo-Force-AllowReboot-System.cmd` | Runs `-Force -AllowReboot` (also accepted as `-AllowRestart`) as SYSTEM; Windows Update may reboot only if required. |
-| `Run-Reparo-Force-Reboot-System.cmd` | Runs `-Force -Reboot` as SYSTEM; the computer restarts after Reparo completes. |
-| `Run-Reparo-New-System.cmd` | Runs `-New` as SYSTEM to refresh the installed Reparo runtime from its configured source. |
-| `Run-Reparo-AllowReboot-System.cmd` | Runs `-AllowReboot` as SYSTEM; Windows Update may reboot if it requires one. |
-
-Run these from an elevated/admin or SYSTEM context. The installer is intentionally idempotent: if Reparo is already installed, it downloads the current GitHub script and updates the existing runtime in place.
 
 ### Moshi / mosh setup over SSH
 
@@ -637,10 +591,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -FinalizeCh
 
 `-FinalizeChocolateyRemoval` respects `$env:ChocolateyInstall` so managed devices with a nonstandard Chocolatey root are handled correctly. If that variable is absent, Reparo falls back to `C:\ProgramData\chocolatey`, with `C:\ProgramData\choco` detection for oddball installs.
 
-For Ninja/GitHub bootstrap deployments, use:
+For a Ninja/GitHub bootstrap deployment, use the staged Reparo script directly:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy\Ninja-GitHub.ps1 -Preview -MigrateChocoToWinget
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -MigrateChocoToWinget
 ```
 
 Custom maps can be JSON:
