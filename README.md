@@ -673,7 +673,7 @@ C:\ProgramData\Reparo\Logs
 Each run creates a timestamped log file that includes the computer name, process ID, selected mode, commands invoked, command output, skipped sections, errors, and the final run summary.
 While Reparo is running, the log is named with a `_RUNNING.log` suffix. After completion, it is renamed to `_COMPLETE.log`, `_FAILED.log`, or `_PREVIEW.log` so the final artifact is obvious.
 The log also prints an exhaustive parameter block at startup so you can see every switch, timeout, path, and include list value that Reparo resolved for that run.
-Long-running child commands emit `[CMD-WAIT]` heartbeat lines while they are still alive. Child command output is copied into the main log during execution with `[CMD-OUT]` prefixes, so `-Tail` can show winget progress while winget is still running.
+Long-running child commands emit `[CMD-WAIT]` heartbeat lines in the log while they are still alive. Windows Update also prints a console heartbeat every 60 seconds while it scans, downloads, or stages updates, because Windows Update otherwise has the bedside manner of a grave. Child command output is copied into the main log during execution with `[CMD-OUT]` prefixes, so `-Tail` can show winget and Windows Update progress while they are still running.
 
 Use `-Tail` or its alias `-Log` to follow the active log when used by itself. When combined with a run mode, it prints the tail of the current run's log file at the end of execution.
 Use `-TailLines` to increase or reduce the initial tail window.

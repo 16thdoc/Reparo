@@ -141,7 +141,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.0.2'
+$script:ReparoVersion = '1.3.0.3'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -265,6 +265,7 @@ function Get-ReparoVersionFlavor {
         '1.2.6.9' = [pscustomobject]@{ Quote = 'The truth is out there. The logs are right here.'; Source = 'Reparo maintenance log'; Art = '  LEDGER: skipped packages removed from the victory parade' }
         '1.3.0.1' = [pscustomobject]@{ Quote = 'The dead speak only when you put the braces back.'; Source = 'Reparo maintenance log'; Art = '  BRACES: orphaned else returned to its crypt' }
         '1.3.0.2' = [pscustomobject]@{ Quote = 'Every ghost has properties if you know where to look.'; Source = 'Reparo maintenance log'; Art = '  SCOOP: object specter parsed without a séance' }
+        '1.3.0.3' = [pscustomobject]@{ Quote = 'The machine is alive; it is merely being quiet about it.'; Source = 'Reparo maintenance log'; Art = '  WU: heartbeat monitor wired into the crypt' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -5561,6 +5562,9 @@ function Invoke-ReparoTimedCommand {
 
         if ([DateTime]::UtcNow -ge $nextHeartbeat) {
             Write-ReparoLog ("[CMD-WAIT] {0} still running elapsed={1} pid={2}" -f $Section, $stopwatch.Elapsed, $process.Id)
+            if ($Section -eq 'WindowsUpdate') {
+                Write-Info ("WindowsUpdate is still active (elapsed {0}). Windows Update can be quiet while it scans, downloads, or stages an install." -f $stopwatch.Elapsed)
+            }
             $nextHeartbeat = [DateTime]::UtcNow.AddSeconds($heartbeatSeconds)
         }
 
@@ -6916,13 +6920,15 @@ if (Test-ReparoSectionSelected 'WindowsUpdate') {
         }
 
         if ($hasWindowsUpdate -or (Ensure-ReparoPSWindowsUpdate)) {
+            Write-Info 'WindowsUpdate started; update status will print as PSWindowsUpdate reports it. A heartbeat prints every 60 seconds while it is active.'
+            Write-ReparoLog '[INFO] WindowsUpdate started; console heartbeat enabled every 60 seconds while active.'
             if ($AllowReboot) {
                 Write-ReparoLog '[INFO] WindowsUpdate reboot handling: AllowReboot requested; passing -AutoReboot.'
-                $windowsUpdateCommand = '$ErrorActionPreference = ''Stop''; Import-Module PSWindowsUpdate -ErrorAction Stop; Get-WindowsUpdate -AcceptAll -Install -AutoReboot -ErrorAction Stop; $global:LASTEXITCODE = 0'
+                $windowsUpdateCommand = '$ErrorActionPreference = ''Stop''; Import-Module PSWindowsUpdate -ErrorAction Stop; Get-WindowsUpdate -AcceptAll -Install -AutoReboot -ErrorAction Stop -Verbose 4>&1; $global:LASTEXITCODE = 0'
             }
             else {
                 Write-ReparoLog '[INFO] WindowsUpdate reboot handling: defaulting to -IgnoreReboot.'
-                $windowsUpdateCommand = '$ErrorActionPreference = ''Stop''; Import-Module PSWindowsUpdate -ErrorAction Stop; Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot -ErrorAction Stop; $global:LASTEXITCODE = 0'
+                $windowsUpdateCommand = '$ErrorActionPreference = ''Stop''; Import-Module PSWindowsUpdate -ErrorAction Stop; Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot -ErrorAction Stop -Verbose 4>&1; $global:LASTEXITCODE = 0'
             }
 
             Invoke-ReparoCommandStep -Section 'WindowsUpdate' -PresenceCmd '' -Command $windowsUpdateCommand -TimeoutSeconds $WindowsUpdateTimeoutSeconds

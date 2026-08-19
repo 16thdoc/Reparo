@@ -36,12 +36,19 @@ $windowsUpdate = [regex]::Match($source, '(?s)if \(Test-ReparoSectionSelected ''
 if (-not $windowsUpdate.Success) { throw 'Could not locate the Windows Update section.' }
 foreach ($required in @(
     "`$ErrorActionPreference = ''Stop''",
-    'Get-WindowsUpdate -AcceptAll -Install -AutoReboot -ErrorAction Stop; $global:LASTEXITCODE = 0',
-    'Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot -ErrorAction Stop; $global:LASTEXITCODE = 0'
+    'Get-WindowsUpdate -AcceptAll -Install -AutoReboot -ErrorAction Stop -Verbose 4>&1; $global:LASTEXITCODE = 0',
+    'Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot -ErrorAction Stop -Verbose 4>&1; $global:LASTEXITCODE = 0',
+    'WindowsUpdate started; console heartbeat enabled every 60 seconds while active.'
 )) {
     if (-not $windowsUpdate.Value.Contains($required)) {
         throw "Windows Update exit-code handling is absent: $required"
     }
+}
+
+$timedCommand = [regex]::Match($source, '(?s)function Invoke-ReparoTimedCommand \{.*?(?=function Test-ReparoIgnorableCommandOutputLine)')
+if (-not $timedCommand.Success) { throw 'Could not locate the timed command runner.' }
+if (-not $timedCommand.Value.Contains('WindowsUpdate is still active (elapsed {0}). Windows Update can be quiet while it scans, downloads, or stages an install.')) {
+    throw 'Windows Update console heartbeat is absent.'
 }
 
 $summaryGuidance = [regex]::Match($source, '(?s)function Write-ReparoSummaryNextSteps \{.*?(?=function Write-ReparoSummary \{)')
