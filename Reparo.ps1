@@ -142,7 +142,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.0.9'
+$script:ReparoVersion = '1.3.1.0'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -273,6 +273,7 @@ function Get-ReparoVersionFlavor {
         '1.3.0.7' = [pscustomobject]@{ Quote = 'The cache is a lie.'; Source = 'Reparo maintenance log'; Art = '  MANIFEST: stale ghosts evicted from the release channel' }
         '1.3.0.8' = [pscustomobject]@{ Quote = 'The truth is in the logs.'; Source = 'Reparo maintenance log'; Art = '  WINGET: health check raised from the dead' }
         '1.3.0.9' = [pscustomobject]@{ Quote = 'The first rule of bureaucracy is: blame the user.'; Source = 'Reparo maintenance log'; Art = '  SYSTEM: wrong sacrificial context detected' }
+        '1.3.1.0' = [pscustomobject]@{ Quote = 'One ring to rule them all.'; Source = 'The Lord of the Rings'; Art = '  NINJA: duplicate updater fed to the volcano' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -536,12 +537,13 @@ Usage:
   reparo -Install                 # offline self-install from this Reparo.ps1
   reparo -New                     # reviewed manifest-pinned release
   reparo -N                       # newest main, intentionally unpinned
-   reparo -11
-   reparo -7
+  reparo -Ninja                   # reviewed pinned refresh and Ninja field publish
+  reparo -11
+  reparo -7
   reparo -Preview -Update
-   reparo -Winget
-   reparo -WingetDiscover
-   reparo -WG
+  reparo -Winget
+  reparo -WingetDiscover
+  reparo -WG
   reparo -List
   reparo -Search git
   reparo -List git
@@ -563,8 +565,10 @@ Usage:
 Modes:
   Default              Run Windows Update only.
   -Update              Run the managed-client pass: Winget, Winget(msstore), Choco, PowerShell7, WindowsUpdate.
-                        Updated package rows show current version -> target version when available.
-   -11,-Win11,-Windows11
+                         Updated package rows show current version -> target version when available.
+  -Ninja               Install the reviewed manifest-pinned release transactionally and publish
+                         the installed version plus saved WinGet health to Ninja's Reparo field.
+  -11,-Win11,-Windows11
                        Run a Windows 10 -> Windows 11 feature upgrade using Microsoft's
                        Windows 11 Installation Assistant. Requires elevation; use -Preview
                         to log the download URL and installer command without launching it.
@@ -574,10 +578,10 @@ Modes:
   -Winget              Run a winget-focused pass. Reparo attempts to repair/register App Installer,
                        logs discovery output, then runs the Winget sections. In preview mode,
                        discovery still runs so you can refresh the visible upgrade list.
-   -WingetDiscover      Repair/register winget if needed, then run only winget discovery commands.
-                        This refreshes the visible upgrade list without starting live installs.
-   -WG                  Repair/check winget without package upgrades, persist its health state,
-                        and publish Reparo version plus WG status to Ninja when available.
+  -WingetDiscover      Repair/register winget if needed, then run only winget discovery commands.
+                         This refreshes the visible upgrade list without starting live installs.
+  -WG                  Repair/check winget without package upgrades, persist its health state,
+                         and publish Reparo version plus WG status to Ninja when available.
   -Search,-List,-S,-L  Inventory software Reparo -Force can update, with installed versions.
                        Optional terms filter by name, id, method, source, or version.
   -VersionLock         Inline lock specs: method:id=version. Example: winget:Git.Git=2.51.0.
@@ -2763,6 +2767,7 @@ function Test-ReparoOperationalModeRequested {
         'Install',
         'New',
         'Latest',
+        'Ninja',
         'Kill',
         'Status',
         'Sweep',
@@ -2820,9 +2825,26 @@ if (Invoke-ReparoPersistentTask) {
 }
 
 if ($Ninja) {
-    Update-ReparoNinjaField | Out-Null
-    Complete-ReparoUtilityLog -Status 'COMPLETE'
-    return
+    $ninjaInstallArguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-New', '-InstallRoot', $InstallRoot)
+    if ($Preview) { $ninjaInstallArguments += '-Preview' }
+    if ($NoBackup) { $ninjaInstallArguments += '-NoBackup' }
+    if (-not $InstallNuGetProvider) { $ninjaInstallArguments += '-InstallNuGetProvider:$false' }
+
+    try {
+        Write-Info 'Ninja mode: installing the reviewed, pinned Reparo release.'
+        & powershell.exe @ninjaInstallArguments
+        if ($LASTEXITCODE -ne 0) { throw "Pinned Reparo install exited with code $LASTEXITCODE." }
+        Update-ReparoNinjaField | Out-Null
+        Complete-ReparoUtilityLog -Status 'COMPLETE'
+        return
+    }
+    catch {
+        $setter = Get-Command Ninja-Property-Set -ErrorAction SilentlyContinue
+        if ($setter) {
+            try { & $setter.Name -Name 'Reparo' -Value 'Update Failed' } catch { Write-ReparoLog ("[WARN] Unable to publish Ninja update failure: {0}" -f $_.Exception.Message) }
+        }
+        throw
+    }
 }
 
 if ($Install -or $New -or $Latest) {

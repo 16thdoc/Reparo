@@ -208,7 +208,7 @@ Use one of these patterns depending on how you want to manage updates.
 | --- | --- | --- |
 | Paste `Reparo.ps1` into Ninja | Maximum simplicity and no external dependency | Updating Reparo means editing the Ninja script body |
 | Upload `Reparo.ps1` as a Ninja script/file | Controlled copy inside Ninja | Exact execution path depends on how the Ninja script/file is staged |
-| `Reparo.ps1 -New` from GitHub | Easy updates and version pinning | Requires endpoint access to GitHub raw content |
+| `Reparo.ps1 -Ninja` from GitHub | Pinned transactional refresh plus Ninja field publication | Requires endpoint access to GitHub raw content |
 
 When pasting PowerShell parameters into Ninja, use the actual switch token with the leading dash. For example, type `-Update`, not `Update`.
 
@@ -246,9 +246,9 @@ For a safer first pass:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -Update
 ```
 
-### Option 3: Install/update from GitHub with `-New`
+### Option 3: Refresh from GitHub with `-Ninja`
 
-Use this when the endpoint can reach GitHub. The first command downloads the reviewed, immutable release pinned by `deploy/reparo-release.json` to `C:\ProgramData\Reparo\Reparo.ps1`, with parse validation and rollback handling; the second runs the installed ProgramData copy. When running under Ninja, `-Install`, `-New`, and `-N` publish the installed runtime version to the `Reparo` device text field when Ninja's property API is available.
+Use this when the endpoint can reach GitHub. `-Ninja` downloads the reviewed, immutable release pinned by `deploy/reparo-release.json` to `C:\ProgramData\Reparo\Reparo.ps1`, with parse validation and rollback handling, then publishes the installed version plus saved WinGet health to Ninja's `Reparo` device text field. It publishes `Update Failed` if the refresh transaction fails.
 
 Ninja script body:
 
@@ -256,7 +256,6 @@ Ninja script body:
 $ErrorActionPreference = 'Stop'
 
 $installRoot = "$env:ProgramData\Reparo"
-$scriptPath = Join-Path $installRoot 'Reparo.ps1'
 $bootstrapUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
 $bootstrapPath = Join-Path $installRoot 'Reparo.bootstrap.ps1'
 
@@ -271,10 +270,7 @@ if (Get-Command Unblock-File -ErrorAction SilentlyContinue) {
     Unblock-File -Path $bootstrapPath
 }
 
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrapPath -New -InstallRoot $installRoot
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -Update
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrapPath -Ninja -InstallRoot $installRoot
 exit $LASTEXITCODE
 ```
 
@@ -284,10 +280,8 @@ Use `-N` / `-Latest` only when you intentionally want the current, unreviewed `m
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -N
 ```
 
-`deploy\Ninja-Reparo-VersionCheck.ps1` is a standalone Ninja regular-script payload.
-It reports `Not Installed` in Ninja's `Reparo` custom field when no ProgramData runtime
-exists. Otherwise it fetches and SHA-256 verifies the reviewed release, installs it, and
-publishes the installed version. A copy is kept on the operator Desktop for direct import.
+`-Ninja` replaces the former standalone Ninja version-check payload; no separate wrapper
+is needed. Upload or paste a current `Reparo.ps1` into Ninja and invoke it with `-Ninja`.
 
 ### Option 4: Install/update over SSH
 
