@@ -141,7 +141,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.0.3'
+$script:ReparoVersion = '1.3.0.4'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -266,6 +266,7 @@ function Get-ReparoVersionFlavor {
         '1.3.0.1' = [pscustomobject]@{ Quote = 'The dead speak only when you put the braces back.'; Source = 'Reparo maintenance log'; Art = '  BRACES: orphaned else returned to its crypt' }
         '1.3.0.2' = [pscustomobject]@{ Quote = 'Every ghost has properties if you know where to look.'; Source = 'Reparo maintenance log'; Art = '  SCOOP: object specter parsed without a séance' }
         '1.3.0.3' = [pscustomobject]@{ Quote = 'The machine is alive; it is merely being quiet about it.'; Source = 'Reparo maintenance log'; Art = '  WU: heartbeat monitor wired into the crypt' }
+        '1.3.0.4' = [pscustomobject]@{ Quote = 'Tuesday belongs to the patch goblins now.'; Source = 'Reparo maintenance log'; Art = '  CLOCK: self-update ritual scheduled for the weekly haunt' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -1344,6 +1345,44 @@ exit /b %ERRORLEVEL%
     if ($processParts -notcontains $binRoot) {
         $env:Path = (@($processParts) + $binRoot) -join $pathSeparator
     }
+}
+
+function Install-ReparoSelfUpdateTask {
+    param(
+        [Parameter(Mandatory)][string]$TargetRoot,
+        [switch]$WhatIfOnly
+    )
+
+    if (-not $script:ReparoIsWindows) { return }
+
+    $taskName = 'Reparo-SelfUpdate-Tuesday-1000'
+    $installedScriptPath = Join-Path $TargetRoot 'Reparo.ps1'
+    foreach ($commandName in @('New-ScheduledTaskAction', 'New-ScheduledTaskTrigger', 'New-ScheduledTaskPrincipal', 'New-ScheduledTaskSettingsSet', 'Register-ScheduledTask')) {
+        if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) {
+            throw "Unable to create Reparo self-update task; Windows ScheduledTasks cmdlet '$commandName' is unavailable."
+        }
+    }
+
+    if ($WhatIfOnly) {
+        Write-Info "Would create/update self-update task '$taskName' for every Tuesday at 10:00 AM: Reparo -New"
+        return
+    }
+
+    $scriptPathLiteral = ConvertTo-ReparoPowerShellLiteral -Value $installedScriptPath
+    $workerScript = "`$ErrorActionPreference = 'Continue'; & $scriptPathLiteral -New; if (`$null -ne `$LASTEXITCODE) { exit [int]`$LASTEXITCODE }"
+    $encodedWorker = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($workerScript))
+    $powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $powershellPath)) { throw "Unable to locate Windows PowerShell for Reparo self-update task: $powershellPath" }
+
+    $action = New-ScheduledTaskAction -Execute $powershellPath -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {0}' -f $encodedWorker)
+    $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Tuesday -At '10:00AM'
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Updates Reparo from its reviewed pinned release every Tuesday at 10:00 AM.' -Force -ErrorAction Stop | Out-Null
+
+    Write-Done "Created/updated self-update task '$taskName' (Tuesday 10:00 AM)."
+    Write-Info 'It runs as SYSTEM with highest privileges: Reparo -New'
+    Write-ReparoLog ("[TASK] Task={0}; Frequency=Weekly; Day=Tuesday; Time=10:00; Arguments=-New" -f $taskName)
 }
 
 function Invoke-ReparoNew {
@@ -2779,6 +2818,9 @@ if ($Install -or $New -or $Latest) {
         [IO.Path]::GetFullPath($defaultInstallRoot).TrimEnd('\\'),
         [StringComparison]::OrdinalIgnoreCase
     )
+    if ($script:ReparoIsWindows -and $Install -and -not $Preview -and $isDefaultInstallRoot) {
+        Install-ReparoSelfUpdateTask -TargetRoot $InstallRoot
+    }
     if ($script:ReparoIsWindows -and -not $Install -and -not $Preview -and $isDefaultInstallRoot) {
         $installedReparoPath = Join-Path $InstallRoot 'Reparo.ps1'
         Write-Host 'Checking Winget/App Installer after Reparo installation.' -ForegroundColor Cyan

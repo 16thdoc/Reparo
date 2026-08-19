@@ -83,6 +83,24 @@ exec "$runtime_path" "\$@"
 EOF
 chmod 755 "$shim_path"
 
+# Keep the installed native runner on the reviewed release channel. This mirrors the
+# Windows self-update task, but remains a user crontab entry because Linux does not
+# have a universal machine-wide task scheduler.
+if command -v crontab >/dev/null 2>&1; then
+    self_update_marker='# Reparo self-update task'
+    self_update_crontab=$(mktemp "${TMPDIR:-/tmp}/reparo-self-update-crontab.XXXXXX")
+    (crontab -l 2>/dev/null || true) | grep -F -v "$self_update_marker" >"$self_update_crontab" || true
+    printf '%s\n' "0 10 * * 2 \"$shim_path\" --new $self_update_marker" >>"$self_update_crontab"
+    if crontab "$self_update_crontab"; then
+        printf '%s\n' 'Created/updated weekly self-update cron task: Tuesday 10:00 AM (reparo --new).'
+    else
+        printf '%s\n' 'WARNING: Could not create the Reparo weekly self-update cron task.' >&2
+    fi
+    rm -f "$self_update_crontab"
+else
+    printf '%s\n' 'WARNING: crontab is unavailable; skipped the Reparo weekly self-update schedule.' >&2
+fi
+
 hash -r 2>/dev/null || true
 case ":$PATH:" in
     *":$shim_dir:"*) printf '%s\n' "PATH already includes $shim_dir." ;;

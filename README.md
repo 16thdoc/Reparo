@@ -115,6 +115,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Install
 C:\ProgramData\Reparo\bin\reparo.cmd
 ```
 
+On Windows, a normal ProgramData `-Install` also creates or updates the `Reparo-SelfUpdate-Tuesday-1000` SYSTEM task. It runs `reparo -New` every Tuesday at 10:00 AM, fetching only the reviewed release pinned in the release manifest. On native Linux, the installer creates the equivalent current-user cron entry when `crontab` is available. Custom install roots and preview installs do not create this schedule.
+
 Reparo tries to add that folder to machine `PATH`, falling back to user `PATH` if machine `PATH` cannot be changed. New PowerShell sessions can then run:
 
 ```powershell
