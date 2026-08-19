@@ -28,6 +28,12 @@ if (Test-Path -LiteralPath (Join-Path $repoRoot 'deploy\Ninja-Reparo-VersionChec
     throw 'Standalone Ninja version-check payload was not retired.'
 }
 
+$systemIdentityFunction = $source.IndexOf('function Test-ReparoSystemIdentity')
+$installLifecycle = $source.IndexOf('if ($Install -or $New -or $Latest)')
+if ($systemIdentityFunction -lt 0 -or $installLifecycle -lt 0 -or $systemIdentityFunction -gt $installLifecycle) {
+    throw 'Test-ReparoSystemIdentity must be declared before the install lifecycle can invoke it.'
+}
+
 if (-not $readme.Contains('`-Ninja` replaces the former standalone Ninja version-check payload')) {
     throw 'README does not document -Ninja as the unified Ninja lifecycle mode.'
 }

@@ -142,7 +142,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.1.1'
+$script:ReparoVersion = '1.3.1.2'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -275,6 +275,7 @@ function Get-ReparoVersionFlavor {
         '1.3.0.9' = [pscustomobject]@{ Quote = 'The first rule of bureaucracy is: blame the user.'; Source = 'Reparo maintenance log'; Art = '  SYSTEM: wrong sacrificial context detected' }
         '1.3.1.0' = [pscustomobject]@{ Quote = 'One ring to rule them all.'; Source = 'The Lord of the Rings'; Art = '  NINJA: duplicate updater fed to the volcano' }
         '1.3.1.1' = [pscustomobject]@{ Quote = 'The best way out is always through.'; Source = 'Robert Frost'; Art = '  WINGET: SYSTEM no longer rewrites user truth' }
+        '1.3.1.2' = [pscustomobject]@{ Quote = 'Time is an illusion. Lunchtime doubly so.'; Source = 'The Hitchhiker''s Guide to the Galaxy'; Art = '  ORDER: function summoned before its own execution' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -922,6 +923,15 @@ function Update-ReparoNinjaField {
     Write-Done "Ninja Reparo field updated: $value"
     Write-ReparoLog "[NINJA] Reparo field updated: $value"
     return $true
+}
+
+function Test-ReparoSystemIdentity {
+    try {
+        return ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18')
+    }
+    catch {
+        return $false
+    }
 }
 
 function Publish-ReparoInstalledNinjaVersion {
@@ -3022,15 +3032,6 @@ function Get-ReparoIdentityName {
     }
 
     return 'unknown'
-}
-
-function Test-ReparoSystemIdentity {
-    try {
-        return ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18')
-    }
-    catch {
-        return $false
-    }
 }
 
 function Get-ReparoWindowsReleaseInfo {
