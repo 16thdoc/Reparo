@@ -64,6 +64,21 @@ foreach ($required in @(
     }
 }
 
+$discovery = [regex]::Match($source, '(?s)function Invoke-ReparoWingetDiscovery \{.*?(?=function Resolve-ReparoShell \{)')
+if (-not $discovery.Success) {
+    throw 'Could not locate Invoke-ReparoWingetDiscovery.'
+}
+
+foreach ($required in @(
+    "@{ Section = 'Winget(source list)'; Command = 'winget source list --disable-interactivity' }",
+    "@{ Section = 'Winget(list upgrades)'; Command = 'winget list --upgrade-available --accept-source-agreements --disable-interactivity' }",
+    "@{ Section = 'Winget(upgrade list)'; Command = 'winget upgrade --accept-source-agreements --disable-interactivity' }"
+)) {
+    if (-not $discovery.Value.Contains($required)) {
+        throw "WinGet discovery non-interactive agreement contract is absent: $required"
+    }
+}
+
 $appxIndex = $body.IndexOf('Add-AppxPackage -RegisterByFamilyName')
 $pwshIndex = $body.IndexOf('Attempting Microsoft.WinGet.Client repair through PowerShell 7')
 if ($appxIndex -lt 0 -or $pwshIndex -lt 0 -or $appxIndex -gt $pwshIndex) {
