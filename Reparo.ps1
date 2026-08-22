@@ -142,7 +142,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.1.4'
+$script:ReparoVersion = '1.3.1.5'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -278,6 +278,7 @@ function Get-ReparoVersionFlavor {
         '1.3.1.2' = [pscustomobject]@{ Quote = 'Time is an illusion. Lunchtime doubly so.'; Source = 'The Hitchhiker''s Guide to the Galaxy'; Art = '  ORDER: function summoned before its own execution' }
         '1.3.1.3' = [pscustomobject]@{ Quote = 'You can''t take the sky from me.'; Source = 'Firefly'; Art = '  WINGET: legacy server spared the AppX séance' }
         '1.3.1.4' = [pscustomobject]@{ Quote = 'Not bad for a human.'; Source = 'Aliens'; Art = '  WINGET: source-agreement trap disarmed' }
+        '1.3.1.5' = [pscustomobject]@{ Quote = 'They mostly come at night. Mostly.'; Source = 'Aliens'; Art = '  WINGET: inapplicable update phantom classified' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
