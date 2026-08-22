@@ -18,6 +18,8 @@ foreach ($required in @(
     'Winget package requires manual uninstall/reinstall:',
     'Winget package requires a non-elevated session:',
     'Winget packages pending a non-elevated session:',
+    'REPARO-WINGET-SKIP not-applicable',
+    'Winget packages not applicable to this system or its current requirements:',
     '`$failedPackages.Count -gt 0',
     '[void]$commands.Add(''exit 0'')'
 )) {
