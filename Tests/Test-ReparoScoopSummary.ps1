@@ -11,7 +11,11 @@ foreach ($required in @(
     'Software       = $name',
     'CurrentVersion = $installed',
     'Version        = $available',
-    "[regex]::Match(`$line, '^(?<name>\S+)\s+(?<installed>\S+)\s+(?<available>\S+)')"
+    "[regex]::Match(`$line, '^(?<name>\S+)\s+(?<installed>\S+)\s+(?<available>\S+)')",
+    "Resolve-ReparoScoopRecoveryShell",
+    "term 'Get-FileHash' is not recognized",
+    "Import-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop; scoop update",
+    "-Section 'Scoop(retry)'"
 )) {
     if (-not $source.Contains($required)) {
         throw "Scoop structured-status summary contract is absent: $required"

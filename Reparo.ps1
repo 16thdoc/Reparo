@@ -142,7 +142,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.1.5'
+$script:ReparoVersion = '1.3.1.6'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -279,6 +279,7 @@ function Get-ReparoVersionFlavor {
         '1.3.1.3' = [pscustomobject]@{ Quote = 'You can''t take the sky from me.'; Source = 'Firefly'; Art = '  WINGET: legacy server spared the AppX séance' }
         '1.3.1.4' = [pscustomobject]@{ Quote = 'Not bad for a human.'; Source = 'Aliens'; Art = '  WINGET: source-agreement trap disarmed' }
         '1.3.1.5' = [pscustomobject]@{ Quote = 'They mostly come at night. Mostly.'; Source = 'Aliens'; Art = '  WINGET: inapplicable update phantom classified' }
+        '1.3.1.6' = [pscustomobject]@{ Quote = 'Game over, man. Game over.'; Source = 'Aliens'; Art = '  WINGET: manual reinstall phantom classified' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -3547,6 +3548,15 @@ function Resolve-ReparoShell {
     throw 'No runnable PowerShell host was found. Tried pwsh and powershell.'
 }
 
+function Resolve-ReparoScoopRecoveryShell {
+    # Scoop can replace its own scripts during `scoop update`. If that leaves a
+    # Windows PowerShell 5.1 worker without Get-FileHash, retry in clean pwsh.
+    $pwsh = Resolve-ReparoCommand -Name 'pwsh'
+    if ($pwsh) { return $pwsh.Source }
+
+    return Resolve-ReparoShell
+}
+
 function Test-ReparoBenignExit {
     param(
         [string]$Section,
@@ -3807,6 +3817,7 @@ function ConvertFrom-ReparoWingetTable {
             CurrentVersion = $match.Groups['version'].Value.Trim()
             Version        = $available
             Method         = $Method
+            Source         = $match.Groups['source'].Value.Trim()
         })
     }
 
@@ -5839,6 +5850,68 @@ function Sync-ReparoCommandOutputLog {
     $LineCount.Value = $lines.Count
 }
 
+function Invoke-ReparoNonElevatedWingetUpdate {
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [string]$Source = 'winget',
+        [int]$TimeoutSeconds = 0
+    )
+
+    if (-not $script:ReparoIsWindows) { throw 'Non-elevated Winget retry is supported on Windows only.' }
+    $powershell = Resolve-ReparoCommand -Name 'powershell'
+    if (-not $powershell) { throw 'Windows PowerShell is unavailable for the non-elevated Winget worker.' }
+
+    $safeId = ConvertTo-ReparoSafeFileName -Value $Id
+    $workerRoot = Join-Path $LogRoot ("{0}_WingetNonElevated_{1}_{2}" -f $script:ReparoLogBaseName, $safeId, [guid]::NewGuid().ToString('N'))
+    $workerScriptPath = "$workerRoot.ps1"
+    $workerOutputPath = "$workerRoot.out.log"
+    $workerStatusPath = "$workerRoot.status.json"
+    $idLiteral = ConvertTo-ReparoPowerShellLiteral -Value $Id
+    $sourceLiteral = ConvertTo-ReparoPowerShellLiteral -Value $Source
+    $outputLiteral = ConvertTo-ReparoPowerShellLiteral -Value $workerOutputPath
+    $statusLiteral = ConvertTo-ReparoPowerShellLiteral -Value $workerStatusPath
+    $workerScript = @"
+`$ErrorActionPreference = 'Continue'
+`$outputPath = $outputLiteral
+`$statusPath = $statusLiteral
+`$exitCode = 1
+try {
+    & winget upgrade --id $idLiteral --exact --source $sourceLiteral --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1 | ForEach-Object { Add-Content -LiteralPath `$outputPath -Value ([string]`$_) -Encoding UTF8 }
+    `$exitCode = `$LASTEXITCODE
+}
+catch {
+    Add-Content -LiteralPath `$outputPath -Value (`$_ | Out-String) -Encoding UTF8
+}
+[pscustomobject]@{ ExitCode = `$exitCode } | ConvertTo-Json -Compress | Set-Content -LiteralPath `$statusPath -Encoding UTF8
+"@
+    Set-Content -LiteralPath $workerScriptPath -Value $workerScript -Encoding UTF8
+
+    try {
+        $shell = New-Object -ComObject Shell.Application
+        $shell.ShellExecute($powershell.Source, "-NoProfile -ExecutionPolicy Bypass -File `"$workerScriptPath`"", $null, 'open', 0)
+    }
+    catch {
+        throw "Could not start an unelevated Winget worker through the logged-in Explorer shell: $($_.Exception.Message)"
+    }
+
+    Write-Info "Started non-elevated Winget worker for $Id; tailing its status."
+    Write-ReparoLog "[WINGET-NON-ELEVATED] Started Explorer-shell worker for $Id."
+    $output = New-Object System.Collections.Generic.List[string]
+    $loggedLineCount = 0
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    while (-not (Test-Path -LiteralPath $workerStatusPath)) {
+        Start-Sleep -Milliseconds 500
+        Sync-ReparoCommandOutputLog -Path $workerOutputPath -LineCount ([ref]$loggedLineCount) -Output $output -Section 'Winget(non-elevated)'
+        if ($TimeoutSeconds -gt 0 -and -not $IgnoreTimeouts -and $stopwatch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+            throw "Non-elevated Winget worker for $Id timed out after $($stopwatch.Elapsed)."
+        }
+    }
+    Sync-ReparoCommandOutputLog -Path $workerOutputPath -LineCount ([ref]$loggedLineCount) -Output $output -Section 'Winget(non-elevated)'
+    $status = Get-Content -LiteralPath $workerStatusPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $stopwatch.Stop()
+    [pscustomobject]@{ ExitCode = [int]$status.ExitCode; Output = $output.ToArray(); Elapsed = $stopwatch.Elapsed }
+}
+
 function Invoke-ReparoCommandStep {
     param(
         [string]$Section,
@@ -5874,12 +5947,31 @@ function Invoke-ReparoCommandStep {
         $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command $Command -Section $Section -TimeoutSeconds $TimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
         $output = @($result.Output)
         $exitCode = $result.ExitCode
+
+        if ($Section -eq 'Scoop' -and $exitCode -ne 0 -and (($output -join [Environment]::NewLine) -match "(?i)term 'Get-FileHash' is not recognized")) {
+            Write-Warning 'Scoop lost Get-FileHash while updating itself; repairing in a clean PowerShell worker and retrying once.'
+            Write-ReparoLog '[SCOOP-SELF-HEAL] Get-FileHash was unavailable after Scoop self-update; refreshing Scoop before one retry.'
+            Add-ReparoSummaryNote 'Scoop self-healed a missing Get-FileHash command after its updater replaced itself; update queue retried once.'
+
+            $recoveryShell = Resolve-ReparoScoopRecoveryShell
+            $recovery = Invoke-ReparoTimedCommand -ShellPath $recoveryShell -Command 'Import-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop; scoop update' -Section 'Scoop(self-heal)' -TimeoutSeconds $TimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
+            if ($recovery.ExitCode -eq 0) {
+                Write-Info 'Scoop self-heal completed; retrying the update queue once.'
+                $retry = Invoke-ReparoTimedCommand -ShellPath $recoveryShell -Command $Command -Section 'Scoop(retry)' -TimeoutSeconds $TimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
+                $output = @($retry.Output)
+                $exitCode = $retry.ExitCode
+            }
+            else {
+                Write-Warning ("Scoop self-heal failed with exit code {0}; preserving the original failure." -f $recovery.ExitCode)
+                Write-ReparoLog ("[SCOOP-SELF-HEAL] Recovery failed with exit code {0}." -f $recovery.ExitCode)
+            }
+        }
         Write-ReparoDebug ("{0} output lines captured: {1}" -f $Section, $output.Count)
 
         $manualWingetReason = Get-ReparoWingetManualInterventionReason -Output $output
         $manualWingetPackageIds = @(
             $output |
-                ForEach-Object { [regex]::Match([string]$_, 'Winget package requires manual uninstall/reinstall:\s*(?<Id>\S+)') } |
+            ForEach-Object { [regex]::Match([string]$_, '(?:Winget package requires manual uninstall/reinstall:|REPARO-WINGET-SKIP manual)\s*(?<Id>\S+)') } |
                 Where-Object { $_.Success } |
                 ForEach-Object { $_.Groups['Id'].Value } |
                 Select-Object -Unique
@@ -5920,7 +6012,13 @@ function Invoke-ReparoCommandStep {
             foreach ($packageId in $nonElevatedWingetPackageIds) {
                 $nonElevatedUpdate = @($pendingUpdates | Where-Object { $_.Id -ieq $packageId } | Select-Object -First 1)
                 if ($nonElevatedUpdate.Count -gt 0) {
-                    Add-ReparoSummaryRecord -Bucket Skipped -Software $nonElevatedUpdate[0].Software -CurrentVersion $nonElevatedUpdate[0].CurrentVersion -Version $nonElevatedUpdate[0].Version -Method $nonElevatedUpdate[0].Method -Reason 'requires a non-elevated user session'
+                    $nonElevatedResult = Invoke-ReparoNonElevatedWingetUpdate -Id $packageId -Source $nonElevatedUpdate[0].Source -TimeoutSeconds $WingetTimeoutSeconds
+                    if ($nonElevatedResult.ExitCode -eq 0) {
+                        Add-ReparoSummaryRecord -Bucket Updated -Software $nonElevatedUpdate[0].Software -CurrentVersion $nonElevatedUpdate[0].CurrentVersion -Version $nonElevatedUpdate[0].Version -Method $nonElevatedUpdate[0].Method -Reason 'updated by non-elevated Explorer-shell worker'
+                    }
+                    else {
+                        Add-ReparoSummaryRecord -Bucket Skipped -Software $nonElevatedUpdate[0].Software -CurrentVersion $nonElevatedUpdate[0].CurrentVersion -Version $nonElevatedUpdate[0].Version -Method $nonElevatedUpdate[0].Method -Reason ("non-elevated worker exited {0}" -f $nonElevatedResult.ExitCode)
+                    }
                 }
             }
             $pendingUpdates = @($pendingUpdates | Where-Object { $nonElevatedWingetPackageIds -notcontains $_.Id })

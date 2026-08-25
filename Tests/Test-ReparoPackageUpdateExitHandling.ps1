@@ -16,6 +16,7 @@ $wingetQueue = [regex]::Match($source, '(?s)function New-ReparoWingetUpgradeQueu
 if (-not $wingetQueue.Success) { throw 'Could not locate the WinGet upgrade queue builder.' }
 foreach ($required in @(
     'Winget package requires manual uninstall/reinstall:',
+    'REPARO-WINGET-SKIP manual',
     'Winget package requires a non-elevated session:',
     'Winget packages pending a non-elevated session:',
     'REPARO-WINGET-SKIP not-applicable',
@@ -32,6 +33,24 @@ $wingetElevation = [regex]::Match($source, '(?s)function Get-ReparoWingetNonElev
 if (-not $wingetElevation.Success) { throw 'Could not locate the WinGet non-elevated-session classifier.' }
 if (-not $wingetElevation.Value.Contains('installer cannot be run from an administrator context')) {
     throw 'WinGet elevated-installer detection is absent.'
+}
+
+$commandStep = [regex]::Match($source, '(?s)function Invoke-ReparoCommandStep \{.*?(?=function )')
+if (-not $commandStep.Success) { throw 'Could not locate the WinGet result classifier.' }
+if (-not $commandStep.Value.Contains('(?:Winget package requires manual uninstall/reinstall:|REPARO-WINGET-SKIP manual)')) {
+    throw 'WinGet manual-reinstall marker is not parsed into the summary.'
+}
+foreach ($required in @(
+    'function Invoke-ReparoNonElevatedWingetUpdate',
+    'New-Object -ComObject Shell.Application',
+    'Started non-elevated Winget worker for $Id; tailing its status.',
+    "-Section 'Winget(non-elevated)'",
+    "-Source `$nonElevatedUpdate[0].Source",
+    "updated by non-elevated Explorer-shell worker"
+)) {
+    if (-not $source.Contains($required)) {
+        throw "WinGet non-elevated worker contract is absent: $required"
+    }
 }
 
 $windowsUpdate = [regex]::Match($source, '(?s)if \(Test-ReparoSectionSelected ''WindowsUpdate''\) \{.*')
