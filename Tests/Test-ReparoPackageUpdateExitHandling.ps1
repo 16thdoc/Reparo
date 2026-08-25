@@ -20,6 +20,7 @@ foreach ($required in @(
     'Winget package requires a non-elevated session:',
     'Winget packages pending a non-elevated session:',
     'REPARO-WINGET-SKIP not-applicable',
+    'REPARO-WINGET-UPDATED',
     'Winget packages not applicable to this system or its current requirements:',
     '`$failedPackages.Count -gt 0',
     '[void]$commands.Add(''exit 0'')'
@@ -51,6 +52,9 @@ foreach ($required in @(
     if (-not $source.Contains($required)) {
         throw "WinGet non-elevated worker contract is absent: $required"
     }
+}
+if (-not $commandStep.Value.Contains('REPARO-WINGET-UPDATED\s*(?<Id>\S+)')) {
+    throw 'WinGet successful updates are not receipt-gated in the summary.'
 }
 
 $windowsUpdate = [regex]::Match($source, '(?s)if \(Test-ReparoSectionSelected ''WindowsUpdate''\) \{.*')
