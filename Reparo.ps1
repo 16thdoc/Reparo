@@ -121,6 +121,8 @@ param(
     [string]$SourceUrl = 'https://api.github.com/repos/16thdoc/Reparo/contents/Reparo.ps1?ref=main',
     [Alias('NB')]
     [switch]$NoBackup,
+    # Internal handoff for -Ninja: child installs, parent publishes once.
+    [switch]$SkipNinjaPublish,
     [Alias('ST')]
     [switch]$Status,
     [Alias('SweepStale', 'Clean', 'Prune', 'SW')]
@@ -875,6 +877,23 @@ $script:ReparoSettingsPath = Join-Path $InstallRoot 'reparo-settings.json'
 $script:ReparoWingetHealthPath = Join-Path $InstallRoot 'winget-health.json'
 $script:ReparoWingetHealthStatus = $null
 
+function Get-ReparoWingetHealth {
+    if (-not (Test-Path -LiteralPath $script:ReparoWingetHealthPath -PathType Leaf)) { return $null }
+
+    try { return (Get-Content -LiteralPath $script:ReparoWingetHealthPath -Raw | ConvertFrom-Json -ErrorAction Stop) }
+    catch {
+        Write-ReparoLog ("[WARN] Unable to read Winget health state: {0}" -f $_.Exception.Message)
+        return $null
+    }
+}
+
+function Test-ReparoValidatedWingetOk {
+    $health = Get-ReparoWingetHealth
+    if (-not $health -or $health.Status -ne 'OK') { return $false }
+    # Existing files predate provenance; their persisted OK is a validated result.
+    return ($null -eq $health.PSObject.Properties['Validated'] -or [bool]$health.Validated)
+}
+
 function Set-ReparoWingetHealth {
     param(
         [ValidateSet('OK', 'USER', 'FAIL', 'OLD')][string]$Status,
@@ -888,6 +907,9 @@ function Set-ReparoWingetHealth {
         Computer   = $env:COMPUTERNAME
         Reparo     = $script:ReparoVersion
         Detail     = $Detail
+        Context    = if (Test-ReparoSystemIdentity) { 'SYSTEM' } else { 'User' }
+        Identity   = Get-ReparoIdentityName
+        Validated  = ($Status -eq 'OK')
         Log        = $script:ReparoLogPath
     }
     try {
@@ -914,12 +936,10 @@ function Update-ReparoNinjaField {
     param([string]$Version = $script:ReparoVersion)
 
     $status = 'UNKNOWN'
-    if (Test-Path -LiteralPath $script:ReparoWingetHealthPath) {
-        try {
-            $health = Get-Content -LiteralPath $script:ReparoWingetHealthPath -Raw | ConvertFrom-Json -ErrorAction Stop
-            if ($health.Status -in @('OK', 'USER', 'FAIL', 'OLD')) { $status = $health.Status }
-        }
-        catch { Write-ReparoLog ("[WARN] Unable to read Winget health state: {0}" -f $_.Exception.Message) }
+    $health = Get-ReparoWingetHealth
+    if ($health) {
+        if ($health.Status -in @('OK', 'USER', 'FAIL', 'OLD')) { $status = $health.Status }
+        Write-ReparoLog ("[NINJA] Publishing persisted WG:{0} without a health refresh." -f $status)
     }
     elseif (Test-ReparoWingetUnsupportedWindows) {
         $status = 'OLD'
@@ -2862,7 +2882,7 @@ if (Invoke-ReparoPersistentTask) {
 }
 
 if ($Ninja) {
-    $ninjaInstallArguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-New', '-InstallRoot', $InstallRoot)
+    $ninjaInstallArguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-New', '-SkipNinjaPublish', '-InstallRoot', $InstallRoot)
     if ($Preview) { $ninjaInstallArguments += '-Preview' }
     if ($NoBackup) { $ninjaInstallArguments += '-NoBackup' }
     if (-not $InstallNuGetProvider) { $ninjaInstallArguments += '-InstallNuGetProvider:$false' }
@@ -2871,7 +2891,7 @@ if ($Ninja) {
         Write-Info 'Ninja mode: installing the reviewed, pinned Reparo release.'
         & powershell.exe @ninjaInstallArguments
         if ($LASTEXITCODE -ne 0) { throw "Pinned Reparo install exited with code $LASTEXITCODE." }
-        Update-ReparoNinjaField | Out-Null
+        Publish-ReparoInstalledNinjaVersion -TargetRoot $InstallRoot | Out-Null
         Complete-ReparoUtilityLog -Status 'COMPLETE'
         return
     }
@@ -2909,14 +2929,12 @@ if ($Install -or $New -or $Latest) {
 
     Write-Info "Reparo install mode: $installMode"
     Invoke-ReparoNew -TargetRoot $InstallRoot -Url $installSource -SkipBackup:$NoBackup -WhatIfOnly:$Preview
-    if (-not $Preview) {
+    if (-not $Preview -and -not $SkipNinjaPublish) {
         Publish-ReparoInstalledNinjaVersion -TargetRoot $InstallRoot | Out-Null
     }
 
-    # A normal ProgramData install is also the best moment to repair a missing or
-    # broken App Installer. Use the freshly installed runtime so the repair path is
-    # identical to a later interactive or RMM maintenance run. Do not do this for
-    # custom roots: callers use those for offline validation and test transactions.
+    # Runtime installation never validates WinGet health. Persisted health remains
+    # authoritative until an explicit -WG health refresh runs.
     $defaultInstallRoot = Join-Path $env:ProgramData 'Reparo'
     $isDefaultInstallRoot = [string]::Equals(
         [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\\'),
@@ -2926,20 +2944,9 @@ if ($Install -or $New -or $Latest) {
     if ($script:ReparoIsWindows -and $Install -and -not $Preview -and $isDefaultInstallRoot) {
         Install-ReparoSelfUpdateTask -TargetRoot $InstallRoot
     }
-    if ($script:ReparoIsWindows -and -not $Install -and -not $Preview -and $isDefaultInstallRoot -and -not (Test-ReparoSystemIdentity)) {
-        $installedReparoPath = Join-Path $InstallRoot 'Reparo.ps1'
-        Write-Host 'Checking Winget/App Installer after Reparo installation.' -ForegroundColor Cyan
-        $wingetRepairArguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $installedReparoPath, '-WingetDiscover')
-        # The default is true; do not serialize a Boolean through powershell.exe as
-        # the literal System.String value. Pass only an intentional opt-out.
-        if (-not $InstallNuGetProvider) { $wingetRepairArguments += '-InstallNuGetProvider:$false' }
-        & powershell.exe @wingetRepairArguments
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Post-install Winget repair/discovery exited with code $LASTEXITCODE. Reparo was installed successfully; see its log for the repair result."
-        }
-    }
-    elseif ($script:ReparoIsWindows -and -not $Install -and -not $Preview -and $isDefaultInstallRoot) {
-        Write-Info 'Skipping post-install Winget/App Installer discovery under SYSTEM; preserving the saved interactive-user health state.'
+    if ($script:ReparoIsWindows -and -not $Preview -and $isDefaultInstallRoot) {
+        Write-Info 'Runtime update preserves persisted WinGet health; use -WG to refresh it.'
+        Write-ReparoLog '[WINGET-HEALTH] Runtime update did not refresh WinGet health; persisted state remains authoritative until -WG runs.'
     }
 
     Complete-ReparoUtilityLog -Status $(if ($Preview) { 'PREVIEW' } else { 'COMPLETE' })
@@ -3425,7 +3432,14 @@ Repair-WinGetPackageManager -Force -Latest -ErrorAction Stop
         Write-ReparoDebug ("winget repair path failed: {0}" -f $detail)
         $requiresInteractiveUser = (($detail -match '(?i)Local System account is not allowed') -or ($appxRegistrationError -match '(?i)Local System account is not allowed'))
         if ($requiresInteractiveUser) {
+            if ((Test-ReparoSystemIdentity) -and (Test-ReparoValidatedWingetOk)) {
+                $script:ReparoWingetHealthStatus = 'OK'
+                Write-ReparoLog '[WINGET-HEALTH] SYSTEM cannot perform AppX registration; existing validated WG:OK preserved.'
+                Write-ReparoLog '[SKIP] Direct App Installer fallback skipped because Local System cannot perform this AppX operation.'
+                return $false
+            }
             Set-ReparoWingetHealth -Status USER -Detail 'App Installer deployment requires an interactive user context; SYSTEM cannot perform this AppX operation.'
+            Write-ReparoLog '[WINGET-HEALTH] No previous validated health exists; marking WG:USER.'
             Write-ReparoLog '[SKIP] Direct App Installer fallback skipped because Local System cannot perform this AppX operation.'
             return $false
         }
@@ -6334,7 +6348,7 @@ if ($runWingetSections) {
         }
     }
     else {
-        if ($script:ReparoWingetHealthStatus -ne 'USER') {
+        if ($script:ReparoWingetHealthStatus -notin @('USER', 'OK')) {
             Set-ReparoWingetHealth -Status FAIL -Detail 'winget was not found or could not be repaired.'
         }
         Write-Skip 'winget not found or could not be repaired; skipping Winget sections'

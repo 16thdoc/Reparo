@@ -27,7 +27,11 @@ foreach ($required in @(
     'Install-Module -Name Microsoft.WinGet.Client -Force -AllowClobber -Scope AllUsers -Repository PSGallery -Confirm:$false -ErrorAction Stop',
     "& `$pwshPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command `$repairCommand",
     "`$requiresInteractiveUser = ((`$detail -match '(?i)Local System account is not allowed') -or (`$appxRegistrationError -match '(?i)Local System account is not allowed'))",
+    'if ((Test-ReparoSystemIdentity) -and (Test-ReparoValidatedWingetOk))',
+    "`$script:ReparoWingetHealthStatus = 'OK'",
+    "[WINGET-HEALTH] SYSTEM cannot perform AppX registration; existing validated WG:OK preserved.",
     "Set-ReparoWingetHealth -Status USER -Detail 'App Installer deployment requires an interactive user context; SYSTEM cannot perform this AppX operation.'",
+    '[WINGET-HEALTH] No previous validated health exists; marking WG:USER.',
     "Write-ReparoLog '[SKIP] Direct App Installer fallback skipped because Local System cannot perform this AppX operation.'"
 )) {
     if (-not $body.Contains($required)) {
@@ -55,12 +59,11 @@ if (-not $installBlock.Success) {
 
 foreach ($required in @(
     "Join-Path `$env:ProgramData 'Reparo'",
-    "`$wingetRepairArguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', `$installedReparoPath, '-WingetDiscover')",
-    "if (-not `$InstallNuGetProvider) { `$wingetRepairArguments += '-InstallNuGetProvider:`$false' }",
-    '& powershell.exe @wingetRepairArguments'
+    "Runtime update preserves persisted WinGet health; use -WG to refresh it.",
+    '[WINGET-HEALTH] Runtime update did not refresh WinGet health; persisted state remains authoritative until -WG runs.'
 )) {
     if (-not $installBlock.Value.Contains($required)) {
-        throw "Reparo install does not perform the unattended Winget repair/discovery contract: $required"
+        throw "Reparo install does not preserve the persisted Winget health contract: $required"
     }
 }
 

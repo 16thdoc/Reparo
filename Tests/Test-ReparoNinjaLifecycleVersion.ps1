@@ -13,15 +13,20 @@ foreach ($required in @(
     "[Alias('WG')]`n    [switch]`$WingetHealth",
     '$WingetDiscover = $true',
     "if (`$Ninja) {",
-    "'-New', '-InstallRoot', `$InstallRoot",
+    "'-New', '-SkipNinjaPublish', '-InstallRoot', `$InstallRoot",
     "& powershell.exe @ninjaInstallArguments",
+    'Publish-ReparoInstalledNinjaVersion -TargetRoot $InstallRoot | Out-Null',
     "& `$setter.Name -Name 'Reparo' -Value 'Update Failed'",
-    "-and -not (Test-ReparoSystemIdentity)",
-    "Skipping post-install Winget/App Installer discovery under SYSTEM; preserving the saved interactive-user health state."
+    "Runtime update preserves persisted WinGet health; use -WG to refresh it."
 )) {
     if (-not $source.Contains($required)) {
         throw "Ninja lifecycle version publishing contract is absent: $required"
     }
+}
+
+$ninjaBlock = [regex]::Match($source, '(?s)if \(\$Ninja\) \{.*?(?=if \(\$Install -or \$New -or \$Latest\))')
+if (-not $ninjaBlock.Success -or $ninjaBlock.Value.Contains('Update-ReparoNinjaField | Out-Null')) {
+    throw '-Ninja must publish exactly once through Publish-ReparoInstalledNinjaVersion after its child update.'
 }
 
 if (Test-Path -LiteralPath (Join-Path $repoRoot 'deploy\Ninja-Reparo-VersionCheck.ps1')) {
