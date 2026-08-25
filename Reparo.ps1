@@ -142,7 +142,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.1.7'
+$script:ReparoVersion = '1.3.1.8'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -281,6 +281,7 @@ function Get-ReparoVersionFlavor {
         '1.3.1.5' = [pscustomobject]@{ Quote = 'They mostly come at night. Mostly.'; Source = 'Aliens'; Art = '  WINGET: inapplicable update phantom classified' }
         '1.3.1.6' = [pscustomobject]@{ Quote = 'Game over, man. Game over.'; Source = 'Aliens'; Art = '  WINGET: manual reinstall phantom classified' }
         '1.3.1.7' = [pscustomobject]@{ Quote = 'This is not a drill.'; Source = 'Spaceballs'; Art = '  WINGET: success receipts or it did not happen' }
+        '1.3.1.8' = [pscustomobject]@{ Quote = 'We''re on an express elevator to hell, going down!'; Source = 'Aliens'; Art = '  WINGET: user-scope escape hatch and deferred runtime update armed' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -5862,6 +5863,7 @@ function Invoke-ReparoNonElevatedWingetUpdate {
     $powershell = Resolve-ReparoCommand -Name 'powershell'
     if (-not $powershell) { throw 'Windows PowerShell is unavailable for the non-elevated Winget worker.' }
 
+    if ([string]::IsNullOrWhiteSpace($Source)) { $Source = 'winget' }
     $safeId = ConvertTo-ReparoSafeFileName -Value $Id
     $workerRoot = Join-Path $LogRoot ("{0}_WingetNonElevated_{1}_{2}" -f $script:ReparoLogBaseName, $safeId, [guid]::NewGuid().ToString('N'))
     $workerScriptPath = "$workerRoot.ps1"
@@ -5913,6 +5915,68 @@ catch {
     [pscustomobject]@{ ExitCode = [int]$status.ExitCode; Output = $output.ToArray(); Elapsed = $stopwatch.Elapsed }
 }
 
+function Invoke-ReparoDeferredWingetUpdate {
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [string]$Source = 'winget',
+        [Parameter(Mandatory)][int]$WaitForProcessId,
+        [int]$TimeoutSeconds = 0
+    )
+
+    if (-not $script:ReparoIsWindows) { throw 'Deferred Winget updates are supported on Windows only.' }
+    $powershell = Resolve-ReparoCommand -Name 'powershell'
+    if (-not $powershell) { throw 'Windows PowerShell is unavailable for the deferred Winget worker.' }
+    if ([string]::IsNullOrWhiteSpace($Source)) { $Source = 'winget' }
+
+    $safeId = ConvertTo-ReparoSafeFileName -Value $Id
+    $workerRoot = Join-Path $LogRoot ("{0}_WingetDeferred_{1}_{2}" -f $script:ReparoLogBaseName, $safeId, [guid]::NewGuid().ToString('N'))
+    $workerScriptPath = "$workerRoot.ps1"
+    $workerOutputPath = "$workerRoot.out.log"
+    $workerStatusPath = "$workerRoot.status.json"
+    $idLiteral = ConvertTo-ReparoPowerShellLiteral -Value $Id
+    $sourceLiteral = ConvertTo-ReparoPowerShellLiteral -Value $Source
+    $outputLiteral = ConvertTo-ReparoPowerShellLiteral -Value $workerOutputPath
+    $statusLiteral = ConvertTo-ReparoPowerShellLiteral -Value $workerStatusPath
+    $deadlineUtc = (Get-Date).AddSeconds($(if ($TimeoutSeconds -gt 0) { $TimeoutSeconds } else { 3600 })).ToUniversalTime().ToString('o')
+    $deadlineLiteral = ConvertTo-ReparoPowerShellLiteral -Value $deadlineUtc
+    $workerScript = @"
+`$ErrorActionPreference = 'Continue'
+`$outputPath = $outputLiteral
+`$statusPath = $statusLiteral
+`$deadline = [datetime]::Parse($deadlineLiteral).ToUniversalTime()
+`$exitCode = 1
+while (Get-Process -Id $WaitForProcessId -ErrorAction SilentlyContinue) {
+    if ([datetime]::UtcNow -ge `$deadline) {
+        Add-Content -LiteralPath `$outputPath -Value 'Timed out waiting for Reparo to exit.' -Encoding UTF8
+        [pscustomobject]@{ ExitCode = `$exitCode } | ConvertTo-Json -Compress | Set-Content -LiteralPath `$statusPath -Encoding UTF8
+        exit `$exitCode
+    }
+    Start-Sleep -Seconds 1
+}
+try {
+    & winget upgrade --id $idLiteral --exact --source $sourceLiteral --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1 | ForEach-Object { Add-Content -LiteralPath `$outputPath -Value ([string]`$_) -Encoding UTF8 }
+    `$exitCode = `$LASTEXITCODE
+}
+catch {
+    Add-Content -LiteralPath `$outputPath -Value (`$_ | Out-String) -Encoding UTF8
+}
+[pscustomobject]@{ ExitCode = `$exitCode } | ConvertTo-Json -Compress | Set-Content -LiteralPath `$statusPath -Encoding UTF8
+"@
+    Set-Content -LiteralPath $workerScriptPath -Value $workerScript -Encoding UTF8
+
+    try {
+        $shell = New-Object -ComObject Shell.Application
+        $shell.ShellExecute($powershell.Source, "-NoProfile -ExecutionPolicy Bypass -File `"$workerScriptPath`"", $null, 'open', 0)
+    }
+    catch {
+        throw "Could not start a deferred Winget worker through the logged-in Explorer shell: $($_.Exception.Message)"
+    }
+
+    Write-Info "Queued deferred Winget update for $Id after Reparo exits."
+    Write-ReparoLog "[WINGET-DEFERRED] Queued Explorer-shell worker for $Id after PID $WaitForProcessId exits."
+    return [pscustomobject]@{ OutputPath = $workerOutputPath; StatusPath = $workerStatusPath }
+}
+
 function Invoke-ReparoCommandStep {
     param(
         [string]$Section,
@@ -5935,6 +5999,10 @@ function Invoke-ReparoCommandStep {
     Write-ReparoLog "[STEP] $Section"
     Write-ReparoLog ("[CMD] {0}" -f $Command)
     $pendingUpdates = @(Get-ReparoPendingUpdates -Section $Section)
+    $deferredWingetUpdates = @()
+    if ($Section -eq 'Winget') {
+        $deferredWingetUpdates = @($pendingUpdates | Where-Object { $_.Id -in @('Microsoft.PowerShell', 'SST.OpenCodeDesktop') })
+    }
 
     if ($Preview) {
         Write-ReparoLog ("[DRY-RUN] {0}" -f $Command)
@@ -6039,6 +6107,14 @@ function Invoke-ReparoCommandStep {
             foreach ($packageId in $notApplicableWingetPackageIds) {
                 $notApplicableUpdate = @($pendingUpdates | Where-Object { $_.Id -ieq $packageId } | Select-Object -First 1)
                 if ($notApplicableUpdate.Count -gt 0) {
+                    if (Test-ReparoCurrentProcessElevated) {
+                        $nonElevatedResult = Invoke-ReparoNonElevatedWingetUpdate -Id $packageId -Source $notApplicableUpdate[0].Source -TimeoutSeconds $WingetTimeoutSeconds
+                        if ($nonElevatedResult.ExitCode -eq 0) {
+                            Add-ReparoSummaryRecord -Bucket Updated -Software $notApplicableUpdate[0].Software -CurrentVersion $notApplicableUpdate[0].CurrentVersion -Version $notApplicableUpdate[0].Version -Method $notApplicableUpdate[0].Method -Reason 'updated by non-elevated Explorer-shell worker after elevated applicability retry'
+                            $updatedWingetPackageIds += $packageId
+                            continue
+                        }
+                    }
                     Add-ReparoSummaryRecord -Bucket Skipped -Software $notApplicableUpdate[0].Software -CurrentVersion $notApplicableUpdate[0].CurrentVersion -Version $notApplicableUpdate[0].Version -Method $notApplicableUpdate[0].Method -Reason 'not applicable to this system or its current requirements'
                 }
             }
@@ -6068,6 +6144,11 @@ function Invoke-ReparoCommandStep {
             Write-ReparoLog ("[ERROR] {0} failed with exit code {1}" -f $Section, $exitCode)
             Add-ReparoSummaryRecord -Bucket Failed -Software $Section -Version '-' -Method $Section -Reason "exit code $exitCode"
             return
+        }
+
+        foreach ($deferredUpdate in $deferredWingetUpdates) {
+            $deferredResult = Invoke-ReparoDeferredWingetUpdate -Id $deferredUpdate.Id -Source $deferredUpdate.Source -WaitForProcessId $PID -TimeoutSeconds $WingetTimeoutSeconds
+            Add-ReparoSummaryRecord -Bucket Skipped -Software $deferredUpdate.Software -CurrentVersion $deferredUpdate.CurrentVersion -Version $deferredUpdate.Version -Method $deferredUpdate.Method -Reason ("deferred until Reparo exits; worker status: {0}" -f $deferredResult.StatusPath)
         }
 
         Write-Done "$Section complete"

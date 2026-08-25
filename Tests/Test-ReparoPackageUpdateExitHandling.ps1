@@ -47,6 +47,9 @@ foreach ($required in @(
     'Started non-elevated Winget worker for $Id; tailing its status.',
     "-Section 'Winget(non-elevated)'",
     "-Source `$nonElevatedUpdate[0].Source",
+    "if ([string]::IsNullOrWhiteSpace(`$Source)) { `$Source = 'winget' }",
+    'Invoke-ReparoDeferredWingetUpdate',
+    'Queued deferred Winget update for $Id after Reparo exits.',
     "updated by non-elevated Explorer-shell worker"
 )) {
     if (-not $source.Contains($required)) {
