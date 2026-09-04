@@ -18,6 +18,7 @@ foreach ($required in @(
     'Winget package requires manual uninstall/reinstall:',
     'REPARO-WINGET-SKIP manual',
     'Winget package requires a non-elevated session:',
+    'package installed for user scope cannot be uninstalled when running with administrator privileges',
     'Winget packages pending a non-elevated session:',
     'REPARO-WINGET-SKIP not-applicable',
     'REPARO-WINGET-UPDATED',
@@ -28,6 +29,12 @@ foreach ($required in @(
     if (-not $wingetQueue.Value.Contains($required)) {
         throw "WinGet manual-migration exit handling is absent: $required"
     }
+}
+
+$goRow = 'Go Programming Language amd64 go1.26.5 GoLang.Go 1.26.5 1.27.0'
+$goMatch = [regex]::Match($goRow, '^(?<name>.+)\s+(?<id>(?=[\w-]*[A-Za-z])[\w-]+(?:\.[\w-]+)+)\s+(?<version>\S+)\s+(?<available>\S+)(?:\s+(?<source>\S+))?\s*$')
+if (-not $goMatch.Success -or $goMatch.Groups['id'].Value -ne 'GoLang.Go') {
+    throw 'WinGet table parsing does not retain GoLang.Go when a display name contains go1.26.5.'
 }
 
 $wingetElevation = [regex]::Match($source, '(?s)function Get-ReparoWingetNonElevatedSessionReason \{.*?(?=function Invoke-ReparoWingetRepair)')

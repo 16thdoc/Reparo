@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.1.9'
+$script:ReparoVersion = '1.3.1.10'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -285,6 +285,7 @@ function Get-ReparoVersionFlavor {
         '1.3.1.7' = [pscustomobject]@{ Quote = 'This is not a drill.'; Source = 'Spaceballs'; Art = '  WINGET: success receipts or it did not happen' }
         '1.3.1.8' = [pscustomobject]@{ Quote = 'We''re on an express elevator to hell, going down!'; Source = 'Aliens'; Art = '  WINGET: user-scope escape hatch and deferred runtime update armed' }
         '1.3.1.9' = [pscustomobject]@{ Quote = 'You know, Burke, I don''t know which species is worse.'; Source = 'Aliens'; Art = '  WINGET: stale telemetry exorcised from the release channel' }
+        '1.3.1.10' = [pscustomobject]@{ Quote = 'The ledger is the blade. The receipts are the blood.'; Source = 'Reparo maintenance log'; Art = '  WINGET: version-shifter and admin ghost exorcised' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -3819,9 +3820,10 @@ function ConvertFrom-ReparoWingetTable {
         if ($line -match '^(No installed package found|No available upgrade found|No packages found|The following packages have an upgrade)') { continue }
 
         # WinGet drops the padded Name/Id column gap when a display name exceeds
-        # its nominal width. Package IDs contain a dot, unlike the words in a
-        # display name, so use that stable delimiter instead of fixed spacing.
-        $match = [regex]::Match($line, '^(?<name>.+?)\s+(?<id>(?=[\w-]*[A-Za-z])[\w-]+(?:\.[\w-]+)+)\s+(?<version>\S+)\s+(?<available>\S+)(?:\s+(?<source>\S+))?\s*$')
+        # its nominal width. Be greedy for that name so version-shaped fragments
+        # such as "go1.26.5" cannot masquerade as the package ID; the real ID is
+        # the last dotted identifier before the installed/available versions.
+        $match = [regex]::Match($line, '^(?<name>.+)\s+(?<id>(?=[\w-]*[A-Za-z])[\w-]+(?:\.[\w-]+)+)\s+(?<version>\S+)\s+(?<available>\S+)(?:\s+(?<source>\S+))?\s*$')
         if (-not $match.Success) { continue }
 
         $name = $match.Groups['name'].Value.Trim()
@@ -3971,7 +3973,7 @@ function New-ReparoWingetUpgradeQueueCommand {
         [void]$commands.Add(("`$wingetOutput = @(winget upgrade --id {0} --exact --source {1} --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1)" -f $id, $source))
         [void]$commands.Add("`$wingetExitCode = `$LASTEXITCODE")
         [void]$commands.Add("`$wingetOutput | ForEach-Object { Write-Output `$_ }")
-        [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Output ('REPARO-WINGET-SKIP manual ' + " + $id + "); Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)installer cannot be run from an administrator context') { Write-Output ('REPARO-WINGET-SKIP non-elevated ' + " + $id + "); Write-Warning ('Winget package requires a non-elevated session: ' + " + $id + "); `$nonElevatedPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)No applicable upgrade found|does not apply to your system or requirements') { Write-Output ('REPARO-WINGET-SKIP not-applicable ' + " + $id + "); Write-Warning ('Winget package is not applicable to this system or its current requirements: ' + " + $id + "); `$notApplicablePackages += " + $id + " } else { `$failedPackages += " + $id + ' } } else { Write-Output (''REPARO-WINGET-UPDATED '' + ' + $id + ') }'))
+        [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Output ('REPARO-WINGET-SKIP manual ' + " + $id + "); Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)installer cannot be run from an administrator context|package installed for user scope cannot be uninstalled when running with administrator privileges') { Write-Output ('REPARO-WINGET-SKIP non-elevated ' + " + $id + "); Write-Warning ('Winget package requires a non-elevated session: ' + " + $id + "); `$nonElevatedPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)No applicable upgrade found|does not apply to your system or requirements') { Write-Output ('REPARO-WINGET-SKIP not-applicable ' + " + $id + "); Write-Warning ('Winget package is not applicable to this system or its current requirements: ' + " + $id + "); `$notApplicablePackages += " + $id + " } else { `$failedPackages += " + $id + ' } } else { Write-Output (''REPARO-WINGET-UPDATED '' + ' + $id + ') }'))
     }
 
     if ($commands.Count -eq 2) {
