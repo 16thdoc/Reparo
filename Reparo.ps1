@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.1.11'
+$script:ReparoVersion = '1.3.1.12'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -287,6 +287,7 @@ function Get-ReparoVersionFlavor {
         '1.3.1.9' = [pscustomobject]@{ Quote = 'You know, Burke, I don''t know which species is worse.'; Source = 'Aliens'; Art = '  WINGET: stale telemetry exorcised from the release channel' }
         '1.3.1.10' = [pscustomobject]@{ Quote = 'The ledger is the blade. The receipts are the blood.'; Source = 'Reparo maintenance log'; Art = '  WINGET: version-shifter and admin ghost exorcised' }
         '1.3.1.11' = [pscustomobject]@{ Quote = 'No witness, no update.'; Source = 'Reparo maintenance log'; Art = '  WINGET: plus-sign imp and scope ghost filed correctly' }
+        '1.3.1.12' = [pscustomobject]@{ Quote = 'The truth is in the logs.'; Source = 'Reparo maintenance log'; Art = '  REPARO: release identity nailed to the crypt door' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
