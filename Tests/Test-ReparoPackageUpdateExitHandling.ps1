@@ -36,11 +36,21 @@ $goMatch = [regex]::Match($goRow, '^(?<name>.+)\s+(?<id>(?=[\w-]*[A-Za-z])[\w-]+
 if (-not $goMatch.Success -or $goMatch.Groups['id'].Value -ne 'GoLang.Go') {
     throw 'WinGet table parsing does not retain GoLang.Go when a display name contains go1.26.5.'
 }
+$notepadRow = 'Notepad++ (64-bit x64) Notepad++.Notepad++ 8.9.7 8.9.8'
+$notepadMatch = [regex]::Match($notepadRow, '^(?<name>.+)\s+(?<id>(?=[\w+.-]*[A-Za-z])[\w+-]+(?:\.[\w+-]+)+)\s+(?<version>\S+)\s+(?<available>\S+)(?:\s+(?<source>\S+))?\s*$')
+if (-not $notepadMatch.Success -or $notepadMatch.Groups['id'].Value -ne 'Notepad++.Notepad++') {
+    throw 'WinGet table parsing does not retain Notepad++.Notepad++ package IDs.'
+}
 
 $wingetElevation = [regex]::Match($source, '(?s)function Get-ReparoWingetNonElevatedSessionReason \{.*?(?=function Invoke-ReparoWingetRepair)')
 if (-not $wingetElevation.Success) { throw 'Could not locate the WinGet non-elevated-session classifier.' }
-if (-not $wingetElevation.Value.Contains('installer cannot be run from an administrator context')) {
-    throw 'WinGet elevated-installer detection is absent.'
+foreach ($required in @(
+    'installer cannot be run from an administrator context',
+    'package installed for user scope cannot be uninstalled when running with administrator privileges'
+)) {
+    if (-not $wingetElevation.Value.Contains($required)) {
+        throw "WinGet elevated-installer detection is absent: $required"
+    }
 }
 
 $commandStep = [regex]::Match($source, '(?s)function Invoke-ReparoCommandStep \{.*?(?=function )')

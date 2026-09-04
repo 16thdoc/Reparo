@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.1.10'
+$script:ReparoVersion = '1.3.1.11'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -286,6 +286,7 @@ function Get-ReparoVersionFlavor {
         '1.3.1.8' = [pscustomobject]@{ Quote = 'We''re on an express elevator to hell, going down!'; Source = 'Aliens'; Art = '  WINGET: user-scope escape hatch and deferred runtime update armed' }
         '1.3.1.9' = [pscustomobject]@{ Quote = 'You know, Burke, I don''t know which species is worse.'; Source = 'Aliens'; Art = '  WINGET: stale telemetry exorcised from the release channel' }
         '1.3.1.10' = [pscustomobject]@{ Quote = 'The ledger is the blade. The receipts are the blood.'; Source = 'Reparo maintenance log'; Art = '  WINGET: version-shifter and admin ghost exorcised' }
+        '1.3.1.11' = [pscustomobject]@{ Quote = 'No witness, no update.'; Source = 'Reparo maintenance log'; Art = '  WINGET: plus-sign imp and scope ghost filed correctly' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -3620,7 +3621,7 @@ function Get-ReparoWingetNonElevatedSessionReason {
     param([object[]]$Output)
 
     $text = ($Output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
-    if ($text -match '(?i)installer cannot be run from an administrator context') {
+    if ($text -match '(?i)installer cannot be run from an administrator context|package installed for user scope cannot be uninstalled when running with administrator privileges') {
         return 'Winget found a newer version, but its installer requires a non-elevated user session.'
     }
 
@@ -3823,7 +3824,7 @@ function ConvertFrom-ReparoWingetTable {
         # its nominal width. Be greedy for that name so version-shaped fragments
         # such as "go1.26.5" cannot masquerade as the package ID; the real ID is
         # the last dotted identifier before the installed/available versions.
-        $match = [regex]::Match($line, '^(?<name>.+)\s+(?<id>(?=[\w-]*[A-Za-z])[\w-]+(?:\.[\w-]+)+)\s+(?<version>\S+)\s+(?<available>\S+)(?:\s+(?<source>\S+))?\s*$')
+        $match = [regex]::Match($line, '^(?<name>.+)\s+(?<id>(?=[\w+.-]*[A-Za-z])[\w+-]+(?:\.[\w+-]+)+)\s+(?<version>\S+)\s+(?<available>\S+)(?:\s+(?<source>\S+))?\s*$')
         if (-not $match.Success) { continue }
 
         $name = $match.Groups['name'].Value.Trim()
