@@ -60,10 +60,13 @@ if (-not $commandStep.Value.Contains('(?:Winget package requires manual uninstal
 }
 foreach ($required in @(
     'function Invoke-ReparoNonElevatedWingetUpdate',
-    'New-Object -ComObject Shell.Application',
+    'Start-ReparoProcessWithExplorerToken',
     'Started non-elevated Winget worker for $Id; tailing its status.',
     "-Section 'Winget(non-elevated)'",
     "-Source `$nonElevatedUpdate[0].Source",
+    "-Action install",
+    'Get-ReparoWingetInstallerOverride',
+    "-InstallerOverride `$installOverride",
     "if ([string]::IsNullOrWhiteSpace(`$Source)) { `$Source = 'winget' }",
     'Invoke-ReparoDeferredWingetUpdate',
     'Queued deferred Winget update for $Id after Reparo exits.',

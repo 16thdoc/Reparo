@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.1.12'
+$script:ReparoVersion = '1.3.2.3'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -288,6 +288,10 @@ function Get-ReparoVersionFlavor {
         '1.3.1.10' = [pscustomobject]@{ Quote = 'The ledger is the blade. The receipts are the blood.'; Source = 'Reparo maintenance log'; Art = '  WINGET: version-shifter and admin ghost exorcised' }
         '1.3.1.11' = [pscustomobject]@{ Quote = 'No witness, no update.'; Source = 'Reparo maintenance log'; Art = '  WINGET: plus-sign imp and scope ghost filed correctly' }
         '1.3.1.12' = [pscustomobject]@{ Quote = 'There is no spoon.'; Source = 'The Matrix'; Art = '  MATRIX: release identity bent without breaking' }
+        '1.3.2.0' = [pscustomobject]@{ Quote = 'In space, no one can hear you scream.'; Source = 'Alien'; Art = '  WINGET: active-user token found beyond the service-session void' }
+        '1.3.2.1' = [pscustomobject]@{ Quote = 'I admire its purity.'; Source = 'Alien'; Art = '  WINGET: broken upgrade registration gets the install fallback' }
+        '1.3.2.2' = [pscustomobject]@{ Quote = 'You still don''t understand what you''re dealing with, do you?'; Source = 'Jurassic Park'; Art = '  WINGET: NSIS installer taught the concept of silence' }
+        '1.3.2.3' = [pscustomobject]@{ Quote = 'Clever girl.'; Source = 'Jurassic Park'; Art = '  MSI: publisher signature checked before the velociraptor gets in' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -3640,6 +3644,16 @@ function Get-ReparoWingetNotApplicableReason {
     return $null
 }
 
+function Get-ReparoWingetInstallerOverride {
+    param([string]$Id)
+
+    # Hytale's current WinGet manifest declares a Nullsoft installer but omits
+    # its silent switch. NSIS uses an uppercase /S; pass it explicitly only
+    # for this known manifest defect rather than guessing for arbitrary apps.
+    if ($Id -ieq 'HypixelStudios.Hytale') { return '/S' }
+    return $null
+}
+
 function Invoke-ReparoWingetRepair {
     if (Test-ReparoExecutable -Name 'winget' -Arguments @('--version')) {
         return $true
@@ -5871,10 +5885,78 @@ function Sync-ReparoCommandOutputLog {
     $LineCount.Value = $lines.Count
 }
 
+function Start-ReparoProcessWithExplorerToken {
+    param(
+        [Parameter(Mandatory)][string]$ApplicationPath,
+        [Parameter(Mandatory)][string]$Arguments
+    )
+
+    if (-not ('ReparoExplorerTokenLauncher' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+
+public static class ReparoExplorerTokenLauncher
+{
+    const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    const uint TOKEN_ASSIGN_PRIMARY = 0x0001;
+    const uint TOKEN_DUPLICATE = 0x0002;
+    const uint TOKEN_QUERY = 0x0008;
+    const uint TOKEN_ALL_ACCESS = 0xF01FF;
+    const int SecurityImpersonation = 2;
+    const int TokenPrimary = 1;
+    const uint LOGON_WITH_PROFILE = 1;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle; public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars; public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2; public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
+
+    [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr processHandle, uint desiredAccess, out IntPtr tokenHandle);
+    [DllImport("advapi32.dll", SetLastError = true)] static extern bool DuplicateTokenEx(IntPtr existingToken, uint desiredAccess, IntPtr tokenAttributes, int impersonationLevel, int tokenType, out IntPtr duplicateToken);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool CreateProcessWithTokenW(IntPtr token, uint logonFlags, string applicationName, string commandLine, uint creationFlags, IntPtr environment, string currentDirectory, ref STARTUPINFO startupInfo, out PROCESS_INFORMATION processInformation);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, int processId);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll")] static extern uint WTSGetActiveConsoleSessionId();
+
+    public static int Start(string applicationPath, string arguments, int sessionId)
+    {
+        Process explorer = null;
+        var activeSessionId = unchecked((int)WTSGetActiveConsoleSessionId());
+        foreach (var process in Process.GetProcessesByName("explorer")) { if (process.SessionId == sessionId) { explorer = process; break; } }
+        if (explorer == null) foreach (var process in Process.GetProcessesByName("explorer")) { if (process.SessionId == activeSessionId) { explorer = process; break; } }
+        if (explorer == null) foreach (var process in Process.GetProcessesByName("explorer")) { explorer = process; break; }
+        if (explorer == null) throw new InvalidOperationException("No Explorer process exists in the active Reparo session.");
+        IntPtr processHandle = IntPtr.Zero, token = IntPtr.Zero, primaryToken = IntPtr.Zero;
+        try {
+            processHandle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, explorer.Id);
+            if (processHandle == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Unable to open the Explorer process.");
+            if (!OpenProcessToken(processHandle, TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY, out token)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Unable to open the Explorer token.");
+            if (!DuplicateTokenEx(token, TOKEN_ALL_ACCESS, IntPtr.Zero, SecurityImpersonation, TokenPrimary, out primaryToken)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Unable to duplicate the Explorer token.");
+            var startupInfo = new STARTUPINFO(); startupInfo.cb = Marshal.SizeOf(startupInfo);
+            PROCESS_INFORMATION processInformation;
+            var commandLine = "\"" + applicationPath + "\" " + arguments;
+            if (!CreateProcessWithTokenW(primaryToken, LOGON_WITH_PROFILE, applicationPath, commandLine, 0, IntPtr.Zero, null, ref startupInfo, out processInformation)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Unable to start the Explorer-token worker.");
+            CloseHandle(processInformation.hThread); CloseHandle(processInformation.hProcess);
+            return processInformation.dwProcessId;
+        }
+        finally { if (primaryToken != IntPtr.Zero) CloseHandle(primaryToken); if (token != IntPtr.Zero) CloseHandle(token); if (processHandle != IntPtr.Zero) CloseHandle(processHandle); }
+    }
+}
+'@
+    }
+
+    $sessionId = (Get-Process -Id $PID -ErrorAction Stop).SessionId
+    return [ReparoExplorerTokenLauncher]::Start($ApplicationPath, $Arguments, $sessionId)
+}
+
 function Invoke-ReparoNonElevatedWingetUpdate {
     param(
         [Parameter(Mandatory)][string]$Id,
         [string]$Source = 'winget',
+        [ValidateSet('upgrade', 'install')][string]$Action = 'upgrade',
+        [string]$InstallerOverride,
         [int]$TimeoutSeconds = 0
     )
 
@@ -5890,6 +5972,8 @@ function Invoke-ReparoNonElevatedWingetUpdate {
     $workerStatusPath = "$workerRoot.status.json"
     $idLiteral = ConvertTo-ReparoPowerShellLiteral -Value $Id
     $sourceLiteral = ConvertTo-ReparoPowerShellLiteral -Value $Source
+    $actionLiteral = ConvertTo-ReparoPowerShellLiteral -Value $Action
+    $overrideLiteral = ConvertTo-ReparoPowerShellLiteral -Value $InstallerOverride
     $outputLiteral = ConvertTo-ReparoPowerShellLiteral -Value $workerOutputPath
     $statusLiteral = ConvertTo-ReparoPowerShellLiteral -Value $workerStatusPath
     $workerScript = @"
@@ -5898,7 +5982,9 @@ function Invoke-ReparoNonElevatedWingetUpdate {
 `$statusPath = $statusLiteral
 `$exitCode = 1
 try {
-    & winget upgrade --id $idLiteral --exact --source $sourceLiteral --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1 | ForEach-Object { Add-Content -LiteralPath `$outputPath -Value ([string]`$_) -Encoding UTF8 }
+    `$wingetArguments = @($actionLiteral, '--id', $idLiteral, '--exact', '--source', $sourceLiteral, '--include-unknown', '--accept-source-agreements', '--accept-package-agreements', '--disable-interactivity', '--silent', '--force')
+    if (-not [string]::IsNullOrWhiteSpace($overrideLiteral)) { `$wingetArguments += @('--override', $overrideLiteral) }
+    & winget @wingetArguments 2>&1 | ForEach-Object { Add-Content -LiteralPath `$outputPath -Value ([string]`$_) -Encoding UTF8 }
     `$exitCode = `$LASTEXITCODE
 }
 catch {
@@ -5909,11 +5995,10 @@ catch {
     Set-Content -LiteralPath $workerScriptPath -Value $workerScript -Encoding UTF8
 
     try {
-        $shell = New-Object -ComObject Shell.Application
-        $shell.ShellExecute($powershell.Source, "-NoProfile -ExecutionPolicy Bypass -File `"$workerScriptPath`"", $null, 'open', 0)
+        [void](Start-ReparoProcessWithExplorerToken -ApplicationPath $powershell.Source -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$workerScriptPath`"")
     }
     catch {
-        throw "Could not start an unelevated Winget worker through the logged-in Explorer shell: $($_.Exception.Message)"
+        throw "Could not start an unelevated Winget worker with the logged-in Explorer token: $($_.Exception.Message)"
     }
 
     Write-Info "Started non-elevated Winget worker for $Id; tailing its status."
@@ -5984,11 +6069,10 @@ catch {
     Set-Content -LiteralPath $workerScriptPath -Value $workerScript -Encoding UTF8
 
     try {
-        $shell = New-Object -ComObject Shell.Application
-        $shell.ShellExecute($powershell.Source, "-NoProfile -ExecutionPolicy Bypass -File `"$workerScriptPath`"", $null, 'open', 0)
+        [void](Start-ReparoProcessWithExplorerToken -ApplicationPath $powershell.Source -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$workerScriptPath`"")
     }
     catch {
-        throw "Could not start a deferred Winget worker through the logged-in Explorer shell: $($_.Exception.Message)"
+        throw "Could not start a deferred Winget worker with the logged-in Explorer token: $($_.Exception.Message)"
     }
 
     Write-Info "Queued deferred Winget update for $Id after Reparo exits."
@@ -6130,6 +6214,13 @@ function Invoke-ReparoCommandStep {
                         $nonElevatedResult = Invoke-ReparoNonElevatedWingetUpdate -Id $packageId -Source $notApplicableUpdate[0].Source -TimeoutSeconds $WingetTimeoutSeconds
                         if ($nonElevatedResult.ExitCode -eq 0) {
                             Add-ReparoSummaryRecord -Bucket Updated -Software $notApplicableUpdate[0].Software -CurrentVersion $notApplicableUpdate[0].CurrentVersion -Version $notApplicableUpdate[0].Version -Method $notApplicableUpdate[0].Method -Reason 'updated by non-elevated Explorer-shell worker after elevated applicability retry'
+                            $updatedWingetPackageIds += $packageId
+                            continue
+                        }
+                        $installOverride = Get-ReparoWingetInstallerOverride -Id $packageId
+                        $installFallbackResult = Invoke-ReparoNonElevatedWingetUpdate -Id $packageId -Source $notApplicableUpdate[0].Source -Action install -InstallerOverride $installOverride -TimeoutSeconds $WingetTimeoutSeconds
+                        if ($installFallbackResult.ExitCode -eq 0) {
+                            Add-ReparoSummaryRecord -Bucket Updated -Software $notApplicableUpdate[0].Software -CurrentVersion $notApplicableUpdate[0].CurrentVersion -Version $notApplicableUpdate[0].Version -Method $notApplicableUpdate[0].Method -Reason 'reinstalled by non-elevated Explorer-shell worker after Winget upgrade applicability failure'
                             $updatedWingetPackageIds += $packageId
                             continue
                         }
@@ -6468,6 +6559,14 @@ New-Item -ItemType Directory -Path `$tempRoot -Force | Out-Null
 try {
     Write-Host "Installing PowerShell 7 machine-wide MSI: `$latestVersionText"
     Invoke-WebRequest -Uri `$asset.browser_download_url -OutFile `$msiPath -UseBasicParsing
+
+    `$signature = Get-AuthenticodeSignature -FilePath `$msiPath
+    if (`$signature.Status -ne 'Valid' -or
+        -not `$signature.SignerCertificate -or
+        `$signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)') {
+        `$signer = if (`$signature.SignerCertificate) { `$signature.SignerCertificate.Subject } else { '<none>' }
+        throw "PowerShell MSI signature is not a valid Microsoft Authenticode signature: status `$(`$signature.Status), signer `$signer."
+    }
 
     # Invoke msiexec directly rather than through Start-Process. It gives the child
     # runner a definitive exit code and avoids console-handle weirdness after DONE.
