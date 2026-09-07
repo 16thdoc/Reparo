@@ -15,7 +15,8 @@ foreach ($required in @(
     '`$signature.Status -ne ''Valid''',
     '`$signature.SignerCertificate.Subject -notmatch ''(^|,\s*)CN=Microsoft Corporation(,|$)''',
     'PowerShell MSI signature is not a valid Microsoft Authenticode signature',
-    '& msiexec.exe @msiArguments'
+    'Start-Process -FilePath (Join-Path `$env:SystemRoot ''System32\msiexec.exe'') -ArgumentList `$msiArguments -Wait -PassThru',
+    '`$msiExitCode = `$msiProcess.ExitCode'
 )) {
     if (-not $powerShellSection.Value.Contains($required)) {
         throw "PowerShell 7 MSI signature validation is missing: $required"
@@ -23,7 +24,7 @@ foreach ($required in @(
 }
 
 $signatureIndex = $powerShellSection.Value.IndexOf('Get-AuthenticodeSignature -FilePath `$msiPath')
-$installerIndex = $powerShellSection.Value.IndexOf('& msiexec.exe @msiArguments')
+$installerIndex = $powerShellSection.Value.IndexOf('Start-Process -FilePath (Join-Path `$env:SystemRoot ''System32\msiexec.exe'') -ArgumentList `$msiArguments -Wait -PassThru')
 if ($signatureIndex -lt 0 -or $installerIndex -lt 0 -or $signatureIndex -ge $installerIndex) {
     throw 'PowerShell 7 MSI signature validation must run before msiexec.'
 }

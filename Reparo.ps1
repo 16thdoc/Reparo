@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.2.3'
+$script:ReparoVersion = '1.3.2.4'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -292,6 +292,7 @@ function Get-ReparoVersionFlavor {
         '1.3.2.1' = [pscustomobject]@{ Quote = 'I admire its purity.'; Source = 'Alien'; Art = '  WINGET: broken upgrade registration gets the install fallback' }
         '1.3.2.2' = [pscustomobject]@{ Quote = 'You still don''t understand what you''re dealing with, do you?'; Source = 'Jurassic Park'; Art = '  WINGET: NSIS installer taught the concept of silence' }
         '1.3.2.3' = [pscustomobject]@{ Quote = 'Clever girl.'; Source = 'Jurassic Park'; Art = '  MSI: publisher signature checked before the velociraptor gets in' }
+        '1.3.2.4' = [pscustomobject]@{ Quote = 'Never give up. Never surrender.'; Source = 'Galaxy Quest'; Art = '  MSI: installer exit code dragged screaming into evidence' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -6568,11 +6569,9 @@ try {
         throw "PowerShell MSI signature is not a valid Microsoft Authenticode signature: status `$(`$signature.Status), signer `$signer."
     }
 
-    # Invoke msiexec directly rather than through Start-Process. It gives the child
-    # runner a definitive exit code and avoids console-handle weirdness after DONE.
     `$msiArguments = @('/i', `$msiPath, '/quiet', '/norestart', 'ADD_PATH=1', 'REGISTER_MANIFEST=1', 'USE_MU=1', 'ENABLE_MU=1')
-    & msiexec.exe @msiArguments
-    `$msiExitCode = `$LASTEXITCODE
+    `$msiProcess = Start-Process -FilePath (Join-Path `$env:SystemRoot 'System32\msiexec.exe') -ArgumentList `$msiArguments -Wait -PassThru
+    `$msiExitCode = `$msiProcess.ExitCode
     if (`$msiExitCode -notin @(0, 3010)) {
         throw "PowerShell MSI installation failed with exit code `$msiExitCode."
     }
