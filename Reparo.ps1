@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.2.5'
+$script:ReparoVersion = '1.3.2.6'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -294,6 +294,7 @@ function Get-ReparoVersionFlavor {
         '1.3.2.3' = [pscustomobject]@{ Quote = 'Clever girl.'; Source = 'Jurassic Park'; Art = '  MSI: publisher signature checked before the velociraptor gets in' }
         '1.3.2.4' = [pscustomobject]@{ Quote = 'Never give up. Never surrender.'; Source = 'Galaxy Quest'; Art = '  MSI: installer exit code dragged screaming into evidence' }
         '1.3.2.5' = [pscustomobject]@{ Quote = 'It can''t rain all the time.'; Source = 'The Crow'; Art = '  CROW: summary storm drained into one clean grave' }
+        '1.3.2.6' = [pscustomobject]@{ Quote = 'All we have to decide is what to do with the time that is given us.'; Source = 'The Fellowship of the Ring'; Art = '  LEDGER: every discovered package gets its fate written' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -3980,7 +3981,6 @@ function New-ReparoWingetUpgradeQueueCommand {
     # operator session. Leave them for an intentional update after Reparo and
     # any OpenCode control session have exited.
     $runtimeHostIds = @('Microsoft.PowerShell', 'SST.OpenCodeDesktop')
-    $excluded = @($ExcludedIds + $runtimeHostIds) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
     $updates = @($PendingUpdates) | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Id) }
     $commands = New-Object System.Collections.Generic.List[string]
 
@@ -3990,8 +3990,13 @@ function New-ReparoWingetUpgradeQueueCommand {
     [void]$commands.Add("`$notApplicablePackages = @()")
     [void]$commands.Add("`$blockedPackages = @()")
     foreach ($update in $updates) {
-        if ($excluded | Where-Object { $_ -ieq $update.Id }) {
-            [void]$commands.Add(("Write-Host {0}" -f (ConvertTo-ReparoPowerShellLiteral -Value ("Skipping excluded winget package: {0}" -f $update.Id))))
+        if ($runtimeHostIds | Where-Object { $_ -ieq $update.Id }) {
+            [void]$commands.Add(("Write-Host {0}" -f (ConvertTo-ReparoPowerShellLiteral -Value ("Skipping runtime-host winget package until Reparo exits: {0}" -f $update.Id))))
+            continue
+        }
+
+        if ($ExcludedIds | Where-Object { $_ -ieq $update.Id }) {
+            [void]$commands.Add(("Write-Output {0}" -f (ConvertTo-ReparoPowerShellLiteral -Value ("REPARO-WINGET-SKIP locked {0}" -f $update.Id))))
             continue
         }
 
@@ -4005,7 +4010,7 @@ function New-ReparoWingetUpgradeQueueCommand {
         [void]$commands.Add(("`$wingetOutput = @(winget upgrade --id {0} --exact --source {1} --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1)" -f $id, $source))
         [void]$commands.Add("`$wingetExitCode = `$LASTEXITCODE")
         [void]$commands.Add("`$wingetOutput | ForEach-Object { Write-Output `$_ }")
-        [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Output ('REPARO-WINGET-SKIP manual ' + " + $id + "); Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)installer cannot be run from an administrator context|package installed for user scope cannot be uninstalled when running with administrator privileges') { Write-Output ('REPARO-WINGET-SKIP non-elevated ' + " + $id + "); Write-Warning ('Winget package requires a non-elevated session: ' + " + $id + "); `$nonElevatedPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)No applicable upgrade found|does not apply to your system or requirements') { Write-Output ('REPARO-WINGET-SKIP not-applicable ' + " + $id + "); Write-Warning ('Winget package is not applicable to this system or its current requirements: ' + " + $id + "); `$notApplicablePackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)(?:remove|rename|move): Access is denied|Access is denied.*Microsoft\\WinGet\\Packages|0x8a150003') { Write-Output ('REPARO-WINGET-SKIP blocked ' + " + $id + "); Write-Warning ('Winget package files are in use or access was denied: ' + " + $id + "); `$blockedPackages += " + $id + " } else { `$failedPackages += " + $id + ' } } else { Write-Output (''REPARO-WINGET-UPDATED '' + ' + $id + ') }'))
+        [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Output ('REPARO-WINGET-SKIP manual ' + " + $id + "); Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)installer cannot be run from an administrator context|package installed for user scope cannot be uninstalled when running with administrator privileges') { Write-Output ('REPARO-WINGET-SKIP non-elevated ' + " + $id + "); Write-Warning ('Winget package requires a non-elevated session: ' + " + $id + "); `$nonElevatedPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)No applicable upgrade found|does not apply to your system or requirements') { Write-Output ('REPARO-WINGET-SKIP not-applicable ' + " + $id + "); Write-Warning ('Winget package is not applicable to this system or its current requirements: ' + " + $id + "); `$notApplicablePackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)(?:remove|rename|move): Access is denied|Access is denied.*Microsoft\\WinGet\\Packages') { Write-Output ('REPARO-WINGET-SKIP blocked ' + " + $id + "); Write-Warning ('Winget package files are in use or access was denied: ' + " + $id + "); `$blockedPackages += " + $id + " } else { `$failedPackages += " + $id + ' } } else { Write-Output (''REPARO-WINGET-UPDATED '' + ' + $id + ') }'))
     }
 
     if ($commands.Count -eq 5) {
@@ -5665,7 +5670,7 @@ function Write-ReparoSummaryNextSteps {
     }
     if ($failed.Count -gt 0) {
         $sections = ($failed | Select-Object -ExpandProperty Software -Unique) -join ', '
-        $message = "Review failed section diagnostics for: $sections. The final log preserves the exact command output when a section fails."
+        $message = "Review failed item diagnostics for: $sections. The final log preserves the exact command output when an item fails."
         Write-Host ("  - {0}" -f $message)
         Write-ReparoLog ("[SUMMARY] NEXT {0}" -f $message)
     }
@@ -5686,8 +5691,8 @@ function Write-ReparoSummary {
     Write-ReparoLog ("[SUMMARY] Result={0} Updated={1} Skipped={2} Failed={3}" -f $result, $updatedCount, $skippedCount, $failedCount)
 
     Write-ReparoSummaryTable -Title 'Updated software' -Rows $script:ReparoSummary['Updated'].ToArray()
-    Write-ReparoSummaryTable -Title 'Skipped sections' -Rows $script:ReparoSummary['Skipped'].ToArray() -IncludeReason
-    Write-ReparoSummaryTable -Title 'Failed sections' -Rows $script:ReparoSummary['Failed'].ToArray() -IncludeReason
+    Write-ReparoSummaryTable -Title 'Skipped items' -Rows $script:ReparoSummary['Skipped'].ToArray() -IncludeReason
+    Write-ReparoSummaryTable -Title 'Failed items' -Rows $script:ReparoSummary['Failed'].ToArray() -IncludeReason
 
     if ($script:ReparoSummary['Notes'].Count -gt 0) {
         Write-Host ''
@@ -6209,6 +6214,13 @@ function Invoke-ReparoCommandStep {
                 ForEach-Object { $_.Groups['Id'].Value } |
                 Select-Object -Unique
         )
+        $lockedWingetPackageIds = @(
+            $output |
+                ForEach-Object { [regex]::Match([string]$_, 'REPARO-WINGET-SKIP locked\s*(?<Id>\S+)') } |
+                Where-Object { $_.Success } |
+                ForEach-Object { $_.Groups['Id'].Value } |
+                Select-Object -Unique
+        )
         $updatedWingetPackageIds = @(
             $output |
                 ForEach-Object { [regex]::Match([string]$_, 'REPARO-WINGET-UPDATED\s*(?<Id>\S+)') } |
@@ -6286,6 +6298,27 @@ function Invoke-ReparoCommandStep {
                 }
             }
             $pendingUpdates = @($pendingUpdates | Where-Object { $blockedWingetPackageIds -notcontains $_.Id })
+        }
+
+        foreach ($packageId in $lockedWingetPackageIds) {
+            $lockedUpdate = @($pendingUpdates | Where-Object { $_.Id -ieq $packageId } | Select-Object -First 1)
+            if ($lockedUpdate.Count -gt 0) {
+                Add-ReparoSummaryRecord -Bucket Skipped -Software $lockedUpdate[0].Software -CurrentVersion $lockedUpdate[0].CurrentVersion -Version $lockedUpdate[0].Version -Method $lockedUpdate[0].Method -Reason 'Reparo version lock configured'
+            }
+        }
+        $pendingUpdates = @($pendingUpdates | Where-Object { $lockedWingetPackageIds -notcontains $_.Id })
+
+        if ($Section -in @('Winget', 'Winget(msstore)')) {
+            $deferredWingetPackageIds = @($deferredWingetUpdates | Select-Object -ExpandProperty Id)
+            $unaccountedWingetUpdates = @($pendingUpdates | Where-Object {
+                $updatedWingetPackageIds -notcontains $_.Id -and $deferredWingetPackageIds -notcontains $_.Id
+            })
+            foreach ($unaccountedUpdate in $unaccountedWingetUpdates) {
+                $reason = 'no Winget execution receipt was returned; inspect the section log'
+                Write-Warning ("Winget returned no update or skip receipt for {0} ({1})." -f $unaccountedUpdate.Software, $unaccountedUpdate.Id)
+                Write-ReparoLog ("[WARN] Winget returned no execution receipt for {0} ({1})." -f $unaccountedUpdate.Software, $unaccountedUpdate.Id)
+                Add-ReparoSummaryRecord -Bucket Failed -Software $unaccountedUpdate.Software -CurrentVersion $unaccountedUpdate.CurrentVersion -Version $unaccountedUpdate.Version -Method $unaccountedUpdate.Method -Reason $reason
+            }
         }
 
         if ($Section -in @('Winget', 'Winget(msstore)')) {

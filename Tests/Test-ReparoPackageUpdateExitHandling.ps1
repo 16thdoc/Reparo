@@ -23,6 +23,7 @@ foreach ($required in @(
     'Winget packages pending a non-elevated session:',
     'REPARO-WINGET-SKIP not-applicable',
     'REPARO-WINGET-SKIP blocked',
+    'REPARO-WINGET-SKIP locked',
     'Winget packages blocked by files in use or access denied:',
     'REPARO-WINGET-UPDATED',
     'Winget packages not applicable to this system or its current requirements:',
@@ -60,6 +61,11 @@ $notepadRow = 'Notepad++ (64-bit x64) Notepad++.Notepad++ 8.9.7 8.9.8'
 $notepadMatch = [regex]::Match($notepadRow, '^(?<name>.+)\s+(?<id>(?=[\w+.-]*[A-Za-z])[\w+-]+(?:\.[\w+-]+)+)\s+(?<version>\S+)\s+(?<available>\S+)(?:\s+(?<source>\S+))?\s*$')
 if (-not $notepadMatch.Success -or $notepadMatch.Groups['id'].Value -ne 'Notepad++.Notepad++') {
     throw 'WinGet table parsing does not retain Notepad++.Notepad++ package IDs.'
+}
+$sysmonRow = 'Sysmon   Microsoft.Sysinternals.Sysmon 15.21           15.22'
+$sysmonMatch = [regex]::Match($sysmonRow, '^(?<name>.+)\s+(?<id>(?=[\w+.-]*[A-Za-z])[\w+-]+(?:\.[\w+-]+)+)\s+(?<version>\S+)\s+(?<available>\S+)(?:\s+(?<source>\S+))?\s*$')
+if (-not $sysmonMatch.Success -or $sysmonMatch.Groups['id'].Value -ne 'Microsoft.Sysinternals.Sysmon') {
+    throw 'WinGet table parsing does not retain Microsoft.Sysinternals.Sysmon.'
 }
 
 $wingetElevation = [regex]::Match($source, '(?s)function Get-ReparoWingetNonElevatedSessionReason \{.*?(?=function Invoke-ReparoWingetRepair)')
@@ -102,6 +108,15 @@ if (-not $commandStep.Value.Contains('REPARO-WINGET-UPDATED\s*(?<Id>\S+)')) {
 if (-not $commandStep.Value.Contains('REPARO-WINGET-SKIP blocked\s*(?<Id>\S+)')) {
     throw 'Blocked WinGet packages are not parsed into the summary.'
 }
+foreach ($required in @(
+    'REPARO-WINGET-SKIP locked\s*(?<Id>\S+)',
+    'Reparo version lock configured',
+    'no Winget execution receipt was returned; inspect the section log'
+)) {
+    if (-not $commandStep.Value.Contains($required)) {
+        throw "WinGet package receipt accounting is absent: $required"
+    }
+}
 if (-not $commandStep.Value.Contains("`$PSBoundParameters.ContainsKey('PendingUpdates')")) {
     throw 'WinGet command execution cannot reuse its queue discovery snapshot.'
 }
@@ -131,7 +146,7 @@ foreach ($required in @(
     'non-elevated user session',
     'reparo -Include Winget',
     'Reparo did not force-kill it.',
-    'Review failed section diagnostics'
+    'Review failed item diagnostics'
 )) {
     if (-not $summaryGuidance.Value.Contains($required)) {
         throw "Final-summary guidance is absent: $required"

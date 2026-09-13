@@ -109,7 +109,9 @@ maintenance pass.
 The final summary uses stable one-line records rather than width-dependent PowerShell
 tables. Accumulated next steps print once at the end of the run, after updated, skipped,
 and failed counts; successful sections without package-level inventory do not generate
-warning noise.
+warning noise. Winget packages excluded by a Reparo version lock are listed explicitly,
+and any discovered package that returns neither an update nor skip receipt is reported
+as a failure instead of silently disappearing.
 
 Install the currently staged `Reparo.ps1` into ProgramData without a network request:
 
