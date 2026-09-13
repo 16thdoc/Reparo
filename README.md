@@ -98,10 +98,18 @@ being disguised as metadata damage.
 Reparo uses tools already present, then skips unavailable sections. For a missing WinGet it re-registers App Installer, repairs it through `Microsoft.WinGet.Client` when PowerShell 7 is present, and—only when elevated/SYSTEM—installs the official PowerShell 7 MSI directly as the next repair rung before retrying. NuGet bootstrap/import and every repair child host are forced noninteractive. A normal ProgramData install also performs Winget repair/discovery after installing Reparo. Use `-7Zip` only when you explicitly want Reparo to install the `7zip.7zip` winget package if it is missing, or update it when present.
 
 Winget packages whose publisher changes installer technology are reported as pending a
-manual uninstall/reinstall; Reparo will not blindly remove user software. Chocolatey
+manual uninstall/reinstall; Reparo will not blindly remove user software. If Winget
+cannot replace a package because its files are running or access is denied, Reparo
+continues the remaining queue and reports that package with a close/stop-and-retry next
+step instead of failing the whole Winget section. Chocolatey
 updates are queued from `choco outdated` rather than `choco upgrade all`, so stale
 local package records whose source package has been removed do not fail the entire
 maintenance pass.
+
+The final summary uses stable one-line records rather than width-dependent PowerShell
+tables. Accumulated next steps print once at the end of the run, after updated, skipped,
+and failed counts; successful sections without package-level inventory do not generate
+warning noise.
 
 Install the currently staged `Reparo.ps1` into ProgramData without a network request:
 
