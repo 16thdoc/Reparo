@@ -37,6 +37,8 @@ foreach ($required in @(
     'Invoke-ReparoTlsBootstrap.ps1',
     '[Net.SecurityProtocolType]::Tls12',
     '$commandTokens -join '' ''',
+    '=== Finalizing local install and self-update schedule ===',
+    'use the New action to download the reviewed release first.',
     'return $false'
 )) {
     if (-not $source.Contains($required)) {
@@ -86,6 +88,7 @@ try {
     @"
 param(
     [switch]`$New,
+    [switch]`$Install,
     [string]`$InstallRoot,
     [switch]`$Version
 )
@@ -94,11 +97,12 @@ if (`$Version) {
     Write-Host 'Reparo 1.3.3.1'
     return
 }
-if (-not `$New) { throw 'Expected the staged -New lifecycle action.' }
+if (-not `$New -and -not `$Install) { throw 'Expected a staged lifecycle action.' }
 if (([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]::Tls12) -ne [Net.SecurityProtocolType]::Tls12) {
     throw 'The staged lifecycle child did not enable TLS 1.2.'
 }
-Set-Content -LiteralPath '$escapedMarkerPath' -Value `$InstallRoot -Encoding UTF8
+`$mode = if (`$New) { 'New' } else { 'Install' }
+Add-Content -LiteralPath '$escapedMarkerPath' -Value "`$mode|`$InstallRoot" -Encoding UTF8
 "@ | Set-Content -LiteralPath $fakeReparoPath -Encoding UTF8
 
     $integrationOutput = @(
@@ -115,8 +119,10 @@ Set-Content -LiteralPath '$escapedMarkerPath' -Value `$InstallRoot -Encoding UTF
     if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
         throw 'The staged lifecycle child did not execute the fake Reparo runtime.'
     }
-    if ((Get-Content -LiteralPath $markerPath -Raw).Trim() -ne $installRoot) {
-        throw 'The staged lifecycle child did not preserve the Reparo argument list.'
+    $markerLines = @(Get-Content -LiteralPath $markerPath)
+    $expectedMarkerLines = @("New|$installRoot", "Install|$installRoot")
+    if (($markerLines -join "`n") -ne ($expectedMarkerLines -join "`n")) {
+        throw "The staged lifecycle child did not preserve the two-step Reparo argument lists: $($markerLines -join '; ')"
     }
 }
 finally {

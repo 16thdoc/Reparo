@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.3.2'
+$script:ReparoVersion = '1.3.3.3'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -298,6 +298,7 @@ function Get-ReparoVersionFlavor {
         '1.3.3.0' = [pscustomobject]@{ Quote = 'I aim to misbehave.'; Source = 'Serenity (written and directed by Joss Whedon)'; Art = '  NINJA: activity receipts slipped past the Alliance' }
         '1.3.3.1' = [pscustomobject]@{ Quote = 'I''m a leaf on the wind. Watch how I soar.'; Source = 'Serenity (written and directed by Joss Whedon)'; Art = '  LEAF: self-update bootstrap cleared the file-lock turbulence' }
         '1.3.3.2' = [pscustomobject]@{ Quote = 'Roads? Where we''re going, we don''t need roads.'; Source = 'Back to the Future (written by Robert Zemeckis and Bob Gale)'; Art = '  DELOREAN: TLS clock accelerated past 2011' }
+        '1.3.3.3' = [pscustomobject]@{ Quote = 'Come with me if you want to live.'; Source = 'Terminator 2: Judgment Day (directed by James Cameron; written by James Cameron and William Wisher)'; Art = '  T-800: legacy task scheduler fallback acquired' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -1525,32 +1526,52 @@ function Install-ReparoSelfUpdateTask {
 
     $taskName = 'Reparo-SelfUpdate-Tuesday-1000'
     $installedScriptPath = Join-Path $TargetRoot 'Reparo.ps1'
-    foreach ($commandName in @('New-ScheduledTaskAction', 'New-ScheduledTaskTrigger', 'New-ScheduledTaskPrincipal', 'New-ScheduledTaskSettingsSet', 'Register-ScheduledTask')) {
-        if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) {
-            throw "Unable to create Reparo self-update task; Windows ScheduledTasks cmdlet '$commandName' is unavailable."
-        }
+    $scheduledTaskCommandNames = @('New-ScheduledTaskAction', 'New-ScheduledTaskTrigger', 'New-ScheduledTaskPrincipal', 'New-ScheduledTaskSettingsSet', 'Register-ScheduledTask')
+    $missingScheduledTaskCommands = @($scheduledTaskCommandNames | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
+    $useScheduledTaskCmdlets = $missingScheduledTaskCommands.Count -eq 0
+    $schtasksPath = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+    if (-not (Test-Path -LiteralPath $schtasksPath -PathType Leaf)) {
+        $schtasksCommand = Get-Command schtasks.exe -CommandType Application -ErrorAction SilentlyContinue
+        $schtasksPath = if ($schtasksCommand) { $schtasksCommand.Source } else { $null }
+    }
+
+    if (-not $useScheduledTaskCmdlets -and [string]::IsNullOrWhiteSpace($schtasksPath)) {
+        throw "Unable to create Reparo self-update task; ScheduledTasks cmdlets are unavailable ($($missingScheduledTaskCommands -join ', ')) and schtasks.exe was not found."
     }
 
     if ($WhatIfOnly) {
-        Write-Info "Would create/update self-update task '$taskName' for every Tuesday at 10:00 AM: Reparo -New"
+        $backend = if ($useScheduledTaskCmdlets) { 'ScheduledTasks cmdlets' } else { 'schtasks.exe fallback' }
+        Write-Info "Would create/update self-update task '$taskName' for every Tuesday at 10:00 AM using ${backend}: Reparo -New"
         return
     }
 
-    $scriptPathLiteral = ConvertTo-ReparoPowerShellLiteral -Value $installedScriptPath
-    $workerScript = "`$ErrorActionPreference = 'Continue'; & $scriptPathLiteral -New; if (`$null -ne `$LASTEXITCODE) { exit [int]`$LASTEXITCODE }"
-    $encodedWorker = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($workerScript))
     $powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     if (-not (Test-Path -LiteralPath $powershellPath)) { throw "Unable to locate Windows PowerShell for Reparo self-update task: $powershellPath" }
 
-    $action = New-ScheduledTaskAction -Execute $powershellPath -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {0}' -f $encodedWorker)
-    $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Tuesday -At '10:00AM'
-    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Updates Reparo from its reviewed pinned release every Tuesday at 10:00 AM.' -Force -ErrorAction Stop | Out-Null
+    if ($useScheduledTaskCmdlets) {
+        $scriptPathLiteral = ConvertTo-ReparoPowerShellLiteral -Value $installedScriptPath
+        $workerScript = "`$ErrorActionPreference = 'Continue'; & $scriptPathLiteral -New; if (`$null -ne `$LASTEXITCODE) { exit [int]`$LASTEXITCODE }"
+        $encodedWorker = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($workerScript))
+        $action = New-ScheduledTaskAction -Execute $powershellPath -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {0}' -f $encodedWorker)
+        $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Tuesday -At '10:00AM'
+        $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Updates Reparo from its reviewed pinned release every Tuesday at 10:00 AM.' -Force -ErrorAction Stop | Out-Null
+        $backend = 'ScheduledTasks cmdlets'
+    }
+    else {
+        $taskCommand = '"{0}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{1}" -New' -f $powershellPath, $installedScriptPath
+        $schtasksOutput = @(& $schtasksPath /Create /TN $taskName /TR $taskCommand /SC WEEKLY /D TUE /ST 10:00 /RU SYSTEM /RL HIGHEST /F 2>&1)
+        $schtasksExitCode = $LASTEXITCODE
+        if ($schtasksExitCode -ne 0) {
+            throw "Unable to create Reparo self-update task with schtasks.exe (exit $schtasksExitCode): $($schtasksOutput -join ' ')"
+        }
+        $backend = 'schtasks.exe fallback'
+    }
 
-    Write-Done "Created/updated self-update task '$taskName' (Tuesday 10:00 AM)."
+    Write-Done "Created/updated self-update task '$taskName' (Tuesday 10:00 AM) using $backend."
     Write-Info 'It runs as SYSTEM with highest privileges: Reparo -New'
-    Write-ReparoLog ("[TASK] Task={0}; Frequency=Weekly; Day=Tuesday; Time=10:00; Arguments=-New" -f $taskName)
+    Write-ReparoLog ("[TASK] Task={0}; Frequency=Weekly; Day=Tuesday; Time=10:00; Arguments=-New; Backend={1}" -f $taskName, $backend)
 }
 
 function Copy-ReparoFileWithRetry {

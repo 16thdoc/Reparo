@@ -394,6 +394,10 @@ try {
         'new' {
             Write-Host '=== Installing reviewed pinned release ==='
             Invoke-Reparo -Arguments @('-New', '-InstallRoot', $InstallRoot) -StageRuntime
+
+            Write-Host ''
+            Write-Host '=== Finalizing local install and self-update schedule ==='
+            Invoke-Reparo -Arguments @('-Install', '-InstallRoot', $InstallRoot) -StageRuntime
             Publish-ReparoNinjaField
         }
 
@@ -488,6 +492,13 @@ try {
                 'Custom command: reparo {0}' -f
                 ($customReparoArguments -join ' ')
             )
+
+            if ($customReparoArguments -icontains '-Install') {
+                Write-Warning (
+                    '-Install is an offline self-install of the current runtime; ' +
+                    'use the New action to download the reviewed release first.'
+                )
+            }
 
             $lifecycleArguments = @('-Install', '-New', '-N', '-Latest', '-Ninja')
             $requiresStaging = $false

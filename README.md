@@ -125,7 +125,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Install
 C:\ProgramData\Reparo\bin\reparo.cmd
 ```
 
-On Windows, a normal ProgramData `-Install` also creates or updates the `Reparo-SelfUpdate-Tuesday-1000` SYSTEM task. It runs `reparo -New` every Tuesday at 10:00 AM, fetching only the reviewed release pinned in the release manifest. On native Linux, the installer creates the equivalent current-user cron entry when `crontab` is available. Custom install roots and preview installs do not create this schedule.
+On Windows, a normal ProgramData `-Install` also creates or updates the `Reparo-SelfUpdate-Tuesday-1000` SYSTEM task. It uses the `ScheduledTasks` module when available and falls back to native `schtasks.exe` on legacy Windows hosts. The task runs `reparo -New` every Tuesday at 10:00 AM, fetching only the reviewed release pinned in the release manifest. On native Linux, the installer creates the equivalent current-user cron entry when `crontab` is available. Custom install roots and preview installs do not create this schedule.
 
 Reparo tries to add that folder to machine `PATH`, falling back to user `PATH` if machine `PATH` cannot be changed. New PowerShell sessions can then run:
 
@@ -309,7 +309,9 @@ install path.
 For lifecycle actions, the wrapper enables TLS 1.2 inside the staged child PowerShell
 process before invoking even an older installed Reparo runtime; this lets legacy
 Windows PowerShell/.NET hosts reach GitHub and bootstrap into the fixed reviewed
-release. It then publishes persisted WinGet health from Ninja's parent automation
+release. The `New` action then performs a local offline-install finalization with the
+fresh runtime so the weekly self-update task is created even when the old runtime
+lacked compatible task-scheduling support. It then publishes persisted WinGet health from Ninja's parent automation
 session. It prefers `Set-NinjaProperty` and falls
 back to `Ninja-Property-Set`. Both require the Ninja agent CLI at
 `C:\ProgramData\NinjaRMMAgent\ninjarmm-cli.exe` (or the path in `NINJARMMCLI`). A missing
