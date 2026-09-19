@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.3.0'
+$script:ReparoVersion = '1.3.3.1'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -296,6 +296,7 @@ function Get-ReparoVersionFlavor {
         '1.3.2.5' = [pscustomobject]@{ Quote = 'It can''t rain all the time.'; Source = 'The Crow'; Art = '  CROW: summary storm drained into one clean grave' }
         '1.3.2.6' = [pscustomobject]@{ Quote = 'All we have to decide is what to do with the time that is given us.'; Source = 'The Fellowship of the Ring'; Art = '  LEDGER: every discovered package gets its fate written' }
         '1.3.3.0' = [pscustomobject]@{ Quote = 'I aim to misbehave.'; Source = 'Serenity (written and directed by Joss Whedon)'; Art = '  NINJA: activity receipts slipped past the Alliance' }
+        '1.3.3.1' = [pscustomobject]@{ Quote = 'I''m a leaf on the wind. Watch how I soar.'; Source = 'Serenity (written and directed by Joss Whedon)'; Art = '  LEAF: self-update bootstrap cleared the file-lock turbulence' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -1551,6 +1552,35 @@ function Install-ReparoSelfUpdateTask {
     Write-ReparoLog ("[TASK] Task={0}; Frequency=Weekly; Day=Tuesday; Time=10:00; Arguments=-New" -f $taskName)
 }
 
+function Copy-ReparoFileWithRetry {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Destination,
+        [ValidateRange(1, 60)][int]$Attempts = 12,
+        [ValidateRange(0, 10000)][int]$DelayMilliseconds = 500
+    )
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        try {
+            if (Test-Path -LiteralPath $Destination -PathType Leaf) {
+                $destinationItem = Get-Item -LiteralPath $Destination -Force -ErrorAction Stop
+                if ($destinationItem.IsReadOnly) { $destinationItem.IsReadOnly = $false }
+            }
+            Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
+            return
+        }
+        catch {
+            $lastError = $_.Exception
+            if ($attempt -ge $Attempts) { break }
+            Write-ReparoLog ("[DEPLOY-WAIT] File replacement attempt {0}/{1} failed for {2}: {3}" -f $attempt, $Attempts, $Destination, $lastError.Message)
+            Start-Sleep -Milliseconds $DelayMilliseconds
+        }
+    }
+
+    throw "Unable to replace '$Destination' after $Attempts attempts: $($lastError.Message)"
+}
+
 function Invoke-ReparoNew {
     param(
         [Parameter(Mandatory)][string]$TargetRoot,
@@ -1663,7 +1693,7 @@ Log: $script:ReparoLogPath
         }
 
         $deploymentStarted = $true
-        Copy-Item -LiteralPath $tempScript -Destination $scriptPath -Force
+        Copy-ReparoFileWithRetry -Source $tempScript -Destination $scriptPath
         Test-ReparoInstalledRuntime -Path $scriptPath -ExpectedHash $newHash
         Write-Done "Installed Reparo.ps1 updated ($newHash)."
         Write-Info "Live script: $scriptPath"
@@ -1680,10 +1710,13 @@ Log: $script:ReparoLogPath
 "@
     }
     catch {
+        $deploymentError = $_
+        $deploymentErrorMessage = $_.Exception.Message
+        $rollbackErrorMessage = $null
         if ($deploymentStarted) {
             try {
                 if (Test-Path -LiteralPath $rollbackPath) {
-                    Copy-Item -LiteralPath $rollbackPath -Destination $scriptPath -Force
+                    Copy-ReparoFileWithRetry -Source $rollbackPath -Destination $scriptPath
                     Write-Warning "Reparo deployment failed; restored previous runtime: $scriptPath"
                     Write-ReparoLog "[ROLLBACK] Restored previous Reparo runtime after failed deployment: $scriptPath"
                 }
@@ -1694,7 +1727,10 @@ Log: $script:ReparoLogPath
                 }
             }
             catch {
-                Write-Error "Reparo deployment rollback failed: $($_.Exception.Message)"
+                $rollbackErrorMessage = $_.Exception.Message
+                Write-Warning "Reparo deployment rollback also failed: $rollbackErrorMessage"
+                Write-ReparoLog "[ROLLBACK-FAILED] Original deployment error: $deploymentErrorMessage"
+                Write-ReparoLog "[ROLLBACK-FAILED] Rollback error: $rollbackErrorMessage"
             }
         }
         Write-ReparoEventLog -EventId 1104 -EntryType Error -Message @"
@@ -1704,10 +1740,14 @@ Computer: $env:COMPUTERNAME
 PID: $PID
 TargetRoot: $TargetRoot
 Source: $Url
-Error: $($_.Exception.Message)
+Error: $deploymentErrorMessage
+RollbackError: $(if ($rollbackErrorMessage) { $rollbackErrorMessage } else { 'None' })
 Log: $script:ReparoLogPath
 "@
-        throw
+        if ($rollbackErrorMessage) {
+            throw "Reparo deployment failed: $deploymentErrorMessage Rollback also failed: $rollbackErrorMessage"
+        }
+        throw $deploymentError
     }
     finally {
         if (Test-Path -LiteralPath $tempRoot) {
@@ -2947,13 +2987,19 @@ if (Invoke-ReparoPersistentTask) {
 }
 
 if ($Ninja) {
-    $ninjaInstallArguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-New', '-SkipNinjaPublish', '-InstallRoot', $InstallRoot)
+    $ninjaBootstrapRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ReparoNinja_{0}_{1}" -f $PID, (Get-Date -Format 'yyyyMMddHHmmss'))
+    $ninjaBootstrapPath = Join-Path $ninjaBootstrapRoot 'Reparo.bootstrap.ps1'
+    $ninjaInstallArguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $ninjaBootstrapPath, '-New', '-SkipNinjaPublish', '-InstallRoot', $InstallRoot)
     if ($Preview) { $ninjaInstallArguments += '-Preview' }
     if ($NoBackup) { $ninjaInstallArguments += '-NoBackup' }
     if (-not $InstallNuGetProvider) { $ninjaInstallArguments += '-InstallNuGetProvider:$false' }
     $previousNinjaVersion = Get-ReparoInstalledVersion -TargetRoot $InstallRoot
 
     try {
+        New-Item -ItemType Directory -Force -Path $ninjaBootstrapRoot | Out-Null
+        Copy-Item -LiteralPath $PSCommandPath -Destination $ninjaBootstrapPath -Force -ErrorAction Stop
+        Unblock-File -LiteralPath $ninjaBootstrapPath -ErrorAction SilentlyContinue
+        Write-ReparoLog ("[NINJA] Staged self-update bootstrap away from the installed target: {0}" -f $ninjaBootstrapPath)
         Write-Info 'Ninja mode: installing the reviewed, pinned Reparo release.'
         & powershell.exe @ninjaInstallArguments
         if ($LASTEXITCODE -ne 0) { throw "Pinned Reparo install exited with code $LASTEXITCODE." }
@@ -2974,6 +3020,11 @@ if ($Ninja) {
         Complete-ReparoUtilityLog -Status 'FAILED'
         Write-ReparoNinjaSelfUpdateActivity -Status 'FAILED' -PreviousVersion $previousNinjaVersion -InstalledVersion $retainedNinjaVersion -Reason $failureReason
         throw
+    }
+    finally {
+        if (Test-Path -LiteralPath $ninjaBootstrapRoot) {
+            Remove-Item -LiteralPath $ninjaBootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
