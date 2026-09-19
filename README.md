@@ -297,6 +297,22 @@ Use `-N` / `-Latest` only when you intentionally want the current, unreviewed `m
 `-Ninja` replaces the former standalone Ninja version-check payload; no separate wrapper
 is needed. Upload or paste a current `Reparo.ps1` into Ninja and invoke it with `-Ninja`.
 
+### Persistent Ninja operator automation
+
+`examples/Reparo-Ninja-Persistent-Automation.ps1` is a source-controlled reference for
+one dropdown-driven Ninja automation against an already installed
+`C:\ProgramData\Reparo\Reparo.ps1`. It provides named maintenance, lifecycle, WinGet
+health, scheduling, kill, reboot, and safely parsed custom actions. It is not an
+embedded Reparo deployment payload and does not replace the canonical single-script
+install path.
+
+The wrapper runs Reparo in a child PowerShell process, then publishes persisted WinGet
+health from Ninja's parent automation session. It prefers `Set-NinjaProperty` and falls
+back to `Ninja-Property-Set`. Both require the Ninja agent CLI at
+`C:\ProgramData\NinjaRMMAgent\ninjarmm-cli.exe` (or the path in `NINJARMMCLI`). A missing
+CLI produces a warning without converting successful Reparo maintenance into a false
+failure; repair or update the Ninja agent to restore custom-field publication.
+
 ### Option 4: Install/update over SSH
 
 For personal Windows machines that are reachable over OpenSSH, use the remote helper:
