@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.3.1'
+$script:ReparoVersion = '1.3.3.2'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -297,6 +297,7 @@ function Get-ReparoVersionFlavor {
         '1.3.2.6' = [pscustomobject]@{ Quote = 'All we have to decide is what to do with the time that is given us.'; Source = 'The Fellowship of the Ring'; Art = '  LEDGER: every discovered package gets its fate written' }
         '1.3.3.0' = [pscustomobject]@{ Quote = 'I aim to misbehave.'; Source = 'Serenity (written and directed by Joss Whedon)'; Art = '  NINJA: activity receipts slipped past the Alliance' }
         '1.3.3.1' = [pscustomobject]@{ Quote = 'I''m a leaf on the wind. Watch how I soar.'; Source = 'Serenity (written and directed by Joss Whedon)'; Art = '  LEAF: self-update bootstrap cleared the file-lock turbulence' }
+        '1.3.3.2' = [pscustomobject]@{ Quote = 'Roads? Where we''re going, we don''t need roads.'; Source = 'Back to the Future (written by Robert Zemeckis and Bob Gale)'; Art = '  DELOREAN: TLS clock accelerated past 2011' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -3037,6 +3038,9 @@ if ($Install -or $New -or $Latest) {
     elseif ($New) {
         $manifestUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/refs/heads/main/deploy/reparo-release.json'
         try {
+            # Windows PowerShell on older .NET Framework releases can default to
+            # TLS 1.0, which GitHub rejects before Reparo can resolve its pin.
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             $manifestSeparator = if ($manifestUrl.Contains('?')) { '&' } else { '?' }
             $manifestRequestUrl = '{0}{1}x={2}' -f $manifestUrl, $manifestSeparator, [Uri]::EscapeDataString((Get-Date -Format 'yyyyMMddHHmmss'))
             $manifest = Invoke-RestMethod -Uri $manifestRequestUrl -Headers @{ 'User-Agent' = 'Reparo'; 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' } -UseBasicParsing -ErrorAction Stop

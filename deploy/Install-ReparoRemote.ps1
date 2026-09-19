@@ -39,6 +39,7 @@ function New-ReparoRemoteInstallScript {
 `$installRoot = "$RemoteInstallRoot"
 `$bootstrapUrl = "$RemoteSourceUrl"
 
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 New-Item -ItemType Directory -Force -Path `$installRoot | Out-Null
 `$bootstrapPath = Join-Path `$installRoot 'Reparo.bootstrap.ps1'
 
