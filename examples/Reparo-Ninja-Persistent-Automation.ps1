@@ -17,6 +17,7 @@ function Invoke-Reparo {
     )
 
     $launchPath = $Reparo
+    $launchArguments = $Arguments
     $stageRoot = $null
 
     try {
@@ -26,24 +27,60 @@ function Invoke-Reparo {
             $stageRoot = Join-Path $env:TEMP (
                 'ReparoNinja_{0}_{1}' -f $PID, [guid]::NewGuid()
             )
-            $launchPath = Join-Path $stageRoot 'Reparo.bootstrap.ps1'
+            $stagedRuntimePath = Join-Path $stageRoot 'Reparo.bootstrap.ps1'
+            $launchPath = Join-Path $stageRoot 'Invoke-ReparoTlsBootstrap.ps1'
 
             New-Item -ItemType Directory -Path $stageRoot -Force |
                 Out-Null
 
             Copy-Item `
                 -LiteralPath $Reparo `
-                -Destination $launchPath `
+                -Destination $stagedRuntimePath `
                 -Force `
                 -ErrorAction Stop
 
-            if (Get-Command Unblock-File -ErrorAction SilentlyContinue) {
-                Unblock-File `
-                    -LiteralPath $launchPath `
-                    -ErrorAction SilentlyContinue
+            # This launcher runs in the same child process as the staged runtime.
+            # That lets an older installed Reparo enable TLS 1.2 before its first
+            # GitHub request and bootstrap into the fixed reviewed release.
+            $commandTokens = New-Object System.Collections.Generic.List[string]
+            [void]$commandTokens.Add(
+                "'" + $stagedRuntimePath.Replace("'", "''") + "'"
+            )
+            foreach ($argument in $Arguments) {
+                if ($argument -match '^-[A-Za-z0-9][A-Za-z0-9]*(?::\$(?:true|false))?$') {
+                    [void]$commandTokens.Add($argument)
+                }
+                else {
+                    [void]$commandTokens.Add(
+                        "'" + $argument.Replace("'", "''") + "'"
+                    )
+                }
             }
 
-            Write-Host "Staged lifecycle bootstrap: $launchPath"
+            $launcherContent = @'
+$ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+'@
+            $launcherContent += [Environment]::NewLine
+            $launcherContent += '& ' + ($commandTokens -join ' ')
+            $launcherContent += [Environment]::NewLine
+            $launcherContent += 'if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }'
+            Set-Content `
+                -LiteralPath $launchPath `
+                -Value $launcherContent `
+                -Encoding UTF8 `
+                -Force
+            $launchArguments = @()
+
+            if (Get-Command Unblock-File -ErrorAction SilentlyContinue) {
+                foreach ($path in $stagedRuntimePath, $launchPath) {
+                    Unblock-File `
+                        -LiteralPath $path `
+                        -ErrorAction SilentlyContinue
+                }
+            }
+
+            Write-Host "Staged lifecycle bootstrap: $stagedRuntimePath"
         }
 
         Write-Host ('Command: reparo {0}' -f ($Arguments -join ' '))
@@ -53,7 +90,7 @@ function Invoke-Reparo {
             -NonInteractive `
             -ExecutionPolicy Bypass `
             -File $launchPath `
-            @Arguments
+            @launchArguments
 
         $exitCode = $LASTEXITCODE
 

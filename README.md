@@ -306,8 +306,11 @@ health, scheduling, kill, reboot, and safely parsed custom actions. It is not an
 embedded Reparo deployment payload and does not replace the canonical single-script
 install path.
 
-The wrapper runs Reparo in a child PowerShell process, then publishes persisted WinGet
-health from Ninja's parent automation session. It prefers `Set-NinjaProperty` and falls
+For lifecycle actions, the wrapper enables TLS 1.2 inside the staged child PowerShell
+process before invoking even an older installed Reparo runtime; this lets legacy
+Windows PowerShell/.NET hosts reach GitHub and bootstrap into the fixed reviewed
+release. It then publishes persisted WinGet health from Ninja's parent automation
+session. It prefers `Set-NinjaProperty` and falls
 back to `Ninja-Property-Set`. Both require the Ninja agent CLI at
 `C:\ProgramData\NinjaRMMAgent\ninjarmm-cli.exe` (or the path in `NINJARMMCLI`). A missing
 CLI produces a warning without converting successful Reparo maintenance into a false
