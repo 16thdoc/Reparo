@@ -1,6 +1,6 @@
 {
-  "version": "1.3.2.6",
-  "commit": "1f254a4df0f876a20d0e07653870cdb792291eba",
-  "reparoUrl": "https://raw.githubusercontent.com/16thdoc/Reparo/1f254a4df0f876a20d0e07653870cdb792291eba/Reparo.ps1",
-  "sha256": "96EC2E39F8B6B998DBFBD01332B40E155876F5BB186E1D97BEE4187FE4BC9479"
+  "version": "1.3.3.1",
+  "commit": "cf108208adb3a5451f8c22ed73cb27c71bc13638",
+  "reparoUrl": "https://raw.githubusercontent.com/16thdoc/Reparo/cf108208adb3a5451f8c22ed73cb27c71bc13638/Reparo.ps1",
+  "sha256": "D8E1DA27B848167242C5CF7B95A23A725CB684AC82DF254C5C18A8002F9EE2BD"
 }
