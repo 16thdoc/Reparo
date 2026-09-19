@@ -8,7 +8,7 @@ $readme = Get-Content -LiteralPath (Join-Path $repoRoot 'README.md') -Raw
 foreach ($required in @(
     'function Publish-ReparoInstalledNinjaVersion',
     'param([string]$Version = $script:ReparoVersion)',
-    'return Update-ReparoNinjaField -Version $matches.Version.Trim()',
+    'return Update-ReparoNinjaField -Version $installedVersion',
     'Publish-ReparoInstalledNinjaVersion -TargetRoot $InstallRoot | Out-Null',
     "[Alias('WG')]`n    [switch]`$WingetHealth",
     '$WingetDiscover = $true',
@@ -16,7 +16,11 @@ foreach ($required in @(
     "'-New', '-SkipNinjaPublish', '-InstallRoot', `$InstallRoot",
     "& powershell.exe @ninjaInstallArguments",
     'Publish-ReparoInstalledNinjaVersion -TargetRoot $InstallRoot | Out-Null',
-    "& `$setter.Name -Name 'Reparo' -Value 'Update Failed'",
+    'function Write-ReparoNinjaSelfUpdateActivity',
+    'Previous version:',
+    'Installed version:',
+    "'Update Failed | Installed:Unknown'",
+    'Write-ReparoNinjaSelfUpdateActivity -Status ''FAILED''',
     "Runtime update preserves persisted WinGet health; use -WG to refresh it."
 )) {
     if (-not $source.Contains($required)) {

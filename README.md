@@ -258,7 +258,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Preview -U
 
 ### Option 3: Refresh from GitHub with `-Ninja`
 
-Use this when the endpoint can reach GitHub. `-Ninja` downloads the reviewed, immutable release pinned by `deploy/reparo-release.json` to `C:\ProgramData\Reparo\Reparo.ps1`, with parse validation and rollback handling, then publishes the installed version plus saved WinGet health to Ninja's `Reparo` device text field. SYSTEM deployments deliberately skip post-install WinGet/App Installer discovery so they do not overwrite an interactive-user `WG:OK` with the known SYSTEM context limitation. It publishes `Update Failed` if the refresh transaction fails.
+Use this when the endpoint can reach GitHub. `-Ninja` downloads the reviewed, immutable release pinned by `deploy/reparo-release.json` to `C:\ProgramData\Reparo\Reparo.ps1`, with parse validation and rollback handling, then publishes the installed version plus saved WinGet health to Ninja's `Reparo` device text field. SYSTEM deployments deliberately skip post-install WinGet/App Installer discovery so they do not overwrite an interactive-user `WG:OK` with the known SYSTEM context limitation. It publishes `Update Failed | Installed:<version>` if the refresh transaction fails and rollback leaves a readable runtime in place.
+
+When Ninja launches Reparo, Ninja captures the concise Reparo activity receipt from standard output in that automation's Activity details. Maintenance receipts include Reparo version, mode, result, updated/skipped/failed counts, bounded package details, and the finalized local log path. `-Ninja` self-update receipts include the previous and installed versions, source, failure reason when applicable, and log path. Reparo still returns exit code `1` for a failed maintenance or self-update run so Ninja marks the automation failed instead of recording a false green success.
+
+Reparo runs started by its own scheduled task do not inherit Ninja's script helpers and cannot create an arbitrary Ninja Activity without API credentials. Do not put Ninja API credentials in Reparo. For those autonomous maintenance runs, configure a Ninja Windows Event Log condition for `Application / Reparo`: event `1001` is complete, `1002` is failed, and `1003` is preview. Those events include the runtime version, mode, counts, failed-item summary, and final log path.
 
 Ninja script body:
 

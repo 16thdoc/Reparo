@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.2.6'
+$script:ReparoVersion = '1.3.3.0'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -295,6 +295,7 @@ function Get-ReparoVersionFlavor {
         '1.3.2.4' = [pscustomobject]@{ Quote = 'Never give up. Never surrender.'; Source = 'Galaxy Quest'; Art = '  MSI: installer exit code dragged screaming into evidence' }
         '1.3.2.5' = [pscustomobject]@{ Quote = 'It can''t rain all the time.'; Source = 'The Crow'; Art = '  CROW: summary storm drained into one clean grave' }
         '1.3.2.6' = [pscustomobject]@{ Quote = 'All we have to decide is what to do with the time that is given us.'; Source = 'The Fellowship of the Ring'; Art = '  LEDGER: every discovered package gets its fate written' }
+        '1.3.3.0' = [pscustomobject]@{ Quote = 'I aim to misbehave.'; Source = 'Serenity (written and directed by Joss Whedon)'; Art = '  NINJA: activity receipts slipped past the Alliance' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -968,6 +969,63 @@ function Update-ReparoNinjaField {
     return $true
 }
 
+function Test-ReparoNinjaContext {
+    return [bool](Get-Command Ninja-Property-Set -ErrorAction SilentlyContinue)
+}
+
+function Write-ReparoNinjaActivityLine {
+    param([AllowEmptyString()][string]$Message)
+
+    Write-Host $Message
+    if (-not [string]::IsNullOrWhiteSpace($Message)) {
+        Write-ReparoLog ("[NINJA-ACTIVITY] {0}" -f $Message)
+    }
+}
+
+function Get-ReparoInstalledVersion {
+    param([Parameter(Mandatory)][string]$TargetRoot)
+
+    $installedScriptPath = Join-Path $TargetRoot 'Reparo.ps1'
+    if (-not (Test-Path -LiteralPath $installedScriptPath -PathType Leaf)) { return $null }
+
+    try {
+        $versionOutput = & $installedScriptPath -Version *>&1 | Out-String
+        if ($LASTEXITCODE -notin @(0, $null) -or $versionOutput -notmatch '(?m)^Reparo (?<Version>\d+\.\d+\.\d+\.\d+)\r?$') {
+            throw "Installed Reparo.ps1 did not return a valid version: $versionOutput"
+        }
+
+        return $matches.Version.Trim()
+    }
+    catch {
+        Write-ReparoLog "[NINJA-WARN] Unable to read installed Reparo version: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Write-ReparoNinjaSelfUpdateActivity {
+    param(
+        [ValidateSet('COMPLETE', 'FAILED', 'PREVIEW')][string]$Status,
+        [string]$PreviousVersion,
+        [string]$InstalledVersion,
+        [string]$Reason
+    )
+
+    if (-not (Test-ReparoNinjaContext)) { return }
+    if ([string]::IsNullOrWhiteSpace($PreviousVersion)) { $PreviousVersion = 'Not installed or unreadable' }
+    if ([string]::IsNullOrWhiteSpace($InstalledVersion)) { $InstalledVersion = 'Not installed or unreadable' }
+
+    Write-ReparoNinjaActivityLine ''
+    Write-ReparoNinjaActivityLine 'REPARO SELF-UPDATE ACTIVITY'
+    Write-ReparoNinjaActivityLine ("Status: {0}" -f $Status)
+    Write-ReparoNinjaActivityLine ("Previous version: {0}" -f $PreviousVersion)
+    Write-ReparoNinjaActivityLine ("Installed version: {0}" -f $InstalledVersion)
+    Write-ReparoNinjaActivityLine 'Source: reviewed pinned release'
+    if (-not [string]::IsNullOrWhiteSpace($Reason)) {
+        Write-ReparoNinjaActivityLine ("Reason: {0}" -f (($Reason -replace '\s+', ' ').Trim()))
+    }
+    Write-ReparoNinjaActivityLine ("Log: {0}" -f $script:ReparoLogPath)
+}
+
 function Test-ReparoSystemIdentity {
     try {
         return ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18')
@@ -994,16 +1052,12 @@ function Test-ReparoWingetUnsupportedWindows {
 function Publish-ReparoInstalledNinjaVersion {
     param([Parameter(Mandatory)][string]$TargetRoot)
 
-    if (-not (Get-Command Ninja-Property-Set -ErrorAction SilentlyContinue)) { return $false }
+    if (-not (Test-ReparoNinjaContext)) { return $false }
 
-    $installedScriptPath = Join-Path $TargetRoot 'Reparo.ps1'
     try {
-        $versionOutput = & $installedScriptPath -Version *>&1 | Out-String
-        if ($LASTEXITCODE -notin @(0, $null) -or $versionOutput -notmatch '(?m)^Reparo (?<Version>\d+\.\d+\.\d+\.\d+)\r?$') {
-            throw "Installed Reparo.ps1 did not return a valid version: $versionOutput"
-        }
-
-        return Update-ReparoNinjaField -Version $matches.Version.Trim()
+        $installedVersion = Get-ReparoInstalledVersion -TargetRoot $TargetRoot
+        if ([string]::IsNullOrWhiteSpace($installedVersion)) { throw 'Installed Reparo version is unavailable.' }
+        return Update-ReparoNinjaField -Version $installedVersion
     }
     catch {
         Write-Warning "Unable to publish the installed Reparo version to Ninja: $($_.Exception.Message)"
@@ -2897,20 +2951,28 @@ if ($Ninja) {
     if ($Preview) { $ninjaInstallArguments += '-Preview' }
     if ($NoBackup) { $ninjaInstallArguments += '-NoBackup' }
     if (-not $InstallNuGetProvider) { $ninjaInstallArguments += '-InstallNuGetProvider:$false' }
+    $previousNinjaVersion = Get-ReparoInstalledVersion -TargetRoot $InstallRoot
 
     try {
         Write-Info 'Ninja mode: installing the reviewed, pinned Reparo release.'
         & powershell.exe @ninjaInstallArguments
         if ($LASTEXITCODE -ne 0) { throw "Pinned Reparo install exited with code $LASTEXITCODE." }
+        $installedNinjaVersion = if ($Preview) { $previousNinjaVersion } else { Get-ReparoInstalledVersion -TargetRoot $InstallRoot }
         Publish-ReparoInstalledNinjaVersion -TargetRoot $InstallRoot | Out-Null
-        Complete-ReparoUtilityLog -Status 'COMPLETE'
+        Complete-ReparoUtilityLog -Status $(if ($Preview) { 'PREVIEW' } else { 'COMPLETE' })
+        Write-ReparoNinjaSelfUpdateActivity -Status $(if ($Preview) { 'PREVIEW' } else { 'COMPLETE' }) -PreviousVersion $previousNinjaVersion -InstalledVersion $installedNinjaVersion
         return
     }
     catch {
+        $failureReason = $_.Exception.Message
+        $retainedNinjaVersion = Get-ReparoInstalledVersion -TargetRoot $InstallRoot
         $setter = Get-Command Ninja-Property-Set -ErrorAction SilentlyContinue
         if ($setter) {
-            try { & $setter.Name -Name 'Reparo' -Value 'Update Failed' } catch { Write-ReparoLog ("[WARN] Unable to publish Ninja update failure: {0}" -f $_.Exception.Message) }
+            $failureValue = if ([string]::IsNullOrWhiteSpace($retainedNinjaVersion)) { 'Update Failed | Installed:Unknown' } else { "Update Failed | Installed:$retainedNinjaVersion" }
+            try { & $setter.Name -Name 'Reparo' -Value $failureValue } catch { Write-ReparoLog ("[WARN] Unable to publish Ninja update failure: {0}" -f $_.Exception.Message) }
         }
+        Complete-ReparoUtilityLog -Status 'FAILED'
+        Write-ReparoNinjaSelfUpdateActivity -Status 'FAILED' -PreviousVersion $previousNinjaVersion -InstalledVersion $retainedNinjaVersion -Reason $failureReason
         throw
     }
 }
@@ -5710,6 +5772,58 @@ function Write-ReparoSummary {
     Write-ReparoLog ("[SUMMARY] Working log: {0}" -f $script:ReparoLogPath)
 }
 
+function ConvertTo-ReparoNinjaActivityRow {
+    param([Parameter(Mandatory)][object]$Row)
+
+    $versionDetail = if ($Row.CurrentVersion -ne '-' -or $Row.Version -ne '-') {
+        " $($Row.CurrentVersion) -> $($Row.Version)"
+    }
+    else { '' }
+    $reasonDetail = if ($Row.Reason -ne '-') { ": $($Row.Reason)" } else { '' }
+    return (("- {0}{1} [{2}]{3}" -f $Row.Software, $versionDetail, $Row.Method, $reasonDetail) -replace '\s+', ' ').Trim()
+}
+
+function Write-ReparoNinjaMaintenanceActivity {
+    param(
+        [Parameter(Mandatory)][string]$Mode,
+        [Parameter(Mandatory)][ValidateSet('COMPLETE', 'FAILED', 'PREVIEW')][string]$Status,
+        [int]$MaximumRowsPerBucket = 25
+    )
+
+    if (-not (Test-ReparoNinjaContext)) { return }
+
+    $updated = @($script:ReparoSummary['Updated'].ToArray())
+    $skipped = @($script:ReparoSummary['Skipped'].ToArray())
+    $failed = @($script:ReparoSummary['Failed'].ToArray())
+
+    Write-ReparoNinjaActivityLine ''
+    Write-ReparoNinjaActivityLine 'REPARO MAINTENANCE ACTIVITY'
+    Write-ReparoNinjaActivityLine ("Status: {0}" -f $Status)
+    Write-ReparoNinjaActivityLine ("Version: {0}" -f $script:ReparoVersion)
+    Write-ReparoNinjaActivityLine ("Mode: {0}" -f $Mode)
+    Write-ReparoNinjaActivityLine ("Updated: {0} | Skipped: {1} | Failed: {2}" -f $updated.Count, $skipped.Count, $failed.Count)
+
+    foreach ($bucket in @(
+        [pscustomobject]@{ Name = 'Updated software'; Rows = $updated },
+        [pscustomobject]@{ Name = 'Skipped items'; Rows = $skipped },
+        [pscustomobject]@{ Name = 'Failed items'; Rows = $failed }
+    )) {
+        if ($bucket.Rows.Count -eq 0) { continue }
+        Write-ReparoNinjaActivityLine ("{0}:" -f $bucket.Name)
+        foreach ($row in @($bucket.Rows | Select-Object -First $MaximumRowsPerBucket)) {
+            Write-ReparoNinjaActivityLine (ConvertTo-ReparoNinjaActivityRow -Row $row)
+        }
+        if ($bucket.Rows.Count -gt $MaximumRowsPerBucket) {
+            Write-ReparoNinjaActivityLine ("- ... {0} more; see the Reparo log." -f ($bucket.Rows.Count - $MaximumRowsPerBucket))
+        }
+    }
+
+    if ($updated.Count -eq 0 -and $skipped.Count -eq 0 -and $failed.Count -eq 0) {
+        Write-ReparoNinjaActivityLine 'No package changes or failures were reported.'
+    }
+    Write-ReparoNinjaActivityLine ("Log: {0}" -f $script:ReparoLogPath)
+}
+
 function Invoke-ReparoTimedCommand {
     param(
         [Parameter(Mandatory)][string]$ShellPath,
@@ -6416,6 +6530,7 @@ if ($CheckApp -or $LockApp) {
     }
 
     Finalize-ReparoLogFile -Status $script:ReparoFinalStatus
+    Write-ReparoNinjaMaintenanceActivity -Mode $appMode -Status $script:ReparoFinalStatus
     return
 }
 
@@ -7556,6 +7671,7 @@ if ($Preview) {
 }
 
 Finalize-ReparoLogFile -Status $script:ReparoFinalStatus
+Write-ReparoNinjaMaintenanceActivity -Mode $mode -Status $script:ReparoFinalStatus
 
 $eventEntryType = if ($script:ReparoFinalStatus -eq 'FAILED') { 'Error' } elseif ($script:ReparoFinalStatus -eq 'PREVIEW') { 'Warning' } else { 'Information' }
 $eventId = if ($script:ReparoFinalStatus -eq 'FAILED') { 1002 } elseif ($script:ReparoFinalStatus -eq 'PREVIEW') { 1003 } else { 1001 }
