@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.3.3'
+$script:ReparoVersion = '1.3.3.4'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -299,6 +299,7 @@ function Get-ReparoVersionFlavor {
         '1.3.3.1' = [pscustomobject]@{ Quote = 'I''m a leaf on the wind. Watch how I soar.'; Source = 'Serenity (written and directed by Joss Whedon)'; Art = '  LEAF: self-update bootstrap cleared the file-lock turbulence' }
         '1.3.3.2' = [pscustomobject]@{ Quote = 'Roads? Where we''re going, we don''t need roads.'; Source = 'Back to the Future (written by Robert Zemeckis and Bob Gale)'; Art = '  DELOREAN: TLS clock accelerated past 2011' }
         '1.3.3.3' = [pscustomobject]@{ Quote = 'Come with me if you want to live.'; Source = 'Terminator 2: Judgment Day (directed by James Cameron; written by James Cameron and William Wisher)'; Art = '  T-800: legacy task scheduler fallback acquired' }
+        '1.3.3.4' = [pscustomobject]@{ Quote = 'The way is shut. It was made by those who are Dead, and the Dead keep it.'; Source = 'The Lord of the Rings: The Return of the King by J.R.R. Tolkien'; Art = '  DOOR: sharing-violation ghost left outside the crypt' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -3800,7 +3801,7 @@ function Get-ReparoWingetBlockedReason {
     param([object[]]$Output)
 
     $text = ($Output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
-    if ($text -match '(?i)(?:remove|rename|move): Access is denied|Access is denied.*Microsoft\\WinGet\\Packages') {
+    if ($text -match '(?i)(?:remove|rename|move): Access is denied|Access is denied.*Microsoft\\WinGet\\Packages|0x80070020|process cannot access the file because it is being used by another process') {
         return 'Winget could not replace installed package files because they are in use or access was denied.'
     }
 
@@ -4148,7 +4149,7 @@ function New-ReparoWingetUpgradeQueueCommand {
         [void]$commands.Add(("`$wingetOutput = @(winget upgrade --id {0} --exact --source {1} --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1)" -f $id, $source))
         [void]$commands.Add("`$wingetExitCode = `$LASTEXITCODE")
         [void]$commands.Add("`$wingetOutput | ForEach-Object { Write-Output `$_ }")
-        [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Output ('REPARO-WINGET-SKIP manual ' + " + $id + "); Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)installer cannot be run from an administrator context|package installed for user scope cannot be uninstalled when running with administrator privileges') { Write-Output ('REPARO-WINGET-SKIP non-elevated ' + " + $id + "); Write-Warning ('Winget package requires a non-elevated session: ' + " + $id + "); `$nonElevatedPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)No applicable upgrade found|does not apply to your system or requirements') { Write-Output ('REPARO-WINGET-SKIP not-applicable ' + " + $id + "); Write-Warning ('Winget package is not applicable to this system or its current requirements: ' + " + $id + "); `$notApplicablePackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)(?:remove|rename|move): Access is denied|Access is denied.*Microsoft\\WinGet\\Packages') { Write-Output ('REPARO-WINGET-SKIP blocked ' + " + $id + "); Write-Warning ('Winget package files are in use or access was denied: ' + " + $id + "); `$blockedPackages += " + $id + " } else { `$failedPackages += " + $id + ' } } else { Write-Output (''REPARO-WINGET-UPDATED '' + ' + $id + ') }'))
+        [void]$commands.Add(("if (`$wingetExitCode -ne 0) { if ((`$wingetOutput | Out-String) -match 'install technology is different from the current version installed') { Write-Output ('REPARO-WINGET-SKIP manual ' + " + $id + "); Write-Warning ('Winget package requires manual uninstall/reinstall: ' + " + $id + "); `$manualPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)installer cannot be run from an administrator context|package installed for user scope cannot be uninstalled when running with administrator privileges') { Write-Output ('REPARO-WINGET-SKIP non-elevated ' + " + $id + "); Write-Warning ('Winget package requires a non-elevated session: ' + " + $id + "); `$nonElevatedPackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)No applicable upgrade found|does not apply to your system or requirements') { Write-Output ('REPARO-WINGET-SKIP not-applicable ' + " + $id + "); Write-Warning ('Winget package is not applicable to this system or its current requirements: ' + " + $id + "); `$notApplicablePackages += " + $id + " } elseif ((`$wingetOutput | Out-String) -match '(?i)(?:remove|rename|move): Access is denied|Access is denied.*Microsoft\\WinGet\\Packages|0x80070020|process cannot access the file because it is being used by another process') { Write-Output ('REPARO-WINGET-SKIP blocked ' + " + $id + "); Write-Warning ('Winget package files are in use or access was denied: ' + " + $id + "); `$blockedPackages += " + $id + " } else { `$failedPackages += " + $id + ' } } else { Write-Output (''REPARO-WINGET-UPDATED '' + ' + $id + ') }'))
     }
 
     if ($commands.Count -eq 5) {

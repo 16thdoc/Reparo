@@ -48,6 +48,18 @@ if (-not (Get-ReparoWingetBlockedReason -Output $blockedSample)) {
 if (Get-ReparoWingetBlockedReason -Output @('Uninstall failed with exit code: 0x8a150003 : Executing command failed')) {
     throw 'The blocked WinGet classifier treated a generic execution failure as access denied.'
 }
+$sharingViolationSample = @(
+    'An unexpected error occurred while executing the command:',
+    '0x80070020 : The process cannot access the file because it is being used by another process.'
+)
+if (-not (Get-ReparoWingetBlockedReason -Output $sharingViolationSample)) {
+    throw 'The blocked WinGet classifier did not recognize a Windows sharing violation.'
+}
+foreach ($required in @('0x80070020', 'process cannot access the file because it is being used by another process')) {
+    if (-not $wingetQueue.Value.Contains($required)) {
+        throw "The WinGet queue does not classify sharing violations as blocked: $required"
+    }
+}
 if ($wingetQueue.Value.Contains('Get-ReparoPendingUpdates -Section $Section')) {
     throw 'WinGet queue construction still performs a duplicate update discovery.'
 }
