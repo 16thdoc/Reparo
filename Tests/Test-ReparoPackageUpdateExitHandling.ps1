@@ -202,6 +202,41 @@ if (-not $summaryWriter.Success) { throw 'Could not locate the final summary wri
 if (-not $summaryWriter.Value.Contains('Write-ReparoSummaryNextSteps')) {
     throw 'Next-step guidance is not emitted by the final summary.'
 }
+foreach ($required in @(
+    'function Get-ReparoNotUpdatedAction',
+    'function Write-ReparoNotUpdatedReport',
+    'Not updated: reasons and actions',
+    'Why:',
+    'Next:',
+    'Write-ReparoNotUpdatedReport'
+)) {
+    if (-not $source.Contains($required)) {
+        throw "The actionable not-updated report is absent: $required"
+    }
+}
+$reportFunctions = [regex]::Match($source, '(?s)function Get-ReparoNotUpdatedAction \{.*?(?=function Write-ReparoSummaryNextSteps)')
+if (-not $reportFunctions.Success) { throw 'Could not locate the actionable not-updated report functions.' }
+Invoke-Expression $reportFunctions.Value
+function Write-ReparoLog { param([string]$Message) }
+$script:ReparoSummary = @{
+    Skipped = New-Object System.Collections.Generic.List[object]
+    Failed  = New-Object System.Collections.Generic.List[object]
+}
+[void]$script:ReparoSummary.Skipped.Add([pscustomobject]@{ Software = 'Hytale Launcher'; CurrentVersion = '1'; Version = '2'; Method = 'winget'; Reason = 'protected from Reparo-managed updates' })
+[void]$script:ReparoSummary.Failed.Add([pscustomobject]@{ Software = 'FreeCAD'; CurrentVersion = '1'; Version = '2'; Method = 'winget'; Reason = 'package command exited 1' })
+$reportOutput = (& { Write-ReparoNotUpdatedReport } *>&1 | Out-String)
+foreach ($required in @(
+    'Not updated: reasons and actions (2)',
+    'Hytale Launcher 1 -> 2 [winget]',
+    'Why: protected from Reparo-managed updates',
+    'Next: No action required; update it intentionally through its own launcher or installer.',
+    'FreeCAD 1 -> 2 [winget]',
+    'Next: Inspect the final log for the exact command output'
+)) {
+    if (-not $reportOutput.Contains($required)) {
+        throw "The actionable not-updated report did not render: $required"
+    }
+}
 if ($timedCommand.Value.Contains('Write-ReparoSummaryNextSteps')) {
     throw 'Timed child commands must not emit accumulated final-summary guidance.'
 }

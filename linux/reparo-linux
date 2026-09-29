@@ -6,9 +6,9 @@ set -u
 umask 077
 
 # Native and Windows runners share one Reparo release number and version flavor.
-REPARO_LINUX_VERSION='1.3.3.6'
-REPARO_VERSION_QUOTE='All that is gold does not glitter, not all those who wander are lost.'
-REPARO_VERSION_SOURCE='The Lord of the Rings: The Fellowship of the Ring by J.R.R. Tolkien'
+REPARO_LINUX_VERSION='1.3.3.7'
+REPARO_VERSION_QUOTE='Winter is coming.'
+REPARO_VERSION_SOURCE='A Game of Thrones by George R.R. Martin'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
@@ -20,6 +20,7 @@ TAIL_LINES=120
 HOST_NAME=$(hostname 2>/dev/null || printf unknown)
 RUN_ID=''
 RUN_RESULT=complete
+NOT_UPDATED_FILE=''
 
 usage() {
     cat <<'EOF'
@@ -240,6 +241,27 @@ section_selected() {
     esac
 }
 
+record_not_updated() {
+    outcome=$1
+    section=$2
+    reason=$3
+    action=$4
+    printf '%s\t%s\t%s\t%s\n' "$outcome" "$section" "$reason" "$action" >>"$NOT_UPDATED_FILE"
+}
+
+print_not_updated_report() {
+    count=$(wc -l <"$NOT_UPDATED_FILE" | tr -d '[:space:]')
+    [ "$count" -gt 0 ] 2>/dev/null || { log 'Not updated: none'; rm -f "$NOT_UPDATED_FILE"; return; }
+    log "Not updated: reasons and actions ($count)"
+    tab=$(printf '\t')
+    while IFS="$tab" read -r outcome section reason action; do
+        log "  - $section - $outcome"
+        log "      Why: $reason"
+        log "      Next: $action"
+    done <"$NOT_UPDATED_FILE"
+    rm -f "$NOT_UPDATED_FILE"
+}
+
 detect_native_section() {
     distro=''
     if [ -r /etc/os-release ]; then
@@ -274,11 +296,13 @@ run_command() {
     if [ "$PREVIEW" -eq 1 ]; then
         log "[DRY-RUN] $section: $description"
         syslog_event notice command_preview "$section" skipped "$description"
+        record_not_updated SKIPPED "$section" 'preview only' 'Rerun without --preview when you want Reparo to make changes.'
         return 0
     fi
 
     output_file=$(mktemp "${TMPDIR:-/tmp}/reparo-linux-command.XXXXXX") || {
         log "[FAIL] $section: could not create command output file"
+        record_not_updated FAILED "$section" 'could not create command output file' 'Check temporary-directory permissions, then rerun the affected section.'
         return 1
     }
     if "$@" >"$output_file" 2>&1; then
@@ -295,6 +319,7 @@ run_command() {
         log "[FAIL] $section exited $status"
         RUN_RESULT=partial
         syslog_event err command_complete "$section" failed "exit_$status"
+        record_not_updated FAILED "$section" "command exited $status" 'Inspect the final log, correct the reported error, and rerun the affected section.'
     fi
     return "$status"
 }
@@ -312,6 +337,7 @@ run_privileged() {
     else
         log "[SKIP] $section: root or passwordless sudo is required; refusing to prompt"
         syslog_event warning command_skipped "$section" skipped 'privilege_required'
+        record_not_updated SKIPPED "$section" 'root or passwordless sudo is required' 'Run Reparo as root or configure passwordless sudo for the required package-manager commands.'
         return 0
     fi
 }
@@ -324,6 +350,7 @@ run_optional() {
     if ! command_exists "$executable"; then
         log "[SKIP] $section: $executable not found"
         syslog_event notice command_skipped "$section" skipped 'tool_not_found'
+        record_not_updated SKIPPED "$section" "$executable not found" 'Install or repair this tool only if you expect Reparo to manage it.'
         return 0
     fi
     run_command "$section" "$*" "$@" || true
@@ -346,6 +373,7 @@ run_npm_global_update() {
     if ! command_exists npm; then
         log '[SKIP] Npm: npm not found'
         syslog_event notice command_skipped Npm skipped tool_not_found
+        record_not_updated SKIPPED Npm 'npm not found' 'Install or repair npm only if you expect Reparo to manage it.'
         return 0
     fi
     npm_executable=$(command -v npm)
@@ -367,11 +395,13 @@ run_opencode_update() {
     if ! command_exists opencode; then
         log '[SKIP] Opencode: opencode not found'
         syslog_event notice command_skipped Opencode skipped tool_not_found
+        record_not_updated SKIPPED Opencode 'opencode not found' 'Install OpenCode only if you expect Reparo to update it.'
         return 0
     fi
     if ! command_exists npm; then
         log '[SKIP] Opencode: npm not found; cannot update npm-managed installation'
         syslog_event notice command_skipped Opencode skipped npm_not_found
+        record_not_updated SKIPPED Opencode 'npm not found for an npm-managed installation' 'Install or repair npm, then rerun the Opencode section.'
         return 0
     fi
 
@@ -381,6 +411,7 @@ run_opencode_update() {
     if [ ! -d "$opencode_package" ]; then
         log "[SKIP] Opencode: $opencode_path is not a standard npm global installation"
         syslog_event notice command_skipped Opencode skipped unsupported_installation
+        record_not_updated SKIPPED Opencode 'active command is not a standard npm global installation' 'Update OpenCode through the installer or package manager that owns the active command.'
         return 0
     fi
 
@@ -422,7 +453,7 @@ run_native_manager() {
             run_privileged Zypper 'zypper --non-interactive refresh' zypper --non-interactive refresh || return
             run_privileged Zypper 'zypper --non-interactive update' zypper --non-interactive update || return
             ;;
-        *) log '[SKIP] Native: no supported package manager detected'; syslog_event warning command_skipped Native skipped no_supported_manager ;;
+        *) log '[SKIP] Native: no supported package manager detected'; syslog_event warning command_skipped Native skipped no_supported_manager; record_not_updated SKIPPED Native 'no supported package manager detected' 'Use the distribution package manager manually.' ;;
     esac
 }
 
@@ -577,6 +608,8 @@ case "$ACTION" in
 esac
 
 ensure_log_root
+NOT_UPDATED_FILE="$LOG_ROOT/reparo_${RUN_ID}_not-updated.tmp"
+: >"$NOT_UPDATED_FILE" || die "Cannot create not-updated report state: $NOT_UPDATED_FILE"
 log "Reparo Linux $REPARO_LINUX_VERSION starting"
 log "Mode: update force=$FORCE preview=$PREVIEW include=${INCLUDE:-auto} native=$(detect_native_section)"
 syslog_event notice run_start -- running "native_$(detect_native_section)"
@@ -597,6 +630,7 @@ run_optional Rust rustup rustup update
 run_optional Conda conda conda update -n base -c defaults conda -y
 run_optional Gem gem gem update
 run_optional Composer composer composer global update
+print_not_updated_report
 log "Reparo Linux complete. Log: $LOG_FILE"
 if [ "$PREVIEW" -eq 1 ]; then final_state=preview; else final_state=$RUN_RESULT; fi
 syslog_event notice run_complete -- "$final_state" "force_$FORCE"

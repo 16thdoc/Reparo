@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.3.6'
+$script:ReparoVersion = '1.3.3.7'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -302,6 +302,7 @@ function Get-ReparoVersionFlavor {
         '1.3.3.4' = [pscustomobject]@{ Quote = 'The way is shut. It was made by those who are Dead, and the Dead keep it.'; Source = 'The Lord of the Rings: The Return of the King by J.R.R. Tolkien'; Art = '  DOOR: sharing-violation ghost left outside the crypt' }
         '1.3.3.5' = [pscustomobject]@{ Quote = 'Even the smallest person can change the course of the future.'; Source = 'The Lord of the Rings: The Fellowship of the Ring by J.R.R. Tolkien'; Art = '  QUEUE: each package gets its own tiny timeout crypt' }
         '1.3.3.6' = [pscustomobject]@{ Quote = 'All that is gold does not glitter, not all those who wander are lost.'; Source = 'The Lord of the Rings: The Fellowship of the Ring by J.R.R. Tolkien'; Art = '  HYTALE: interactive launcher escorted out of the unattended queue' }
+        '1.3.3.7' = [pscustomobject]@{ Quote = 'Winter is coming.'; Source = 'A Game of Thrones by George R.R. Martin'; Art = '  LEDGER: every abandoned update leaves a reason and a map home' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -5781,6 +5782,66 @@ function Write-ReparoSummaryTable {
     }
 }
 
+function Get-ReparoNotUpdatedAction {
+    param(
+        [Parameter(Mandatory)][object]$Row,
+        [Parameter(Mandatory)][ValidateSet('SKIPPED', 'FAILED')][string]$Outcome
+    )
+
+    $reason = [string]$Row.Reason
+    switch -Regex ($reason) {
+        'protected from Reparo-managed updates' { return 'No action required; update it intentionally through its own launcher or installer.' }
+        'manual uninstall/reinstall' { return 'Update it manually, or uninstall and reinstall it through Winget.' }
+        'files are in use or access was denied' { return 'Close the app or stop its service, then rerun reparo -Include Winget.' }
+        'non-elevated user session' { return 'Run reparo -Include Winget from a normal, non-elevated PowerShell session.' }
+        'not applicable to this system' { return 'Check the vendor installer or Winget package requirements; Reparo cannot apply this upgrade automatically.' }
+        'version lock' { return 'Keep the pinned version, or remove/change the Reparo version lock before rerunning.' }
+        'preview only' { return 'Rerun without -Preview when you want Reparo to make changes.' }
+        'not found or cannot run' { return 'Install or repair this package manager only if you expect Reparo to manage it.' }
+        'timed out' { return 'Close any installer or app holding the update, inspect the final log, and rerun the affected section.' }
+    }
+
+    if ($Outcome -eq 'FAILED') {
+        return 'Inspect the final log for the exact command output, correct the reported error, and rerun the affected section.'
+    }
+    return 'No automatic action was taken; review the reason and update manually if this item matters.'
+}
+
+function Write-ReparoNotUpdatedReport {
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($row in $script:ReparoSummary['Skipped'].ToArray()) {
+        [void]$rows.Add([pscustomobject]@{ Outcome = 'SKIPPED'; Row = $row })
+    }
+    foreach ($row in $script:ReparoSummary['Failed'].ToArray()) {
+        [void]$rows.Add([pscustomobject]@{ Outcome = 'FAILED'; Row = $row })
+    }
+    if ($rows.Count -eq 0) {
+        Write-ReparoLog '[SUMMARY] Not updated: none'
+        return
+    }
+
+    Write-Host ''
+    Write-Host ("Not updated: reasons and actions ({0})" -f $rows.Count) -ForegroundColor Magenta
+    Write-ReparoLog ("[SUMMARY] Not updated: reasons and actions ({0})" -f $rows.Count)
+    foreach ($entry in $rows) {
+        $row = $entry.Row
+        $versionDetail = if ($row.CurrentVersion -ne '-' -or $row.Version -ne '-') {
+            " $($row.CurrentVersion) -> $($row.Version)"
+        }
+        else { '' }
+        $action = Get-ReparoNotUpdatedAction -Row $row -Outcome $entry.Outcome
+        $heading = "  - $($row.Software)$versionDetail [$($row.Method)] - $($entry.Outcome)"
+        $why = "      Why: $($row.Reason)"
+        $next = "      Next: $action"
+        Write-Host $heading
+        Write-Host $why
+        Write-Host $next
+        Write-ReparoLog ("[SUMMARY] {0}" -f $heading.TrimStart())
+        Write-ReparoLog ("[SUMMARY] {0}" -f $why.TrimStart())
+        Write-ReparoLog ("[SUMMARY] {0}" -f $next.TrimStart())
+    }
+}
+
 function Write-ReparoSummaryNextSteps {
     $skipped = @($script:ReparoSummary['Skipped'].ToArray())
     $failed = @($script:ReparoSummary['Failed'].ToArray())
@@ -5834,8 +5895,7 @@ function Write-ReparoSummary {
     Write-ReparoLog ("[SUMMARY] Result={0} Updated={1} Skipped={2} Failed={3}" -f $result, $updatedCount, $skippedCount, $failedCount)
 
     Write-ReparoSummaryTable -Title 'Updated software' -Rows $script:ReparoSummary['Updated'].ToArray()
-    Write-ReparoSummaryTable -Title 'Skipped items' -Rows $script:ReparoSummary['Skipped'].ToArray() -IncludeReason
-    Write-ReparoSummaryTable -Title 'Failed items' -Rows $script:ReparoSummary['Failed'].ToArray() -IncludeReason
+    Write-ReparoNotUpdatedReport
 
     if ($script:ReparoSummary['Notes'].Count -gt 0) {
         Write-Host ''
