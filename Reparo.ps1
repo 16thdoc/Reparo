@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.3.4'
+$script:ReparoVersion = '1.3.3.5'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -300,6 +300,7 @@ function Get-ReparoVersionFlavor {
         '1.3.3.2' = [pscustomobject]@{ Quote = 'Roads? Where we''re going, we don''t need roads.'; Source = 'Back to the Future (written by Robert Zemeckis and Bob Gale)'; Art = '  DELOREAN: TLS clock accelerated past 2011' }
         '1.3.3.3' = [pscustomobject]@{ Quote = 'Come with me if you want to live.'; Source = 'Terminator 2: Judgment Day (directed by James Cameron; written by James Cameron and William Wisher)'; Art = '  T-800: legacy task scheduler fallback acquired' }
         '1.3.3.4' = [pscustomobject]@{ Quote = 'The way is shut. It was made by those who are Dead, and the Dead keep it.'; Source = 'The Lord of the Rings: The Return of the King by J.R.R. Tolkien'; Art = '  DOOR: sharing-violation ghost left outside the crypt' }
+        '1.3.3.5' = [pscustomobject]@{ Quote = 'Even the smallest person can change the course of the future.'; Source = 'The Lord of the Rings: The Fellowship of the Ring by J.R.R. Tolkien'; Art = '  QUEUE: each package gets its own tiny timeout crypt' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -4142,6 +4143,7 @@ function New-ReparoWingetUpgradeQueueCommand {
         $protectedExclusion = Get-ReparoProtectedPackageExclusion -Id $update.Id -Software $update.Software
         if ($protectedExclusion) {
             [void]$commands.Add(("Write-Host {0}" -f (ConvertTo-ReparoPowerShellLiteral -Value ("Skipping protected package: {0} ({1}). {2}" -f $update.Software, $update.Id, $protectedExclusion.Reason))))
+            [void]$commands.Add(("Write-Output {0}" -f (ConvertTo-ReparoPowerShellLiteral -Value ("REPARO-WINGET-SKIP protected {0}" -f $update.Id))))
             continue
         }
 
@@ -6307,13 +6309,47 @@ catch {
     return [pscustomobject]@{ OutputPath = $workerOutputPath; StatusPath = $workerStatusPath }
 }
 
+function Invoke-ReparoWingetPackageQueue {
+    param(
+        [Parameter(Mandatory)][ValidateSet('Winget', 'Winget(msstore)')][string]$Section,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$PendingUpdates,
+        [string[]]$ExcludedIds = @(),
+        [int]$TimeoutSeconds = 0
+    )
+
+    $queueOutput = New-Object System.Collections.Generic.List[string]
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    foreach ($update in @($PendingUpdates) | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_.Id) }) {
+        $packageCommand = New-ReparoWingetUpgradeQueueCommand -Section $Section -ExcludedIds $ExcludedIds -PendingUpdates @($update)
+        $packageSection = "{0}:{1}" -f $Section, $update.Id
+        $packageResult = Invoke-ReparoTimedCommand -ShellPath (Resolve-ReparoShell) -Command $packageCommand -Section $packageSection -TimeoutSeconds $TimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
+        foreach ($line in @($packageResult.Output)) { [void]$queueOutput.Add([string]$line) }
+
+        if ($packageResult.TimedOut) {
+            [void]$queueOutput.Add("REPARO-WINGET-FAILED timeout $($update.Id)")
+        }
+        elseif ($packageResult.ExitCode -ne 0) {
+            [void]$queueOutput.Add("REPARO-WINGET-FAILED exit-code $($update.Id) $($packageResult.ExitCode)")
+        }
+    }
+    $stopwatch.Stop()
+
+    [pscustomobject]@{
+        TimedOut = $false
+        ExitCode = 0
+        Output   = $queueOutput.ToArray()
+        Elapsed  = $stopwatch.Elapsed
+    }
+}
+
 function Invoke-ReparoCommandStep {
     param(
         [string]$Section,
         [string]$PresenceCmd,
         [string]$Command,
         [int]$TimeoutSeconds = 0,
-        [object[]]$PendingUpdates
+        [object[]]$PendingUpdates,
+        [string[]]$WingetExcludedIds = @()
     )
 
     if (-not (Test-ReparoSectionSelected $Section)) { return }
@@ -6330,7 +6366,7 @@ function Invoke-ReparoCommandStep {
     Write-ReparoLog "[STEP] $Section"
     Write-ReparoLog ("[CMD] {0}" -f $Command)
     $pendingUpdates = if ($PSBoundParameters.ContainsKey('PendingUpdates')) {
-        @($PendingUpdates)
+        @($PendingUpdates | Where-Object { $null -ne $_ -and (($Section -notin @('Winget', 'Winget(msstore)')) -or -not [string]::IsNullOrWhiteSpace([string]$_.Id)) })
     }
     else {
         @(Get-ReparoPendingUpdates -Section $Section)
@@ -6349,7 +6385,12 @@ function Invoke-ReparoCommandStep {
 
     try {
         $shell = Resolve-ReparoShell
-        $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command $Command -Section $Section -TimeoutSeconds $TimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
+        $result = if ($Section -in @('Winget', 'Winget(msstore)')) {
+            Invoke-ReparoWingetPackageQueue -Section $Section -PendingUpdates $pendingUpdates -ExcludedIds $WingetExcludedIds -TimeoutSeconds $TimeoutSeconds
+        }
+        else {
+            Invoke-ReparoTimedCommand -ShellPath $shell -Command $Command -Section $Section -TimeoutSeconds $TimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
+        }
         $output = @($result.Output)
         $exitCode = $result.ExitCode
 
@@ -6412,6 +6453,13 @@ function Invoke-ReparoCommandStep {
                 ForEach-Object { $_.Groups['Id'].Value } |
                 Select-Object -Unique
         )
+        $protectedWingetPackageIds = @(
+            $output |
+                ForEach-Object { [regex]::Match([string]$_, 'REPARO-WINGET-SKIP protected\s*(?<Id>\S+)') } |
+                Where-Object { $_.Success } |
+                ForEach-Object { $_.Groups['Id'].Value } |
+                Select-Object -Unique
+        )
         $updatedWingetPackageIds = @(
             $output |
                 ForEach-Object { [regex]::Match([string]$_, 'REPARO-WINGET-UPDATED\s*(?<Id>\S+)') } |
@@ -6419,6 +6467,25 @@ function Invoke-ReparoCommandStep {
                 ForEach-Object { $_.Groups['Id'].Value } |
                 Select-Object -Unique
         )
+        $failedWingetReceipts = @(
+            $output |
+                ForEach-Object { [regex]::Match([string]$_, 'REPARO-WINGET-FAILED\s+(?<Reason>timeout|exit-code)\s+(?<Id>\S+)(?:\s+(?<ExitCode>\d+))?') } |
+                Where-Object { $_.Success }
+        )
+        $failedWingetPackageIds = @($failedWingetReceipts | ForEach-Object { $_.Groups['Id'].Value } | Select-Object -Unique)
+        foreach ($receipt in $failedWingetReceipts) {
+            $packageId = $receipt.Groups['Id'].Value
+            $failedUpdate = @($pendingUpdates | Where-Object { $_.Id -ieq $packageId } | Select-Object -First 1)
+            if ($failedUpdate.Count -eq 0) { continue }
+            $reason = if ($receipt.Groups['Reason'].Value -eq 'timeout') {
+                "package timed out after ${TimeoutSeconds}s"
+            }
+            else {
+                "package command exited $($receipt.Groups['ExitCode'].Value)"
+            }
+            Add-ReparoSummaryRecord -Bucket Failed -Software $failedUpdate[0].Software -CurrentVersion $failedUpdate[0].CurrentVersion -Version $failedUpdate[0].Version -Method $failedUpdate[0].Method -Reason $reason
+        }
+        $pendingUpdates = @($pendingUpdates | Where-Object { $failedWingetPackageIds -notcontains $_.Id })
         if ($manualWingetReason) {
             Write-Warning $manualWingetReason
             Write-ReparoLog ("[WARN] {0}" -f $manualWingetReason)
@@ -6498,6 +6565,14 @@ function Invoke-ReparoCommandStep {
             }
         }
         $pendingUpdates = @($pendingUpdates | Where-Object { $lockedWingetPackageIds -notcontains $_.Id })
+
+        foreach ($packageId in $protectedWingetPackageIds) {
+            $protectedUpdate = @($pendingUpdates | Where-Object { $_.Id -ieq $packageId } | Select-Object -First 1)
+            if ($protectedUpdate.Count -gt 0) {
+                Add-ReparoSummaryRecord -Bucket Skipped -Software $protectedUpdate[0].Software -CurrentVersion $protectedUpdate[0].CurrentVersion -Version $protectedUpdate[0].Version -Method $protectedUpdate[0].Method -Reason 'protected from Reparo-managed updates'
+            }
+        }
+        $pendingUpdates = @($pendingUpdates | Where-Object { $protectedWingetPackageIds -notcontains $_.Id })
 
         if ($Section -in @('Winget', 'Winget(msstore)')) {
             $deferredWingetPackageIds = @($deferredWingetUpdates | Select-Object -ExpandProperty Id)
@@ -6718,8 +6793,8 @@ if ($runWingetSections) {
             $wingetStorePendingUpdates = @(Get-ReparoPendingUpdates -Section 'Winget(msstore)')
             $wingetCommand = New-ReparoWingetUpgradeQueueCommand -Section 'Winget' -ExcludedIds $lockedWingetIds -PendingUpdates $wingetPendingUpdates
             $wingetStoreCommand = New-ReparoWingetUpgradeQueueCommand -Section 'Winget(msstore)' -ExcludedIds $lockedWingetIds -PendingUpdates $wingetStorePendingUpdates
-            Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command $wingetCommand -TimeoutSeconds $WingetTimeoutSeconds -PendingUpdates $wingetPendingUpdates
-            Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command $wingetStoreCommand -TimeoutSeconds $WingetTimeoutSeconds -PendingUpdates $wingetStorePendingUpdates
+            Invoke-ReparoCommandStep -Section 'Winget' -PresenceCmd 'winget' -Command $wingetCommand -TimeoutSeconds $WingetTimeoutSeconds -PendingUpdates $wingetPendingUpdates -WingetExcludedIds $lockedWingetIds
+            Invoke-ReparoCommandStep -Section 'Winget(msstore)' -PresenceCmd 'winget' -Command $wingetStoreCommand -TimeoutSeconds $WingetTimeoutSeconds -PendingUpdates $wingetStorePendingUpdates -WingetExcludedIds $lockedWingetIds
         }
         else {
             Write-Skip 'WingetDiscover requested; skipping live winget upgrade commands.'

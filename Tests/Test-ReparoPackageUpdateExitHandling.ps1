@@ -24,6 +24,7 @@ foreach ($required in @(
     'REPARO-WINGET-SKIP not-applicable',
     'REPARO-WINGET-SKIP blocked',
     'REPARO-WINGET-SKIP locked',
+    'REPARO-WINGET-SKIP protected',
     'Winget packages blocked by files in use or access denied:',
     'REPARO-WINGET-UPDATED',
     'Winget packages not applicable to this system or its current requirements:',
@@ -62,6 +63,18 @@ foreach ($required in @('0x80070020', 'process cannot access the file because it
 }
 if ($wingetQueue.Value.Contains('Get-ReparoPendingUpdates -Section $Section')) {
     throw 'WinGet queue construction still performs a duplicate update discovery.'
+}
+
+$packageQueue = [regex]::Match($source, '(?s)function Invoke-ReparoWingetPackageQueue \{.*?(?=function Invoke-ReparoCommandStep)')
+if (-not $packageQueue.Success) { throw 'Could not locate the isolated WinGet package queue runner.' }
+foreach ($required in @(
+    'Invoke-ReparoTimedCommand',
+    'REPARO-WINGET-FAILED timeout',
+    'REPARO-WINGET-FAILED exit-code'
+)) {
+    if (-not $packageQueue.Value.Contains($required)) {
+        throw "WinGet package-level timeout isolation is absent: $required"
+    }
 }
 
 $goRow = 'Go Programming Language amd64 go1.26.5 GoLang.Go 1.26.5 1.27.0'
@@ -122,8 +135,10 @@ if (-not $commandStep.Value.Contains('REPARO-WINGET-SKIP blocked\s*(?<Id>\S+)'))
 }
 foreach ($required in @(
     'REPARO-WINGET-SKIP locked\s*(?<Id>\S+)',
+    'REPARO-WINGET-SKIP protected\s*(?<Id>\S+)',
     'Reparo version lock configured',
-    'no Winget execution receipt was returned; inspect the section log'
+    'no Winget execution receipt was returned; inspect the section log',
+    'REPARO-WINGET-FAILED\s+(?<Reason>timeout|exit-code)'
 )) {
     if (-not $commandStep.Value.Contains($required)) {
         throw "WinGet package receipt accounting is absent: $required"

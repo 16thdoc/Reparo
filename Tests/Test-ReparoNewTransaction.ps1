@@ -52,7 +52,13 @@ try {
         $startInfo.RedirectStandardOutput = $true
         $startInfo.RedirectStandardError = $true
         $lockedUpdateProcess = [System.Diagnostics.Process]::Start($startInfo)
-        Start-Sleep -Milliseconds 1500
+        $deployWaitDeadline = (Get-Date).AddSeconds(15)
+        $sawDeployWait = $false
+        while (-not $sawDeployWait -and -not $lockedUpdateProcess.HasExited -and (Get-Date) -lt $deployWaitDeadline) {
+            Start-Sleep -Milliseconds 200
+            $runningLogs = @(Get-ChildItem -LiteralPath $logRoot -Filter '*_RUNNING.log' -ErrorAction SilentlyContinue)
+            $sawDeployWait = [bool]($runningLogs | Where-Object { Select-String -LiteralPath $_.FullName -SimpleMatch '[DEPLOY-WAIT]' -Quiet -ErrorAction SilentlyContinue } | Select-Object -First 1)
+        }
     }
     finally {
         $fileLock.Dispose()
@@ -62,7 +68,7 @@ try {
     if ($lockedUpdateProcess.ExitCode -ne 0) { throw "Transiently locked runtime update failed with exit code $($lockedUpdateProcess.ExitCode): $lockedUpdateOutput" }
     if ((Get-FileHash -LiteralPath $installedPath -Algorithm SHA256).Hash -ne $lockedCandidateHash) { throw 'Transiently locked installed runtime was not replaced after retry.' }
     $retryLog = Get-ChildItem -LiteralPath $logRoot -Filter '*_COMPLETE.log' | Sort-Object LastWriteTime | Select-Object -Last 1
-    if (-not $retryLog -or -not (Select-String -LiteralPath $retryLog.FullName -SimpleMatch '[DEPLOY-WAIT]' -Quiet)) { throw 'Transient file-lock replacement did not exercise the retry path.' }
+    if (-not $sawDeployWait -or -not $retryLog -or -not (Select-String -LiteralPath $retryLog.FullName -SimpleMatch '[DEPLOY-WAIT]' -Quiet)) { throw 'Transient file-lock replacement did not exercise the retry path.' }
 
     $baselineHash = (Get-FileHash -LiteralPath $installedPath -Algorithm SHA256).Hash
 
