@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.3.5'
+$script:ReparoVersion = '1.3.3.6'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -301,6 +301,7 @@ function Get-ReparoVersionFlavor {
         '1.3.3.3' = [pscustomobject]@{ Quote = 'Come with me if you want to live.'; Source = 'Terminator 2: Judgment Day (directed by James Cameron; written by James Cameron and William Wisher)'; Art = '  T-800: legacy task scheduler fallback acquired' }
         '1.3.3.4' = [pscustomobject]@{ Quote = 'The way is shut. It was made by those who are Dead, and the Dead keep it.'; Source = 'The Lord of the Rings: The Return of the King by J.R.R. Tolkien'; Art = '  DOOR: sharing-violation ghost left outside the crypt' }
         '1.3.3.5' = [pscustomobject]@{ Quote = 'Even the smallest person can change the course of the future.'; Source = 'The Lord of the Rings: The Fellowship of the Ring by J.R.R. Tolkien'; Art = '  QUEUE: each package gets its own tiny timeout crypt' }
+        '1.3.3.6' = [pscustomobject]@{ Quote = 'All that is gold does not glitter, not all those who wander are lost.'; Source = 'The Lord of the Rings: The Fellowship of the Ring by J.R.R. Tolkien'; Art = '  HYTALE: interactive launcher escorted out of the unattended queue' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -4279,6 +4280,7 @@ function Get-ReparoProtectedPackageExclusion {
     # ScanSnap's vendor updater and package identities vary across client fleets.
     # Reparo must never upgrade it merely because a package manager discovers it.
     foreach ($exclusion in @(
+        [pscustomobject]@{ Pattern = '(?i)^HypixelStudios\.Hytale$'; Reason = 'Hytale Launcher updates invoke an interactive uninstall prompt and are excluded from unattended maintenance.' },
         [pscustomobject]@{ Pattern = '(?i)\bScanSnap\b'; Reason = 'ScanSnap is excluded from Reparo-managed updates.' }
     )) {
         if (($Id -and $Id -match $exclusion.Pattern) -or ($Software -and $Software -match $exclusion.Pattern)) {

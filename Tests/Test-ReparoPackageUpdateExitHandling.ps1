@@ -64,6 +64,23 @@ foreach ($required in @('0x80070020', 'process cannot access the file because it
 if ($wingetQueue.Value.Contains('Get-ReparoPendingUpdates -Section $Section')) {
     throw 'WinGet queue construction still performs a duplicate update discovery.'
 }
+foreach ($required in @(
+    "Pattern = '(?i)^HypixelStudios\.Hytale$'",
+    'Hytale Launcher updates invoke an interactive uninstall prompt'
+)) {
+    if (-not $source.Contains($required)) {
+        throw "The unattended Hytale exclusion is absent: $required"
+    }
+}
+$protectedClassifier = [regex]::Match($source, '(?s)function Get-ReparoProtectedPackageExclusion \{.*?(?=function Get-ReparoLockedPackageIds)')
+if (-not $protectedClassifier.Success) { throw 'Could not locate the protected WinGet package classifier.' }
+Invoke-Expression $protectedClassifier.Value
+if (-not (Get-ReparoProtectedPackageExclusion -Id 'HypixelStudios.Hytale' -Software 'Hytale Launcher')) {
+    throw 'The protected package classifier did not exclude Hytale Launcher.'
+}
+if (Get-ReparoProtectedPackageExclusion -Id 'Example.HytaleTools' -Software 'Hytale Tools') {
+    throw 'The protected package classifier excluded a non-Hytale package by partial ID.'
+}
 
 $packageQueue = [regex]::Match($source, '(?s)function Invoke-ReparoWingetPackageQueue \{.*?(?=function Invoke-ReparoCommandStep)')
 if (-not $packageQueue.Success) { throw 'Could not locate the isolated WinGet package queue runner.' }
