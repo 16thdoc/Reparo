@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.4.0'
+$script:ReparoVersion = '1.3.4.1'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -306,6 +306,7 @@ function Get-ReparoVersionFlavor {
         '1.3.3.8' = [pscustomobject]@{ Quote = 'Fear cuts deeper than swords.'; Source = 'A Game of Thrones by George R.R. Martin'; Art = '  NEEDLE: dead bootstrap paths meet the pointy end' }
         '1.3.3.9' = [pscustomobject]@{ Quote = 'The night is dark and full of terrors.'; Source = 'A Clash of Kings by George R.R. Martin'; Art = '  RED PRIESTESS: wrong-edition modules denied resurrection' }
         '1.3.4.0' = [pscustomobject]@{ Quote = 'The Wheel weaves as the Wheel wills.'; Source = 'The Eye of the World by Robert Jordan'; Art = '  WHEEL: feature releases pulled through the guarded upgrade gate' }
+        '1.3.4.1' = [pscustomobject]@{ Quote = 'Never tell me the odds!'; Source = 'The Empire Strikes Back by Leigh Brackett and Lawrence Kasdan'; Art = '  ODDS: signature checks online before the feature-update jump' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -3356,6 +3357,7 @@ function Invoke-ReparoWindowsFeatureUpdate {
         Write-ReparoLog ("[ACTION] Downloading Windows 11 Installation Assistant to {0}" -f $assistantPath)
         Invoke-WebRequest -Uri $assistantUrl -OutFile $assistantPath -UseBasicParsing -ErrorAction Stop
 
+        Import-ReparoBootstrapModule -Name 'Microsoft.PowerShell.Security'
         $signature = Get-AuthenticodeSignature -FilePath $assistantPath -ErrorAction Stop
         if ($signature.Status -ne 'Valid' -or
             -not $signature.SignerCertificate -or

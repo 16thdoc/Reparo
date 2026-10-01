@@ -221,6 +221,7 @@ foreach ($required in @(
     "`$release.BuildNumber -lt 10240",
     "`$assistantArguments += '/NoReboot'",
     "if (-not `$AllowReboot)",
+    "Import-ReparoBootstrapModule -Name 'Microsoft.PowerShell.Security'",
     'Get-AuthenticodeSignature -FilePath $assistantPath',
     "CN=Microsoft Corporation",
     "Windows 11 Installation Assistant signature valid",
