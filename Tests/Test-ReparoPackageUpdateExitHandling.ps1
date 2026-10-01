@@ -176,15 +176,28 @@ foreach ($required in @(
     }
 }
 
+$bootstrapModuleImport = [regex]::Match($source, '(?s)function Import-ReparoBootstrapModule \{.*?(?=function Ensure-ReparoNuGetProvider)')
+if (-not $bootstrapModuleImport.Success) { throw 'Could not locate the edition-aware bootstrap module importer.' }
+foreach ($required in @(
+    "`$PSVersionTable.PSEdition -eq 'Desktop'",
+    "`$_.CompatiblePSEditions -contains 'Desktop'",
+    "`$_.CompatiblePSEditions -contains 'Core'",
+    'Import-Module -Name $module[0].Path -Force -ErrorAction Stop'
+)) {
+    if (-not $bootstrapModuleImport.Value.Contains($required)) {
+        throw "Edition-aware bootstrap module selection is absent: $required"
+    }
+}
+
 $nugetBootstrap = [regex]::Match($source, '(?s)function Ensure-ReparoNuGetProvider \{.*?(?=function Show-ReparoHelp)')
 if (-not $nugetBootstrap.Success) { throw 'Could not locate the NuGet provider bootstrap.' }
-if (-not $nugetBootstrap.Value.Contains('Import-Module PackageManagement -Force -ErrorAction Stop')) {
+if (-not $nugetBootstrap.Value.Contains("Import-ReparoBootstrapModule -Name 'PackageManagement'")) {
     throw 'NuGet bootstrap still relies on fragile PackageManagement command auto-loading.'
 }
 
 $windowsUpdateBootstrap = [regex]::Match($source, '(?s)function Ensure-ReparoPSWindowsUpdate \{.*?(?=function Resolve-ReparoPowerShell7Path)')
 if (-not $windowsUpdateBootstrap.Success) { throw 'Could not locate the PSWindowsUpdate bootstrap.' }
-if (-not $windowsUpdateBootstrap.Value.Contains('Import-Module PowerShellGet -Force -ErrorAction Stop')) {
+if (-not $windowsUpdateBootstrap.Value.Contains("Import-ReparoBootstrapModule -Name 'PowerShellGet'")) {
     throw 'PSWindowsUpdate bootstrap still relies on fragile PowerShellGet command auto-loading.'
 }
 

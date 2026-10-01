@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.3.8'
+$script:ReparoVersion = '1.3.3.9'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -304,6 +304,7 @@ function Get-ReparoVersionFlavor {
         '1.3.3.6' = [pscustomobject]@{ Quote = 'All that is gold does not glitter, not all those who wander are lost.'; Source = 'The Lord of the Rings: The Fellowship of the Ring by J.R.R. Tolkien'; Art = '  HYTALE: interactive launcher escorted out of the unattended queue' }
         '1.3.3.7' = [pscustomobject]@{ Quote = 'Winter is coming.'; Source = 'A Game of Thrones by George R.R. Martin'; Art = '  LEDGER: every abandoned update leaves a reason and a map home' }
         '1.3.3.8' = [pscustomobject]@{ Quote = 'Fear cuts deeper than swords.'; Source = 'A Game of Thrones by George R.R. Martin'; Art = '  NEEDLE: dead bootstrap paths meet the pointy end' }
+        '1.3.3.9' = [pscustomobject]@{ Quote = 'The night is dark and full of terrors.'; Source = 'A Clash of Kings by George R.R. Martin'; Art = '  RED PRIESTESS: wrong-edition modules denied resurrection' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -479,6 +480,29 @@ function Write-ReparoParameterBlock {
     }
 }
 
+function Import-ReparoBootstrapModule {
+    param([Parameter(Mandatory)][string]$Name)
+
+    $available = @(Get-Module -Name $Name -ListAvailable)
+    if ($PSVersionTable.PSEdition -eq 'Desktop') {
+        $available = @($available | Where-Object {
+            $_.CompatiblePSEditions -contains 'Desktop' -or $_.Path -match '(?i)\\WindowsPowerShell\\'
+        })
+    }
+    elseif ($PSVersionTable.PSEdition -eq 'Core') {
+        $available = @($available | Where-Object {
+            $_.CompatiblePSEditions -contains 'Core' -or $_.Path -notmatch '(?i)\\WindowsPowerShell\\'
+        })
+    }
+
+    $module = @($available | Sort-Object Version -Descending | Select-Object -First 1)
+    if ($module.Count -eq 0) {
+        throw "No $($PSVersionTable.PSEdition)-compatible $Name module was found."
+    }
+
+    Import-Module -Name $module[0].Path -Force -ErrorAction Stop
+}
+
 function Ensure-ReparoNuGetProvider {
     if (-not $InstallNuGetProvider) {
         Write-ReparoDebug 'NuGet provider bootstrap disabled by configuration.'
@@ -492,7 +516,7 @@ function Ensure-ReparoNuGetProvider {
         # still failing their implicit module auto-load. Import it explicitly
         # before querying the provider so an already-installed NuGet provider
         # does not get misreported as unavailable.
-        Import-Module PackageManagement -Force -ErrorAction Stop
+        Import-ReparoBootstrapModule -Name 'PackageManagement'
         $provider = Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue
         if ($provider -and $provider.Version -and ([Version]$provider.Version -ge $minimumVersion)) {
             Write-ReparoDebug ("NuGet provider already available: {0}" -f $provider.Version)
@@ -3414,7 +3438,7 @@ Log: $script:ReparoLogPath
             return $false
         }
 
-        Import-Module PowerShellGet -Force -ErrorAction Stop
+        Import-ReparoBootstrapModule -Name 'PowerShellGet'
         Install-Module -Name 'PSWindowsUpdate' -Force -AllowClobber -Scope AllUsers -Repository 'PSGallery' -ErrorAction Stop | Out-Null
         Import-Module PSWindowsUpdate -Force -ErrorAction Stop
 
