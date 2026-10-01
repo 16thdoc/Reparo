@@ -27,8 +27,8 @@ param(
     [switch]$Preview,
     [Alias('WU')]
     [switch]$WindowsUpdate,
-    [Alias('Win11', 'Windows11', 'UpgradeToWindows11')]
-    [switch]$Windows11Upgrade,
+    [Alias('Win11', 'Windows11', 'UpgradeToWindows11', 'Windows11Upgrade', 'FeatureUpdate', 'FU')]
+    [switch]$WindowsFeatureUpdate,
     [Alias('7', 'PowerShell7')]
     [switch]$PowerShell7Only,
     [Alias('7Zip', '7z')]
@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.3.9'
+$script:ReparoVersion = '1.3.4.0'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -305,6 +305,7 @@ function Get-ReparoVersionFlavor {
         '1.3.3.7' = [pscustomobject]@{ Quote = 'Winter is coming.'; Source = 'A Game of Thrones by George R.R. Martin'; Art = '  LEDGER: every abandoned update leaves a reason and a map home' }
         '1.3.3.8' = [pscustomobject]@{ Quote = 'Fear cuts deeper than swords.'; Source = 'A Game of Thrones by George R.R. Martin'; Art = '  NEEDLE: dead bootstrap paths meet the pointy end' }
         '1.3.3.9' = [pscustomobject]@{ Quote = 'The night is dark and full of terrors.'; Source = 'A Clash of Kings by George R.R. Martin'; Art = '  RED PRIESTESS: wrong-edition modules denied resurrection' }
+        '1.3.4.0' = [pscustomobject]@{ Quote = 'The Wheel weaves as the Wheel wills.'; Source = 'The Eye of the World by Robert Jordan'; Art = '  WHEEL: feature releases pulled through the guarded upgrade gate' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -356,7 +357,7 @@ function Get-ReparoVersionArt {
 if ($RemainingInclude -and $RemainingInclude.Count -gt 0 -and -not $Search) {
     $remainingModeArgs = @($RemainingInclude)
     if ($remainingModeArgs -contains '-11') {
-        $Windows11Upgrade = $true
+        $WindowsFeatureUpdate = $true
         $remainingModeArgs = @($remainingModeArgs | Where-Object { $_ -ne '-11' })
     }
 
@@ -418,7 +419,7 @@ function Write-ReparoParameterBlock {
         New                          = $New
         Preview                      = $Preview
         WindowsUpdate                = $WindowsUpdate
-        Windows11Upgrade             = $Windows11Upgrade
+        WindowsFeatureUpdate         = $WindowsFeatureUpdate
         PowerShell7                  = $PowerShell7Only
         SevenZip                     = $SevenZip
         WslApt                       = $WslApt
@@ -627,10 +628,11 @@ Modes:
                          Updated package rows show current version -> target version when available.
   -Ninja               Install the reviewed manifest-pinned release transactionally and publish
                          the installed version plus saved WinGet health to Ninja's Reparo field.
-  -11,-Win11,-Windows11
-                       Run a Windows 10 -> Windows 11 feature upgrade using Microsoft's
-                       Windows 11 Installation Assistant. Requires elevation; use -Preview
-                        to log the download URL and installer command without launching it.
+  -FU,-FeatureUpdate,-11,-Win11
+                       Run Microsoft's Windows 11 Installation Assistant to move Windows 10
+                       or Windows 11 to the latest applicable Windows 11 feature release.
+                       Requires elevation. Reparo suppresses automatic reboot unless
+                       -AllowReboot is supplied. Included in -Force, excluded from -Update.
    -7,-PowerShell7      Run only the machine-wide PowerShell 7 MSI section. This is safe
                         to invoke from Windows PowerShell 5.1; Reparo does not replace its host.
   -7Zip,-7z             Install 7-Zip through winget when missing, or update it when present.
@@ -681,8 +683,8 @@ Modes:
   -MigrateChocoExclude Extra Chocolatey package IDs to skip during migration.
   -IgnoreTimeouts      Disable command-step timeout enforcement even when timeout parameters are supplied.
   -AllowReboot,-AllowRestart
-                       Allow Windows Update to auto-reboot if PSWindowsUpdate requires it.
-                       Default behavior still uses -IgnoreReboot.
+                        Allow Windows Update to auto-reboot and WindowsFeatureUpdate to omit
+                        its /NoReboot guard. Default behavior suppresses automatic reboot.
   -Reboot,-Restart,-R  Reboot the computer after Reparo finishes. Honors -Preview.
   -Shutdown            Shut down the computer after Reparo finishes. Honors -Preview.
                         Cannot be combined with -Reboot.
@@ -692,7 +694,8 @@ Modes:
    -Install,-I           Offline: install this executing Reparo.ps1 into ProgramData.
    -New                  Install/update the reviewed manifest-pinned release.
    -N,-Latest            Install/update directly from main; intentionally unpinned.
-   -Force               Run all sections except PowerShell 7, including developer toolchains and WSL apt handling.
+   -Force               Run all sections except PowerShell 7, including Windows feature updates,
+                         developer toolchains, and WSL apt handling.
                         Use -7 explicitly for the PowerShell 7 MSI update.
   -Kill                Stop running Reparo PowerShell processes and known updater front ends.
   -KillUpdaterNames    Additional process base names swept by -Kill after Reparo process trees stop.
@@ -725,7 +728,7 @@ Timeouts:
   -SnapTimeoutSeconds            Snap refresh timeout. Default: 600 seconds. On timeout,
                                   Reparo aborts its Snap change before continuing.
   -InstallNuGetProvider         When true (default), bootstrap the NuGet provider before PSGallery installs.
-  -AllowReboot                  Let the Windows Update section pass -AutoReboot instead of -IgnoreReboot.
+  -AllowReboot                  Permit automatic reboot in Windows update and feature-update lanes.
   -Reboot,-Restart              Force a computer restart after Reparo finishes. Honors -Preview.
   -Shutdown                     Shut down the computer after Reparo finishes. Honors -Preview.
 
@@ -742,7 +745,7 @@ After install, new PowerShell sessions can usually run:
   reparo -Install
 
 Common sections:
-  Winget, Winget(msstore), 7Zip, Choco, PowerShell7, WindowsUpdate, Windows11Upgrade,
+  Winget, Winget(msstore), 7Zip, Choco, PowerShell7, WindowsUpdate, WindowsFeatureUpdate,
   Scoop, Apt, Dnf, Pacman, Zypper, Flatpak, Snap, Fwupd, Pip, Pipx, Npm, Opencode, Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer,
   Wsl, WslApt.
 
@@ -807,6 +810,7 @@ $linuxForceSections = @($linuxPackageSections + $linuxAppSections + @(
 
 $windowsForceSections = @(
     'WindowsUpdate'
+    'WindowsFeatureUpdate'
     'Winget'
     'Winget(msstore)'
     'Choco'
@@ -841,8 +845,8 @@ else {
     @($linuxPackageSections + $linuxAppSections + 'Npm', 'Opencode')
 }
 
-if ($Windows11Upgrade) {
-    $Include = @('Windows11Upgrade')
+if ($WindowsFeatureUpdate) {
+    $Include = @('WindowsFeatureUpdate')
 }
 
 if ($WingetHealth -and -not $script:ReparoIsWindows) {
@@ -897,7 +901,7 @@ elseif ($Update) {
     }
     $Include = $updateSections
 }
-if (-not $script:ReparoIsWindows -and -not ($Update -or $Force -or $Include -or $Winget -or $WingetDiscover -or $WingetHealth -or $Windows11Upgrade -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $WindowsUpdate -or $WslApt -or $SevenZip)) {
+if (-not $script:ReparoIsWindows -and -not ($Update -or $Force -or $Include -or $Winget -or $WingetDiscover -or $WingetHealth -or $WindowsFeatureUpdate -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $WindowsUpdate -or $WslApt -or $SevenZip)) {
     $Include = $linuxPackageSections
 }
 
@@ -3004,7 +3008,7 @@ function Test-ReparoOperationalModeRequested {
         'Force',
         'Preview',
         'WindowsUpdate',
-        'Windows11Upgrade',
+        'WindowsFeatureUpdate',
         'WslApt',
         'Include',
         'RemainingInclude',
@@ -3172,7 +3176,7 @@ if ($DeleteStale) {
     return
 }
 
-if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $WingetHealth -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $Force -or $Preview -or $WindowsUpdate -or $Windows11Upgrade -or $WslApt -or $SevenZip -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
+if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $WingetHealth -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $Force -or $Preview -or $WindowsUpdate -or $WindowsFeatureUpdate -or $WslApt -or $SevenZip -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
@@ -3284,60 +3288,59 @@ function Get-ReparoWindowsReleaseInfo {
     }
 }
 
-function Invoke-ReparoWindows11Upgrade {
-    if (-not (Test-ReparoSectionSelected 'Windows11Upgrade')) { return }
+function Invoke-ReparoWindowsFeatureUpdate {
+    if (-not (Test-ReparoSectionSelected 'WindowsFeatureUpdate')) { return }
 
-    Write-Step 'Windows11Upgrade'
-    Write-ReparoLog '[STEP] Windows11Upgrade'
+    Write-Step 'WindowsFeatureUpdate'
+    Write-ReparoLog '[STEP] WindowsFeatureUpdate'
 
     $release = Get-ReparoWindowsReleaseInfo
     Write-ReparoLog ("[CHECK] Windows release: {0}; version {1}; build {2}" -f $release.Caption, $release.Version, $release.BuildNumber)
 
-    if ($release.BuildNumber -ge 22000) {
-        Write-Skip 'Windows 11 is already installed; skipping Windows11Upgrade.'
-        Write-ReparoLog '[SKIP] Windows 11 is already installed; skipping Windows11Upgrade.'
-        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Windows11Upgrade' -Version '-' -Method 'Windows11InstallationAssistant' -Reason 'already Windows 11 or newer'
-        return
-    }
-
-    if ($release.Caption -notmatch 'Windows 10') {
-        Write-Skip 'Windows11Upgrade only runs from Windows 10; skipping.'
-        Write-ReparoLog '[SKIP] Windows11Upgrade only runs from Windows 10.'
-        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Windows11Upgrade' -Version '-' -Method 'Windows11InstallationAssistant' -Reason 'source OS is not Windows 10'
+    if ($release.BuildNumber -lt 10240) {
+        Write-Skip 'WindowsFeatureUpdate requires Windows 10 or Windows 11; skipping.'
+        Write-ReparoLog '[SKIP] WindowsFeatureUpdate requires Windows 10 or Windows 11.'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'WindowsFeatureUpdate' -CurrentVersion $release.Version -Version '-' -Method 'Windows11InstallationAssistant' -Reason 'source OS is older than Windows 10'
         return
     }
 
     if (-not [Environment]::Is64BitOperatingSystem) {
-        Write-Fail 'Windows11Upgrade requires 64-bit Windows.'
-        Write-ReparoLog '[ERROR] Windows11Upgrade requires 64-bit Windows.'
-        Add-ReparoSummaryRecord -Bucket Failed -Software 'Windows11Upgrade' -Version '-' -Method 'Windows11InstallationAssistant' -Reason '64-bit Windows required'
+        Write-Fail 'WindowsFeatureUpdate requires 64-bit Windows.'
+        Write-ReparoLog '[ERROR] WindowsFeatureUpdate requires 64-bit Windows.'
+        Add-ReparoSummaryRecord -Bucket Failed -Software 'WindowsFeatureUpdate' -CurrentVersion $release.Version -Version '-' -Method 'Windows11InstallationAssistant' -Reason '64-bit Windows required'
         return
     }
 
     $assistantUrl = 'https://go.microsoft.com/fwlink/?linkid=2171764'
     $cacheRoot = Join-Path $InstallRoot 'Cache'
     $assistantPath = Join-Path $cacheRoot 'Windows11InstallationAssistant.exe'
-    $upgradeLogRoot = Join-Path $LogRoot 'Windows11Upgrade'
+    $upgradeLogRoot = Join-Path $LogRoot 'WindowsFeatureUpdate'
+
+    $assistantArguments = @('/QuietInstall', '/SkipEULA', '/Auto', 'Upgrade', '/NoRestartUI', '/CopyLogs', $upgradeLogRoot)
+    if (-not $AllowReboot) {
+        $assistantArguments += '/NoReboot'
+    }
 
     $escapedAssistantPath = $assistantPath -replace "'", "''"
-    $escapedUpgradeLogRoot = $upgradeLogRoot -replace "'", "''"
-    $command = "`$p = '$escapedAssistantPath'; `$a = @('/QuietInstall','/SkipEULA','/Auto','Upgrade','/NoRestartUI','/CopyLogs','$escapedUpgradeLogRoot'); `$proc = Start-Process -FilePath `$p -ArgumentList `$a -Wait -PassThru; exit `$proc.ExitCode"
+    $assistantArgumentLiteral = '@({0})' -f ((@($assistantArguments | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))
+    $command = "`$p = '$escapedAssistantPath'; `$a = $assistantArgumentLiteral; `$proc = Start-Process -FilePath `$p -ArgumentList `$a -Wait -PassThru; exit `$proc.ExitCode"
 
     Write-ReparoLog ("[INFO] Windows 11 Installation Assistant URL: {0}" -f $assistantUrl)
+    Write-ReparoLog ("[INFO] Windows feature-update reboot handling: {0}." -f $(if ($AllowReboot) { 'AllowReboot requested; automatic reboot permitted' } else { 'defaulting to /NoReboot' }))
     Write-ReparoLog ("[CMD] {0}" -f $command)
 
     if ($Preview) {
         Write-ReparoLog ("[DRY-RUN] Download {0} to {1}" -f $assistantUrl, $assistantPath)
         Write-ReparoLog ("[DRY-RUN] {0}" -f $command)
-        Write-Skip 'Windows11Upgrade (preview only)'
-        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Windows11Upgrade' -Version '-' -Method 'Windows11InstallationAssistant' -Reason 'preview only'
+        Write-Skip 'WindowsFeatureUpdate (preview only)'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'WindowsFeatureUpdate' -CurrentVersion $release.Version -Version 'latest applicable Windows 11 release' -Method 'Windows11InstallationAssistant' -Reason 'preview only'
         return
     }
 
     if (-not (Test-Admin)) {
-        Write-Skip 'Windows11Upgrade requested but shell is not elevated; skipping.'
-        Write-ReparoLog '[SKIP] Windows11Upgrade requested but shell is not elevated.'
-        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Windows11Upgrade' -Version '-' -Method 'Windows11InstallationAssistant' -Reason 'shell is not elevated'
+        Write-Skip 'WindowsFeatureUpdate requested but shell is not elevated; skipping.'
+        Write-ReparoLog '[SKIP] WindowsFeatureUpdate requested but shell is not elevated.'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'WindowsFeatureUpdate' -CurrentVersion $release.Version -Version 'latest applicable Windows 11 release' -Method 'Windows11InstallationAssistant' -Reason 'shell is not elevated'
         return
     }
 
@@ -3352,16 +3355,28 @@ function Invoke-ReparoWindows11Upgrade {
 
         Write-ReparoLog ("[ACTION] Downloading Windows 11 Installation Assistant to {0}" -f $assistantPath)
         Invoke-WebRequest -Uri $assistantUrl -OutFile $assistantPath -UseBasicParsing -ErrorAction Stop
+
+        $signature = Get-AuthenticodeSignature -FilePath $assistantPath -ErrorAction Stop
+        if ($signature.Status -ne 'Valid' -or
+            -not $signature.SignerCertificate -or
+            $signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)') {
+            $signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '<none>' }
+            throw "Windows 11 Installation Assistant signature is not a valid Microsoft Authenticode signature: status $($signature.Status), signer $signer."
+        }
+        Write-ReparoLog ("[CHECK] Windows 11 Installation Assistant signature valid: {0}" -f $signature.SignerCertificate.Subject)
     }
     catch {
-        Write-Fail "Windows11Upgrade download failed: $($_.Exception.Message)"
-        Write-ReparoLog ("[ERROR] Windows11Upgrade download failed: {0}" -f $_.Exception.Message)
-        Add-ReparoSummaryRecord -Bucket Failed -Software 'Windows11Upgrade' -Version '-' -Method 'Windows11InstallationAssistant' -Reason $_.Exception.Message
+        Write-Fail "WindowsFeatureUpdate preparation failed: $($_.Exception.Message)"
+        Write-ReparoLog ("[ERROR] WindowsFeatureUpdate preparation failed: {0}" -f $_.Exception.Message)
+        Add-ReparoSummaryRecord -Bucket Failed -Software 'WindowsFeatureUpdate' -CurrentVersion $release.Version -Version 'latest applicable Windows 11 release' -Method 'Windows11InstallationAssistant' -Reason $_.Exception.Message
         return
     }
 
-    Add-ReparoSummaryNote 'Windows11Upgrade starts a full OS feature upgrade. Expect a long-running installer and at least one reboot.'
-    Invoke-ReparoCommandStep -Section 'Windows11Upgrade' -PresenceCmd '' -Command $command -TimeoutSeconds $WindowsUpdateTimeoutSeconds
+    Add-ReparoSummaryNote 'WindowsFeatureUpdate uses Microsoft Windows 11 Installation Assistant because seeker feature offers are not exposed through the legacy Windows Update Agent API.'
+    if (-not $AllowReboot) {
+        Add-ReparoSummaryNote 'WindowsFeatureUpdate suppressed automatic reboot; restart manually after staging completes when Windows reports one is required.'
+    }
+    Invoke-ReparoCommandStep -Section 'WindowsFeatureUpdate' -PresenceCmd '' -Command $command -TimeoutSeconds $WindowsUpdateTimeoutSeconds
 }
 
 function Get-ReparoInteractiveUserName {
@@ -3396,15 +3411,15 @@ function Test-ReparoSectionSelected($Section) {
         $includeText = $Include -join ','
     }
 
-    Write-ReparoDebug ("Test-ReparoSectionSelected({0}) Force={1} Update={2} WindowsUpdate={3} Windows11Upgrade={4} MigrateChocoToWinget={5} FinalizeChocolateyRemoval={6} Include={7}" -f $Section, $Force, $Update, $WindowsUpdate, $Windows11Upgrade, $MigrateChocoToWinget, $FinalizeChocolateyRemoval, $includeText)
+    Write-ReparoDebug ("Test-ReparoSectionSelected({0}) Force={1} Update={2} WindowsUpdate={3} WindowsFeatureUpdate={4} MigrateChocoToWinget={5} FinalizeChocolateyRemoval={6} Include={7}" -f $Section, $Force, $Update, $WindowsUpdate, $WindowsFeatureUpdate, $MigrateChocoToWinget, $FinalizeChocolateyRemoval, $includeText)
     if ($Include -and $Include.Count -gt 0) {
         return ($Include -contains $Section)
     }
-    if ($Section -eq 'Windows11Upgrade' -and -not $Windows11Upgrade) { return $false }
+    if ($Section -eq 'WindowsFeatureUpdate' -and -not $WindowsFeatureUpdate) { return $false }
     if ($Force) { return $true }
-    if ($Windows11Upgrade) { return ($Section -eq 'Windows11Upgrade') }
+    if ($WindowsFeatureUpdate) { return ($Section -eq 'WindowsFeatureUpdate') }
     if ($WslApt) { return ($Section -eq 'WslApt' -or $Section -like 'WslApt:*') }
-    if (($MigrateChocoToWinget -or $FinalizeChocolateyRemoval) -and -not ($Update -or $WindowsUpdate -or $Windows11Upgrade -or $Winget -or $WingetDiscover -or $WslApt)) {
+    if (($MigrateChocoToWinget -or $FinalizeChocolateyRemoval) -and -not ($Update -or $WindowsUpdate -or $WindowsFeatureUpdate -or $Winget -or $WingetDiscover -or $WslApt)) {
         return $false
     }
 
@@ -6794,8 +6809,8 @@ elseif ($MigrateChocoToWinget) {
 elseif ($FinalizeChocolateyRemoval) {
     $mode = 'FINALIZE CHOCOLATEY REMOVAL'
 }
-elseif ($Windows11Upgrade) {
-    $mode = 'WINDOWS11 UPGRADE'
+elseif ($WindowsFeatureUpdate) {
+    $mode = 'WINDOWS FEATURE UPDATE'
 }
 elseif ($Include) {
     $mode = "INCLUDE: {0}" -f ($Include -join ',')
@@ -7835,7 +7850,7 @@ if ($WslApt -and (Test-ReparoSectionSelected 'WslApt')) {
     }
 }
 
-Invoke-ReparoWindows11Upgrade
+Invoke-ReparoWindowsFeatureUpdate
 
 if (Test-ReparoSectionSelected 'WindowsUpdate') {
     if (-not (Test-Admin)) {

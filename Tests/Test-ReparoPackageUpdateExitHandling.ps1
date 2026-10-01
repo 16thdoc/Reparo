@@ -214,6 +214,36 @@ foreach ($required in @(
     }
 }
 
+$featureUpdate = [regex]::Match($source, '(?s)function Invoke-ReparoWindowsFeatureUpdate \{.*?(?=function Get-ReparoInteractiveUserName)')
+if (-not $featureUpdate.Success) { throw 'Could not locate the guarded Windows feature-update lane.' }
+foreach ($required in @(
+    "Test-ReparoSectionSelected 'WindowsFeatureUpdate'",
+    "`$release.BuildNumber -lt 10240",
+    "`$assistantArguments += '/NoReboot'",
+    "if (-not `$AllowReboot)",
+    'Get-AuthenticodeSignature -FilePath $assistantPath',
+    "CN=Microsoft Corporation",
+    "Windows 11 Installation Assistant signature valid",
+    "Invoke-ReparoCommandStep -Section 'WindowsFeatureUpdate'",
+    'seeker feature offers are not exposed through the legacy Windows Update Agent API'
+)) {
+    if (-not $featureUpdate.Value.Contains($required)) {
+        throw "Windows feature-update safety contract is absent: $required"
+    }
+}
+if ($featureUpdate.Value.Contains("`$release.BuildNumber -ge 22000")) {
+    throw 'Windows feature-update lane still skips machines that already run Windows 11.'
+}
+foreach ($required in @(
+    "[Alias('Win11', 'Windows11', 'UpgradeToWindows11', 'Windows11Upgrade', 'FeatureUpdate', 'FU')]",
+    "'WindowsFeatureUpdate'",
+    'Included in -Force, excluded from -Update.'
+)) {
+    if (-not $source.Contains($required)) {
+        throw "Windows feature-update command surface is absent: $required"
+    }
+}
+
 $timedCommand = [regex]::Match($source, '(?s)function Invoke-ReparoTimedCommand \{.*?(?=function Test-ReparoIgnorableCommandOutputLine)')
 if (-not $timedCommand.Success) { throw 'Could not locate the timed command runner.' }
 if (-not $timedCommand.Value.Contains('WindowsUpdate is still active (elapsed {0}). Windows Update can be quiet while it scans, downloads, or stages an install.')) {

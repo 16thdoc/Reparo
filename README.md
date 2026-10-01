@@ -413,7 +413,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-KillUpdaterNames <names>` | Adds extra process base names to the `-Kill` updater sweep, for example `-Kill -KillUpdaterNames msiexec`. |
 | `-Preview` | Logs what would run without executing package manager commands. |
 | `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, `PowerShell7`, and `WindowsUpdate`. |
-| `-11` / `-Win11` / `-Windows11` | Runs a Windows 10 to Windows 11 feature upgrade using Microsoft's Windows 11 Installation Assistant. Requires elevation. Use `-Preview -11` first to log the download URL and installer command without launching the upgrade goblin. |
+| `-FU` / `-FeatureUpdate` / `-11` / `-Win11` | Uses Microsoft's Windows 11 Installation Assistant to move Windows 10 or Windows 11 to the latest applicable Windows 11 feature release. Requires elevation. Automatic reboot is suppressed unless `-AllowReboot` is explicit. Use `-Preview -FU` first to inspect the signed-installer path and arguments without launching the upgrade goblin. |
 | `-7` / `-PowerShell7` | Runs only the machine-wide PowerShell 7 MSI section. It is intended to be launched from Windows PowerShell 5.1 and does not update the host process. |
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |
 | `-WingetDiscover` | Repairs/refreshes winget if needed and runs only winget discovery commands. |
@@ -443,12 +443,12 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Syslog <host[:port]>` | Persistently sets and uses a TCP syslog listener. Default port is `514`, so `-Syslog 192.168.50.31` and `-Syslog 192.168.50.31:514` target the same port. Use `-Syslog off` or `-Syslog disable` to clear the saved target. |
 | `-Status` | Shows whether Reparo is currently running, points at the active log file, and prints the registry evidence behind any pending reboot flag. |
 | `-IgnoreTimeouts` | Disables timeout enforcement even when timeout parameters are supplied. |
-| `-AllowReboot` / `-AllowRestart` | Allows the Windows Update section to pass `-AutoReboot`. By default Reparo passes `-IgnoreReboot`. |
+| `-AllowReboot` / `-AllowRestart` | Allows `WindowsUpdate` to pass `-AutoReboot` and permits `WindowsFeatureUpdate` to omit its `/NoReboot` guard. |
 | `-Reboot` / `-Restart` / `-R` | Restarts the computer 30 seconds after Reparo completes. |
 | `-Shutdown` / `-S` | Shuts down the computer 30 seconds after Reparo completes. Cannot be combined with `-Reboot`; `-S` is **not** a silent-mode switch. |
 | `-InstallNuGetProvider` | Bootstraps the NuGet provider before PSGallery installs when `true` (default). Set it to `false` only if you want to suppress that bootstrap attempt. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
-| `-Force` | Runs the full local-dev-tool pass and enables Windows Update and WSL apt handling. It deliberately excludes PowerShell 7; run `-7` explicitly for that MSI update. Use carefully. |
+| `-Force` | Runs the full local-dev-tool pass and enables Windows Update, the guarded Windows feature-update lane, and WSL apt handling. It deliberately excludes PowerShell 7; run `-7` explicitly for that MSI update. Use carefully. |
 
 ### Version quote style
 
@@ -528,18 +528,21 @@ Available section names:
 - `Wsl`
 - `WslApt`
 - `WindowsUpdate`
-- `Windows11Upgrade`
+- `WindowsFeatureUpdate`
 
-### Windows 11 feature upgrade
+### Windows feature updates
 
-`-11` is an explicit OS-upgrade mode, not part of `-Update` or `-Force`. It only runs from Windows 10, skips Windows 11 or newer builds, downloads Microsoft's Windows 11 Installation Assistant to `C:\ProgramData\Reparo\Cache`, and launches it with quiet upgrade arguments.
+Legacy Windows Update Agent searches do not expose every opt-in seeker offer shown by the Settings app, including some annual Windows 11 releases with a separate **Download & install** button. `WindowsFeatureUpdate` covers that gap with Microsoft's Windows 11 Installation Assistant. It supports Windows 10-to-11 upgrades and Windows 11 feature-release upgrades, validates the downloaded assistant's Microsoft Authenticode signature, preserves Setup logs, and passes `/NoReboot` unless `-AllowReboot` is explicit.
+
+The lane is included in `-Force` but deliberately excluded from the conservative `-Update` mode. The old `-11`, `-Win11`, `-Windows11`, `-UpgradeToWindows11`, and `-Windows11Upgrade` spellings remain aliases.
 
 ```powershell
-reparo -Preview -11
-reparo -11
+reparo -Preview -FU
+reparo -FU
+reparo -FU -AllowReboot
 ```
 
-Use an elevated/admin or SYSTEM context and expect a long-running installer plus reboot behavior from the Windows setup stack.
+Use an elevated/admin or SYSTEM context and expect a long-running compatibility scan, download, staging pass, and eventual reboot requirement. Without `-AllowReboot`, restart manually after Reparo and Windows report that staging has completed.
 
 ### PowerShell 7
 
@@ -768,6 +771,8 @@ Reparo probes known package managers before running them and skips sections that
 For the live `Winget` upgrade path, Reparo now uses `--disable-interactivity`, `--silent`, and `--force` so Ninja runs are treated like non-interactive automation instead of desktop sessions waiting for UI.
 
 For `WindowsUpdate`, Reparo will try to install `PSWindowsUpdate` from PSGallery first. If that bootstrap fails because the session cannot reach PSGallery or cannot install modules, the section is skipped with a logged reason instead of failing silently.
+
+`WindowsFeatureUpdate` is intentionally separate from `WindowsUpdate`: it handles Settings-only seeker offers through Microsoft's signed Installation Assistant because those offers can be absent from the legacy WUA/PSWindowsUpdate result set.
 
 For `Winget`, Reparo now tries a repair/registration path when `winget` is missing. It logs `winget source list` and `winget list --upgrade-available` when you run `-Winget` so you can see what the client can actually discover before the upgrade pass starts.
 
