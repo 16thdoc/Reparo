@@ -164,6 +164,29 @@ foreach ($required in @(
 if (-not $commandStep.Value.Contains("`$PSBoundParameters.ContainsKey('PendingUpdates')")) {
     throw 'WinGet command execution cannot reuse its queue discovery snapshot.'
 }
+if ($commandStep.Value.Contains("`$pendingUpdates = if (`$PSBoundParameters.ContainsKey('PendingUpdates'))")) {
+    throw 'Empty WinGet discovery can still collapse to null through PowerShell pipeline unrolling.'
+}
+foreach ($required in @(
+    "`$pendingUpdates = @(`$PendingUpdates | Where-Object",
+    "`$pendingUpdates = @(Get-ReparoPendingUpdates -Section `$Section)"
+)) {
+    if (-not $commandStep.Value.Contains($required)) {
+        throw "WinGet empty-array preservation is absent: $required"
+    }
+}
+
+$nugetBootstrap = [regex]::Match($source, '(?s)function Ensure-ReparoNuGetProvider \{.*?(?=function Show-ReparoHelp)')
+if (-not $nugetBootstrap.Success) { throw 'Could not locate the NuGet provider bootstrap.' }
+if (-not $nugetBootstrap.Value.Contains('Import-Module PackageManagement -Force -ErrorAction Stop')) {
+    throw 'NuGet bootstrap still relies on fragile PackageManagement command auto-loading.'
+}
+
+$windowsUpdateBootstrap = [regex]::Match($source, '(?s)function Ensure-ReparoPSWindowsUpdate \{.*?(?=function Resolve-ReparoPowerShell7Path)')
+if (-not $windowsUpdateBootstrap.Success) { throw 'Could not locate the PSWindowsUpdate bootstrap.' }
+if (-not $windowsUpdateBootstrap.Value.Contains('Import-Module PowerShellGet -Force -ErrorAction Stop')) {
+    throw 'PSWindowsUpdate bootstrap still relies on fragile PowerShellGet command auto-loading.'
+}
 
 $windowsUpdate = [regex]::Match($source, '(?s)if \(Test-ReparoSectionSelected ''WindowsUpdate''\) \{.*')
 if (-not $windowsUpdate.Success) { throw 'Could not locate the Windows Update section.' }

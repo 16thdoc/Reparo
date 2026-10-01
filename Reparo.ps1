@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.3.7'
+$script:ReparoVersion = '1.3.3.8'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -303,6 +303,7 @@ function Get-ReparoVersionFlavor {
         '1.3.3.5' = [pscustomobject]@{ Quote = 'Even the smallest person can change the course of the future.'; Source = 'The Lord of the Rings: The Fellowship of the Ring by J.R.R. Tolkien'; Art = '  QUEUE: each package gets its own tiny timeout crypt' }
         '1.3.3.6' = [pscustomobject]@{ Quote = 'All that is gold does not glitter, not all those who wander are lost.'; Source = 'The Lord of the Rings: The Fellowship of the Ring by J.R.R. Tolkien'; Art = '  HYTALE: interactive launcher escorted out of the unattended queue' }
         '1.3.3.7' = [pscustomobject]@{ Quote = 'Winter is coming.'; Source = 'A Game of Thrones by George R.R. Martin'; Art = '  LEDGER: every abandoned update leaves a reason and a map home' }
+        '1.3.3.8' = [pscustomobject]@{ Quote = 'Fear cuts deeper than swords.'; Source = 'A Game of Thrones by George R.R. Martin'; Art = '  NEEDLE: dead bootstrap paths meet the pointy end' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -487,6 +488,11 @@ function Ensure-ReparoNuGetProvider {
     $minimumVersion = [Version]'2.8.5.201'
 
     try {
+        # Windows PowerShell can discover PackageManagement commands while
+        # still failing their implicit module auto-load. Import it explicitly
+        # before querying the provider so an already-installed NuGet provider
+        # does not get misreported as unavailable.
+        Import-Module PackageManagement -Force -ErrorAction Stop
         $provider = Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue
         if ($provider -and $provider.Version -and ([Version]$provider.Version -ge $minimumVersion)) {
             Write-ReparoDebug ("NuGet provider already available: {0}" -f $provider.Version)
@@ -3402,16 +3408,13 @@ Log: $script:ReparoLogPath
         if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
             Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
         }
-        
-        if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
-            Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
-        }
 
         if (-not (Ensure-ReparoNuGetProvider)) {
             Write-ReparoLog '[WARN] NuGet provider unavailable; skipping PSWindowsUpdate bootstrap.'
             return $false
         }
 
+        Import-Module PowerShellGet -Force -ErrorAction Stop
         Install-Module -Name 'PSWindowsUpdate' -Force -AllowClobber -Scope AllUsers -Repository 'PSGallery' -ErrorAction Stop | Out-Null
         Import-Module PSWindowsUpdate -Force -ErrorAction Stop
 
@@ -6427,11 +6430,15 @@ function Invoke-ReparoCommandStep {
     Write-Step $Section
     Write-ReparoLog "[STEP] $Section"
     Write-ReparoLog ("[CMD] {0}" -f $Command)
-    $pendingUpdates = if ($PSBoundParameters.ContainsKey('PendingUpdates')) {
-        @($PendingUpdates | Where-Object { $null -ne $_ -and (($Section -notin @('Winget', 'Winget(msstore)')) -or -not [string]::IsNullOrWhiteSpace([string]$_.Id)) })
+    # Do not assign the result of this if-expression. In Windows PowerShell
+    # 5.1, a branch that emits an empty @() is unrolled and the outer
+    # assignment becomes $null, which then fails mandatory array binding in
+    # the Winget package queue.
+    if ($PSBoundParameters.ContainsKey('PendingUpdates')) {
+        $pendingUpdates = @($PendingUpdates | Where-Object { $null -ne $_ -and (($Section -notin @('Winget', 'Winget(msstore)')) -or -not [string]::IsNullOrWhiteSpace([string]$_.Id)) })
     }
     else {
-        @(Get-ReparoPendingUpdates -Section $Section)
+        $pendingUpdates = @(Get-ReparoPendingUpdates -Section $Section)
     }
     $deferredWingetUpdates = @()
     if ($Section -eq 'Winget') {
