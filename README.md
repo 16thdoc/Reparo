@@ -318,6 +318,52 @@ back to `Ninja-Property-Set`. Both require the Ninja agent CLI at
 CLI produces a warning without converting successful Reparo maintenance into a false
 failure; repair or update the Ninja agent to restore custom-field publication.
 
+The reference wrapper now emits an explicit automation outcome: deployment,
+discovery-only, scheduled-only, utility-only, no-changes, no-changes-with-skips,
+maintenance-reported-changes, or maintenance failure. A blocked WinGet-only check
+or missing maintenance receipt returns **2**, not a claim of successful maintenance.
+Failures name the operation (launch preparation, child execution or custom-field
+publication) and error type/ID. This improves future diagnostics; it does not establish
+the historical FABIAN-WS denied operation or prove PUCK-MAN provisioning.
+
+### Standalone WinGet SYSTEM provisioning
+
+Before attempting repair, Reparo can now discover an **existing** registered
+Microsoft App Installer runtime when the WinGet alias is missing. It restricts
+the candidate to the WindowsApps package root, validates Microsoft Authenticode
+and `--version`, then prepends only the current process PATH so child workers inherit
+it. No permanent PATH/AppX registration/provisioning change. Preview never runs that
+probe. Endor's read-only SYSTEM pilot demonstrated missing alias, runnable signed
+direct binary and successful process-local discovery. This is not proof of another
+user's package maintenance or a diagnosis of PUCK-MAN.
+
+Runtime health now requires a successful executable `--version` probe, not merely
+an alias existing. If SYSTEM still lacks a runnable runtime after the validated
+package lookup, Reparo bypasses unsupported AppX/module repair. It preserves prior
+validated health (explicitly historical, not a current maintenance result), or marks
+USER with separate provisioning/user-validation guidance. Interactive-user repair
+retains its existing path. This avoids downloading repair modules for an operation
+SYSTEM is not allowed to perform.
+
+`deploy/Deploy-WinGet-System.ps1` is independently usable from 64-bit Windows
+PowerShell as SYSTEM/elevated administrator on x64 Windows client build 17763+.
+Use `-Preview` for a no-network/no-change plan. Actual provisioning selects the
+stable Microsoft WinGet release, requires asset SHA-256 digests and allowed GitHub
+URLs, checks bundle identity/publisher, supplies its release license/x64 dependencies,
+and lets Windows/DISM enforce package trust. Existing target/newer provisioning is
+not downgraded. Verification failure returns nonzero; failed staging and transcript
+logs are retained. `-ReleaseMetadata` plus `-AssetDirectory` supports a previously
+trusted offline release set; offline metadata itself must come from a reviewed
+GitHub release, not arbitrary third-party JSON. Optional `-Proxy` accepts an
+HTTP(S) endpoint without embedded credentials. Downloads have explicit timeouts.
+
+Outside Preview, exit 0 proves **provisioning only**, not user registration, WinGet executable/source
+health, or user/machine maintenance. Sign-out/sign-in may be needed for user
+registration. The artifact never reboots and does not call `Add-AppxPackage` under
+SYSTEM. Actual Ninja/SYSTEM endpoint provisioning, proxy/policy/partial-failure
+pilots and PUCK-MAN/FABIAN-WS diagnosis remain open; local helper/guard tests are
+not substitutes. Inspect provisioning and DISM logs before a rollout.
+
 ### Option 4: Install/update over SSH
 
 For personal Windows machines that are reachable over OpenSSH, use the remote helper:
@@ -439,7 +485,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Tail` | Follows the active Reparo log when used by itself. When combined with a run mode, it prints the tail of that run's log at the end. |
 | `-TailLines <count>` | Controls how many existing log lines `-Tail` prints before following. Default: `400`. |
 | `-Time <when>` / `-At <when>` | Windows only. Creates a one-shot Task Scheduler task that runs the requested Reparo invocation as `SYSTEM` with highest privileges, then deletes itself. Clock inputs (`11:45pm`, `11pm`, `23:00`, `23:00:30`) use the next local occurrence. Delay inputs accept compact/long forms (`30s`, `30m`, `5h`, `2d`, `90min`) and positive decimals such as `1.5h`. Requires elevation. It rejects `-Preview`, `-Status`, `-Tail`, `-Kill`, `-Sweep`, and `-DeleteStale`. |
-| `-Task Daily <time>` / `-Task Hourly <interval>` | Creates or updates a persistent managed-update schedule. On Windows it is a SYSTEM Task Scheduler job; on Linux it is the current user's crontab entry. `reparo -Task Daily 6am` runs daily at 06:00. `reparo -Task Hourly 12hr` runs every 12 hours. With no maintenance switch it schedules `-Update`; append `-Force` to schedule the full pass. It rejects utility/install/preview modes. |
+| `-Task <recurrence>` | Named specific-run scheduling, with maintenance flags kept separate. Windows uses SYSTEM/highest Task Scheduler; native Linux uses current-user cron. Default maintenance is `-Update`. `-Preview` shows the exact command/identity/power behavior without registering. Existing owned names require explicit `-TaskReplace`; use `-TaskAction List/Show/Enable/Disable/Remove`. See scheduling semantics below. |
 | `-Syslog <host[:port]>` | Persistently sets and uses a TCP syslog listener. Default port is `514`, so `-Syslog 192.168.50.31` and `-Syslog 192.168.50.31:514` target the same port. Use `-Syslog off` or `-Syslog disable` to clear the saved target. |
 | `-Status` | Shows whether Reparo is currently running, points at the active log file, and prints the registry evidence behind any pending reboot flag. |
 | `-IgnoreTimeouts` | Disables timeout enforcement even when timeout parameters are supplied. |
@@ -529,6 +575,54 @@ Available section names:
 - `WslApt`
 - `WindowsUpdate`
 - `WindowsFeatureUpdate`
+
+### Flexible specific-run scheduling (1.4.1.0)
+
+```powershell
+reparo -Task -Force -Preview 5am Mondays
+reparo -Task "5am First Monday" -TaskName monthly -Preview
+reparo -Task "15th at 5am" -Include Winget,WindowsUpdate -TaskName midmonth -Preview
+reparo -Task "weekdays at 5am,5pm" -Preview
+reparo -Task "last day of month at 23:00" -Preview
+reparo -Task "every 6 hours" -TaskStart 2026-11-04T06:00:00 -Preview
+reparo -Task "every 2 days at 5am" -TaskStart 2026-11-04T00:00:00 -Preview
+reparo -Task -TaskAction List
+reparo -Task -TaskName monthly -TaskAction Show
+reparo -Task -TaskName monthly -TaskAction Disable
+reparo -Task -TaskName monthly -TaskAction Enable
+reparo -Task -TaskName monthly -TaskAction Remove
+```
+
+`-R` / `-r` **still means reboot**. In the originally requested `-Task -f -r 5am Mondays` spelling, `5am Mondays` is the recurrence and `-r` is an actual scheduled power action. It is not an alternate recurrence parameter. Preview prominently reports REBOOT, SHUTDOWN or automatic-reboot permission. Do not register those flags unless you intend the power action. No reboot-capable schedule was created or executed during the implementation pilots.
+
+Supported Windows calendars: case-insensitive day names/plurals; optional `at`; 12/24-hour clocks; daily; selected weekly days; weekdays/weekends; multiple clock times; monthly selected dates; first/second/third/fourth/last named weekday; last day of month. Every-N hours/days requires `-TaskStart YYYY-MM-DDTHH:mm:ss` to establish an explicit local anchor. Legacy `Daily 6am` and `Hourly 12hr` spellings remain accepted; legacy Hourly anchors at today's local midnight. Task names use 1–64 alphanumeric/underscore/hyphen characters, beginning alphanumeric.
+
+Windows policy: local machine timezone, SYSTEM/highest account (creation/changes require elevation), Task Scheduler's native DST/calendar semantics, no invented exactly-once guarantee around clock changes. Explicit anchors in ambiguous/nonexistent DST hours are rejected. Nonexistent monthly dates are skipped rather than shifted. Missed runs use `StartWhenAvailable`; overlap uses `IgnoreNew`; execution is bounded to four hours with no automatic restart-on-failure. Maintenance arrays/boolean values are preserved through a quoted hashtable splat, not repeated flags or evaluated user code. Lifecycle/administrative/migration operations cannot be scheduled. Changing the machine timezone changes local-time interpretation; inspect schedules after timezone/OS policy changes. Preview needs no elevation and never registers. Registration defaults to the current script path: schedule from the installed runtime, not a temporary staging file.
+
+Management is limited to root-folder `Reparo-Managed-<name>` tasks bearing the scheduler's exact ownership description. It refuses collisions/unowned names, leaves the separate `Reparo-SelfUpdate-Tuesday-1000` task alone, and does **not** silently migrate/delete old `Reparo-Managed-Daily` or `Reparo-Managed-EveryNHours` jobs. Review and retire obsolete old schedules deliberately to avoid duplicate runs.
+
+Overlap guards apply to the **same named task**, not a global fleet/host lock. Different names, legacy schedules, manual commands and RMM runs can still overlap; coordinate those maintenance windows instead of assuming `IgnoreNew` or a per-name flock serializes unrelated jobs.
+
+CLI legacy spellings are retained, but the PowerShell parameter API deliberately
+changes `Task` from a string array to a selector switch so flags can precede recurrence
+words. Script callers that used `@{Task=@('Daily','6am')}` must instead use
+`@{Task=$true; RemainingInclude=@('Daily','6am')}`. Task controls without `-Task`, and
+administrative/lifecycle flags combined with it, fail before initialization; they do
+not fall through into maintenance or persist settings.
+
+Native Linux uses the same useful named preview/management and maintenance-selection contract:
+
+```sh
+reparo --task 'weekdays at 5am,5pm' --task-name work --force --include Apt Npm --preview
+reparo --task '1st,15th at 05:00' --task-name monthly --preview
+reparo --task --task-name work --task-action show
+```
+
+Place the recurrence before the native Include list. Linux supports daily, weekly selected days, weekdays/weekends, monthly dates and multiple times. Cron cannot faithfully express anchored every-N days/hours, ordinal weekdays or last-day-of-month, so those forms fail explicitly instead of approximating them. Legacy Hourly Nhr remains a midnight-reset cron pattern, not an elapsed interval across days. Native jobs run as the registering user; privilege is still root/passwordless sudo where required. `flock -n` prevents overlapping runs; missed cron runs are not replayed and the cron implementation governs local-time/DST behavior. Named marker matching preserves unrelated jobs and legacy v1 entries. Percent/newline paths/arguments are rejected because cron interprets those before shell quoting. Native scheduling does not provide power actions or a Windows-style four-hour execution limit.
+
+### Terminal output
+
+Interactive package names are red; headings/progress/success/warnings/errors keep explicit text with a restrained palette. `NO_COLOR` (set) or `TERM=dumb` disables Reparo color; redirected Windows/native Linux output is plain. Log files and Ninja activity remain plain, not ANSI copies of screen output. Native package managers expose section-level names rather than Windows' individual discovered package rows.
 
 ### Windows feature updates
 

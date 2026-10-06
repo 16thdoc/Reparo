@@ -23,6 +23,7 @@ if ($errors.Count) { throw 'Windows release source does not parse.' }
 $flavor = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-ReparoVersionFlavor' }, $true)
 Invoke-Expression $flavor.Extent.Text
 $windowsArt = (Get-ReparoVersionFlavor -Version $windowsVersion).Art
+if (-not $windowsOutput.Contains($windowsArt)) { throw 'Windows version output omitted matching release art.' }
 
 $linuxContent = Get-Content -LiteralPath $linuxSource -Raw
 foreach ($entry in @(

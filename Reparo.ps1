@@ -136,7 +136,13 @@ param(
     [int]$TailLines = 400,
     [Alias('At')]
     [string]$Time,
-    [string[]]$Task,
+    [switch]$Task,
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$')]
+    [string]$TaskName = 'default',
+    [ValidateSet('Create', 'List', 'Show', 'Enable', 'Disable', 'Remove')]
+    [string]$TaskAction = 'Create',
+    [string]$TaskStart,
+    [switch]$TaskReplace,
     [Alias('I')]
     [string[]]$Include,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -144,8 +150,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.4.0.0'
+$script:ReparoVersion = '1.4.1.0'
 $script:ReparoBoundParameters = $PSBoundParameters
+$script:ReparoTaskBlockedParameters = @('Time','New','Latest','Install','Ninja','Status','Tail','Kill','Sweep','DeleteStale','Search','AddVersionLock','ListVersionLocks','CheckApp','LockApp','MigrateChocoToWinget','FinalizeChocolateyRemoval','Syslog','SkipNinjaPublish','SourceUrl','NoBackup')
+if (-not $Task -and @('TaskName','TaskAction','TaskStart','TaskReplace' | Where-Object { $PSBoundParameters.ContainsKey($_) }).Count -gt 0) { throw 'Task controls require -Task; refusing an accidental maintenance run.' }
+if ($Task) {
+    foreach ($key in $script:ReparoTaskBlockedParameters) {
+        if ($PSBoundParameters.ContainsKey($key)) { throw "Scheduling -$key is blocked before initialization; run administrative/lifecycle modes explicitly." }
+    }
+}
 
 if ($ForceReboot -and $ForceShutdown) {
     throw '-Reboot and -Shutdown cannot be used together. Choose one post-run power action.'
@@ -308,6 +321,7 @@ function Get-ReparoVersionFlavor {
         '1.3.4.0' = [pscustomobject]@{ Quote = 'The Wheel weaves as the Wheel wills.'; Source = 'The Eye of the World by Robert Jordan'; Art = '  WHEEL: feature releases pulled through the guarded upgrade gate' }
         '1.3.4.1' = [pscustomobject]@{ Quote = 'Never tell me the odds!'; Source = 'The Empire Strikes Back by Leigh Brackett and Lawrence Kasdan'; Art = '  ODDS: signature checks online before the feature-update jump' }
         '1.4.0.0' = [pscustomobject]@{ Quote = 'All we have to decide is what to do with the time that is given us.'; Source = 'The Fellowship of the Ring by J. R. R. Tolkien'; Art = '  /\  GANDALF: a staff against unbounded waits and false victories' }
+        '1.4.1.0' = [pscustomobject]@{ Quote = 'DON''T PANIC'; Source = 'The Hitchhiker''s Guide to the Galaxy by Douglas Adams'; Art = '  [ GUIDE ] schedules anchored; reboot decisions remain human' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -356,7 +370,7 @@ function Get-ReparoVersionArt {
     (Get-ReparoVersionFlavor -Version $Version).Art
 }
 
-if ($RemainingInclude -and $RemainingInclude.Count -gt 0 -and -not $Search) {
+if ($RemainingInclude -and $RemainingInclude.Count -gt 0 -and -not ($Search -or $Task)) {
     $remainingModeArgs = @($RemainingInclude)
     if ($remainingModeArgs -contains '-11') {
         $WindowsFeatureUpdate = $true
@@ -376,6 +390,7 @@ function Write-ReparoVersionOutput {
     if (-not [string]::IsNullOrWhiteSpace($flavor.Source)) {
         Write-Host ('  - {0}' -f $flavor.Source)
     }
+    if (-not [string]::IsNullOrWhiteSpace($flavor.Art)) { Write-Host $flavor.Art }
 }
 
 if ($Include -and $Include.Count -gt 0) {
@@ -622,6 +637,17 @@ Usage:
   reparo -Update -Time 6hr
   reparo -Task Daily 6am
   reparo -Task Hourly 12hr -Force
+  reparo -Task -Force -Preview 5am Mondays
+  reparo -Task "first Monday at 5am" -TaskName monthly -Preview
+  reparo -Task "every 2 days at 5am" -TaskStart 2026-11-04T00:00:00 -Preview
+  reparo -Task -TaskName monthly -TaskAction Show
+
+Scheduling: -Task consumes recurrence words independently of maintenance flags.
+  Daily/weekly/monthly/ordinal/last-day and multiple clock times are supported.
+  Every-N intervals require an explicit local -TaskStart anchor.
+  -Preview never registers; -TaskReplace is required to replace an owned name.
+  -TaskAction Create/List/Show/Enable/Disable/Remove manages only owned tasks.
+  IMPORTANT: -R remains REBOOT, not recurrence. Power actions appear in previews.
   reparo -Include Winget Choco
 
 Modes:
@@ -883,7 +909,7 @@ elseif ($SevenZip) {
 
     $Include = @('7Zip')
 }
-elseif ($Force -and -not ($WindowsFeatureUpdate -or ($Include -contains 'WindowsFeatureUpdate'))) {
+elseif ($Force -and -not $Task -and -not ($WindowsFeatureUpdate -or ($Include -contains 'WindowsFeatureUpdate'))) {
     $Preview = $false
     if ($script:ReparoIsWindows) {
         $WindowsUpdate = $true
@@ -1117,11 +1143,22 @@ function Write-ReparoDebug {
     }
 }
 
-function Write-Info($Message) { Write-Host "INFO  $Message" -ForegroundColor Cyan }
-function Write-Step($Message) { Write-Host "STEP  $Message" -ForegroundColor Yellow }
-function Write-Skip($Message) { Write-Host "SKIP  $Message" -ForegroundColor DarkGray }
-function Write-Done($Message) { Write-Host "DONE  $Message" -ForegroundColor Green }
-function Write-Fail($Message) { Write-Host "FAIL  $Message" -ForegroundColor Red }
+function Test-ReparoConsoleColor {
+    if ($null -ne [Environment]::GetEnvironmentVariable('NO_COLOR') -or $env:TERM -eq 'dumb') { return $false }
+    try { return -not [Console]::IsOutputRedirected } catch { return $false }
+}
+
+function Write-ReparoConsole {
+    param([string]$Message, [ConsoleColor]$Color = 'Gray', [switch]$NoNewline)
+    if (Test-ReparoConsoleColor) { Write-Host $Message -ForegroundColor $Color -NoNewline:$NoNewline }
+    else { Write-Host $Message -NoNewline:$NoNewline }
+}
+
+function Write-Info($Message) { Write-ReparoConsole "INFO  $Message" Cyan }
+function Write-Step($Message) { Write-ReparoConsole "STEP  $Message" Yellow }
+function Write-Skip($Message) { Write-ReparoConsole "SKIP  $Message" DarkYellow }
+function Write-Done($Message) { Write-ReparoConsole "DONE  $Message" Green }
+function Write-Fail($Message) { Write-ReparoConsole "FAIL  $Message" Red }
 
 function ConvertTo-ReparoPowerShellLiteral {
     param([AllowNull()][string]$Value)
@@ -2326,7 +2363,7 @@ function Finalize-ReparoLogFile {
     }
 
     if ($hadLog) {
-        Write-Host ("Final log: {0}" -f $script:ReparoLogPath) -ForegroundColor Cyan
+        Write-ReparoConsole ("Final log: {0}" -f $script:ReparoLogPath) Cyan
         Write-ReparoLog ("[SUMMARY] Final log renamed to: {0}" -f $script:ReparoLogPath)
     }
 
@@ -2343,7 +2380,7 @@ function Complete-ReparoUtilityLog {
 
 trap {
     try {
-        if (-not $script:ReparoLogFinalized -and (Test-Path -LiteralPath $script:ReparoLogPath)) {
+        if (-not [string]::IsNullOrWhiteSpace($script:ReparoLogPath) -and -not $script:ReparoLogFinalized -and (Test-Path -LiteralPath $script:ReparoLogPath)) {
             Write-ReparoLog ("[ERROR] Unhandled terminating error: {0}" -f $_.Exception.Message)
             Finalize-ReparoLogFile -Status 'FAILED'
         }
@@ -2558,14 +2595,14 @@ function Get-ReparoActiveLogPath {
 
 function Show-ReparoStatus {
     $running = @(Get-ReparoRunningProcessInfo -ExcludeProcessIds @($PID))
-    Write-Host 'REPARO status' -ForegroundColor Magenta
+    Write-ReparoConsole 'REPARO status' Magenta
     Write-Host "Version: $script:ReparoVersion"
     Write-Host "Computer: $env:COMPUTERNAME"
     Write-Host "Log root: $LogRoot"
 
     $pendingRebootEvidence = @(Get-ReparoPendingRebootEvidence)
     if ($pendingRebootEvidence.Count -gt 0) {
-        Write-Host 'Pending reboot: yes' -ForegroundColor Yellow
+        Write-ReparoConsole 'Pending reboot: yes' Yellow
         Write-Host 'Pending reboot evidence:'
         $pendingRebootEvidence |
             Select-Object Source, Detail |
@@ -2622,7 +2659,7 @@ function Show-ReparoStatus {
     if ($latest) {
         $metadata = Get-ReparoLogMetadata -LogFile $latest
         Write-Host ''
-        Write-Host 'Last completed run:' -ForegroundColor Magenta
+        Write-ReparoConsole 'Last completed run:' Magenta
         if ($metadata) {
             Write-Host "  Status: $($metadata.Status)"
             Write-Host "  Started: $($metadata.Started) ($(Format-ReparoAge -Timestamp $metadata.Started))"
@@ -2841,68 +2878,179 @@ function Get-ReparoScheduledArgumentTokens {
     return $tokens.ToArray()
 }
 
+function Resolve-ReparoRecurrence {
+    param([Parameter(Mandatory)][string]$Value, [string]$Start, [datetime]$Now = (Get-Date))
+
+    $text = ($Value.Trim().ToLowerInvariant() -replace '\s+', ' ')
+    if ($text -match '[^a-z0-9,: /-]') { throw 'Recurrence contains unsupported characters; use plain day/time words.' }
+    $anchor = $Now.Date
+    if ($Start) {
+        if ($Start -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$' -or -not [datetime]::TryParseExact($Start, 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$anchor)) {
+            throw '-TaskStart requires an explicit local anchor YYYY-MM-DDTHH:mm:ss (no timezone suffix).'
+        }
+        if ([TimeZoneInfo]::Local.IsInvalidTime($anchor) -or [TimeZoneInfo]::Local.IsAmbiguousTime($anchor)) { throw 'TaskStart falls in an invalid or ambiguous DST hour; select a different anchor.' }
+    }
+    $result = [ordered]@{ Kind=''; Times=@(); Days=@(); Dates=@(); Ordinal=''; Interval=1; Anchor=$anchor; LastDay=$false; Text=$Value }
+    $interval = [regex]::Match($text, '^every (?<n>\d+) (?<unit>hours?|days?)(?: at (?<time>.+))?$')
+    $legacyHourly = [regex]::Match($text, '^hourly (?<n>\d+)\s*(?:h|hr|hrs|hours?)$')
+    if ($interval.Success -or $legacyHourly.Success) {
+        $match = if ($interval.Success) { $interval } else { $legacyHourly }
+        $n = [int]$match.Groups['n'].Value
+        if ($n -lt 1 -or $n -gt 365) { throw 'Intervals must be from 1 through 365.' }
+        if ($interval.Success -and -not $Start) { throw 'Every-N recurrence requires -TaskStart to define its anchor explicitly.' }
+        $unit = if ($legacyHourly.Success) { 'hour' } else { $match.Groups['unit'].Value }
+        if ($unit -like 'hour*') {
+            if ($interval.Success -and $match.Groups['time'].Success) { throw 'Hourly intervals use TaskStart, not a second clock time.' }
+            if ($legacyHourly.Success -and $n -gt 23) { throw 'Legacy Hourly intervals must be 1hr through 23hr.' }
+            $result.Kind='Hours'; $result.Interval=$n
+        }
+        else {
+            $result.Kind='Daily'; $result.Interval=$n
+            if ($match.Groups['time'].Success) {
+                $clock=Resolve-ReparoScheduledTime -Value $match.Groups['time'].Value
+                if ($clock.Kind -ne 'clock') { throw 'Every-N-days requires a clock time after at.' }
+                $result.Times=@($clock.At.ToString('HH:mm:ss'))
+            }
+            else { $result.Times=@($anchor.ToString('HH:mm:ss')) }
+        }
+        return [pscustomobject]$result
+    }
+    $clockPattern = '(?<![a-z0-9])(?:\d{1,2}(?::\d{2})?(?:am|pm)|\d{1,2}:\d{2})(?![a-z0-9:])'
+    $clocks = [regex]::Matches($text, $clockPattern)
+    if ($clocks.Count -eq 0) { throw 'A recurrence needs a clock time: daily 5am; Mondays at 05:00; 15th at 5am.' }
+    foreach ($clock in $clocks) {
+        $time = Resolve-ReparoScheduledTime -Value $clock.Value
+        if ($time.Kind -ne 'clock') { throw 'Recurrence needs clock times, not relative delays.' }
+        $result.Times += $time.At.ToString('HH:mm:ss')
+    }
+    $result.Times=@($result.Times | Select-Object -Unique)
+    $calendar = ([regex]::Replace($text, $clockPattern, '') -replace '\bat\b|\band\b', '' -replace '[, ]+', ' ').Trim()
+    if ($calendar -in @('', 'daily', 'every day')) { $result.Kind='Daily'; return [pscustomobject]$result }
+    if ($calendar -eq 'last day of month') { $result.Kind='Monthly'; $result.LastDay=$true; return [pscustomobject]$result }
+    $ordinal = [regex]::Match($calendar, '^(first|second|third|fourth|last) (monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?: of (?:the )?month)?$')
+    if ($ordinal.Success) {
+        $result.Kind='MonthlyWeek'; $result.Ordinal=$ordinal.Groups[1].Value
+        $result.Days=@((Get-Culture).TextInfo.ToTitleCase($ordinal.Groups[2].Value)); return [pscustomobject]$result
+    }
+    $dateWords=$calendar -replace '^monthly ', ''
+    if ($dateWords -match '^\d+(?:st|nd|rd|th)?(?: \d+(?:st|nd|rd|th)?)*$') {
+        $result.Kind='Monthly'
+        foreach ($word in $dateWords.Split(' ')) {
+            $date=[int]($word -replace '(st|nd|rd|th)$','')
+            if ($date -lt 1 -or $date -gt 31) { throw 'Monthly dates must be 1 through 31; nonexistent dates are skipped, not moved.' }
+            $result.Dates += $date
+        }
+        $result.Dates=@($result.Dates | Select-Object -Unique); return [pscustomobject]$result
+    }
+    if ($calendar -eq 'weekdays') { $calendar='monday tuesday wednesday thursday friday' }
+    if ($calendar -eq 'weekends') { $calendar='saturday sunday' }
+    $calendar=$calendar -replace '^weekly ', ''
+    foreach ($word in $calendar.Split(' ')) {
+        $day=$word -replace 's$', ''
+        if ($day -notin @('monday','tuesday','wednesday','thursday','friday','saturday','sunday')) { throw "Ambiguous recurrence '$Value'; unknown calendar word '$word'." }
+        $result.Days += (Get-Culture).TextInfo.ToTitleCase($day)
+    }
+    $result.Kind='Weekly'; $result.Days=@($result.Days | Select-Object -Unique)
+    return [pscustomobject]$result
+}
+
+function Get-ReparoTaskRunParameters {
+    param([System.Collections.IDictionary]$BoundParameters = $script:ReparoBoundParameters)
+    $run = @{}
+    $controls=@('Task','TaskName','TaskAction','TaskStart','TaskReplace','Preview','RemainingInclude')
+    $blocked=$script:ReparoTaskBlockedParameters
+    foreach ($key in $BoundParameters.Keys) {
+        if ($key -in $controls) { continue }
+        if ($key -in $blocked) { throw "Scheduling -$key is blocked; lifecycle, administrative and destructive modes must run explicitly." }
+        $run[$key]=$BoundParameters[$key]
+    }
+    if ($run.Count -eq 0) { $run['Update']=$true }
+    return $run
+}
+
+function New-ReparoTaskWorker {
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$RunParameters, [Parameter(Mandatory)][string]$ScriptPath)
+    $entries=foreach ($key in @($RunParameters.Keys | Sort-Object)) {
+        if ($key -notmatch '^[A-Za-z][A-Za-z0-9]*$') { throw 'Unsafe parameter name.' }
+        $value=$RunParameters[$key]
+        $literal=if ($value -is [bool] -or $value -is [System.Management.Automation.SwitchParameter]) {
+            if ([bool]$value) { '$true' } else { '$false' }
+        }
+        elseif ($value -is [array]) { '@(' + ((@($value | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value ([string]$_) })) -join ',') + ')' }
+        else { ConvertTo-ReparoPowerShellLiteral -Value ([string]$value) }
+        '{0}={1}' -f $key,$literal
+    }
+    $pathLiteral=ConvertTo-ReparoPowerShellLiteral -Value $ScriptPath
+    return "`$ErrorActionPreference='Stop'; `$run=@{$($entries -join ';')}; try { & $pathLiteral @run; if (-not `$?) { exit 1 }; if (`$null -ne `$LASTEXITCODE) { exit [int]`$LASTEXITCODE } } catch { Write-Error `$_; exit 1 }"
+}
+
+function New-ReparoTaskXml {
+    param([Parameter(Mandatory)][object]$Recurrence, [Parameter(Mandatory)][string]$Worker, [Parameter(Mandatory)][string]$Executable)
+    $triggers=foreach ($time in $(if ($Recurrence.Kind -eq 'Hours') { @($Recurrence.Anchor.ToString('HH:mm:ss')) } else { $Recurrence.Times })) {
+        $boundary=$Recurrence.Anchor.ToString('yyyy-MM-dd')+'T'+$time
+        if ($Recurrence.Kind -eq 'Hours') {
+            '<TimeTrigger><Repetition><Interval>PT{0}H</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><StartBoundary>{1}</StartBoundary><Enabled>true</Enabled></TimeTrigger>' -f $Recurrence.Interval,$boundary
+            continue
+        }
+        $calendar=switch ($Recurrence.Kind) {
+            'Daily' { '<ScheduleByDay><DaysInterval>{0}</DaysInterval></ScheduleByDay>' -f $Recurrence.Interval }
+            'Weekly' { '<ScheduleByWeek><WeeksInterval>1</WeeksInterval><DaysOfWeek>'+ (($Recurrence.Days | ForEach-Object { '<'+$_+'/>' }) -join '') +'</DaysOfWeek></ScheduleByWeek>' }
+            'Monthly' {
+                $days=if ($Recurrence.LastDay) { '<Day>Last</Day>' } else { ($Recurrence.Dates | ForEach-Object { '<Day>'+$_+'</Day>' }) -join '' }
+                '<ScheduleByMonth><DaysOfMonth>'+$days+'</DaysOfMonth><Months><January/><February/><March/><April/><May/><June/><July/><August/><September/><October/><November/><December/></Months></ScheduleByMonth>'
+            }
+            'MonthlyWeek' {
+                $week=@{first='1';second='2';third='3';fourth='4';last='Last'}[$Recurrence.Ordinal]
+                '<ScheduleByMonthDayOfWeek><Weeks><Week>'+$week+'</Week></Weeks><DaysOfWeek><'+$Recurrence.Days[0]+'/></DaysOfWeek><Months><January/><February/><March/><April/><May/><June/><July/><August/><September/><October/><November/><December/></Months></ScheduleByMonthDayOfWeek>'
+            }
+            default { throw 'Unsupported recurrence kind.' }
+        }
+        '<CalendarTrigger><StartBoundary>'+$boundary+'</StartBoundary><Enabled>true</Enabled>'+$calendar+'</CalendarTrigger>'
+    }
+    $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Worker))
+    $command=[Security.SecurityElement]::Escape($Executable)
+    return '<?xml version="1.0" encoding="UTF-16"?><Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><Description>Reparo owned specific-run schedule v1</Description></RegistrationInfo><Triggers>'+($triggers -join '')+'</Triggers><Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><Enabled>true</Enabled><ExecutionTimeLimit>PT4H</ExecutionTimeLimit></Settings><Actions Context="Author"><Exec><Command>'+$command+'</Command><Arguments>-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand '+$encoded+'</Arguments></Exec></Actions></Task>'
+}
+
 function Invoke-ReparoPersistentTask {
-    if (-not $script:ReparoBoundParameters.ContainsKey('Task')) { return $false }
-    if (-not $script:ReparoIsWindows) { return $false }
-
-    $blockedParameters = @('Preview', 'Status', 'Tail', 'Kill', 'Sweep', 'DeleteStale', 'New')
-    $blocked = @($blockedParameters | Where-Object { $script:ReparoBoundParameters.ContainsKey($_) })
-    if ($blocked.Count -gt 0) {
-        throw ('-Task cannot be combined with {0}.' -f (($blocked | ForEach-Object { '-' + $_ }) -join ', '))
+    if (-not $Task) { return $false }
+    if (-not $script:ReparoIsWindows) { throw 'Use native reparo-linux --task for Linux scheduling.' }
+    $name='Reparo-Managed-'+$TaskName
+    $ownedDescription='Reparo owned specific-run schedule v1'
+    Write-ReparoLog "[TASK] action=$TaskAction; name=$name; preview=$Preview"
+    if ($TaskAction -eq 'List') {
+        Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskPath -eq '\' -and $_.TaskName -like 'Reparo-Managed-*' -and $_.Description -eq $ownedDescription } | Select-Object TaskName,State,Description | Format-Table
+        Complete-ReparoUtilityLog -Status 'COMPLETE'; return $true
     }
-    if ($Task.Count -ne 2) {
-        throw '-Task needs exactly a frequency and time/interval. Examples: -Task Daily 6am or -Task Hourly 12hr.'
-    }
-    if (-not (Test-ReparoCurrentProcessElevated)) {
-        throw '-Task creates a SYSTEM scheduled task and requires an elevated PowerShell session.'
-    }
-    foreach ($commandName in @('New-ScheduledTaskAction', 'New-ScheduledTaskTrigger', 'New-ScheduledTaskPrincipal', 'New-ScheduledTaskSettingsSet', 'Register-ScheduledTask')) {
-        if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) {
-            throw "-Task requires the Windows ScheduledTasks cmdlets; '$commandName' is unavailable."
+    $existing=Get-ScheduledTask -TaskName $name -TaskPath '\' -ErrorAction SilentlyContinue
+    if ($existing -and $existing.Description -ne $ownedDescription) { throw "Task '$name' is not owned by this scheduler; refusing to change it." }
+    if ($TaskAction -ne 'Create') {
+        if (-not $existing) { throw "Owned task '$name' does not exist." }
+        if ($TaskAction -eq 'Show') { Export-ScheduledTask -TaskName $name -TaskPath '\' -ErrorAction Stop; Complete-ReparoUtilityLog -Status 'COMPLETE'; return $true }
+        if ($Preview) { Write-Info "Preview: $TaskAction owned task $name; no changes."; Complete-ReparoUtilityLog -Status 'PREVIEW'; return $true }
+        if (-not (Test-ReparoCurrentProcessElevated)) { throw 'Task management requires elevation.' }
+        switch ($TaskAction) {
+            'Enable' { Enable-ScheduledTask -TaskName $name -TaskPath '\' -ErrorAction Stop | Out-Null }
+            'Disable' { Disable-ScheduledTask -TaskName $name -TaskPath '\' -ErrorAction Stop | Out-Null }
+            'Remove' { Unregister-ScheduledTask -TaskName $name -TaskPath '\' -Confirm:$false -ErrorAction Stop }
         }
+        Complete-ReparoUtilityLog -Status 'COMPLETE'; return $true
     }
-
-    $frequency = $Task[0].Trim().ToLowerInvariant()
-    $value = $Task[1].Trim()
-    $taskName = $null
-    switch ($frequency) {
-        'daily' {
-            $schedule = Resolve-ReparoScheduledTime -Value $value
-            if ($schedule.Kind -ne 'clock') { throw '-Task Daily requires a clock time such as 6am or 18:30.' }
-            $trigger = New-ScheduledTaskTrigger -Daily -At $schedule.At
-            $taskName = 'Reparo-Managed-Daily'
-        }
-        'hourly' {
-            $intervalMatch = [regex]::Match($value, '^(?<Hours>\d+)\s*(h|hr|hrs|hour|hours)$', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
-            if (-not $intervalMatch.Success) { throw '-Task Hourly requires a whole-hour interval such as 1hr or 12hr.' }
-            $hours = [int]$intervalMatch.Groups['Hours'].Value
-            if ($hours -lt 1 -or $hours -gt 23) { throw '-Task Hourly intervals must be from 1hr through 23hr.' }
-            $trigger = New-ScheduledTaskTrigger -Daily -At (Get-Date).Date -RepetitionInterval ([TimeSpan]::FromHours($hours)) -RepetitionDuration ([TimeSpan]::FromDays(1))
-            $taskName = 'Reparo-Managed-Every{0}Hours' -f $hours
-        }
-        default { throw "Unsupported -Task frequency '$($Task[0])'. Use Daily or Hourly." }
-    }
-
-    $tokens = @(Get-ReparoScheduledArgumentTokens)
-    if ($tokens.Count -eq 0) { $tokens = @('-Update') }
-    $tokenLiterals = @($tokens | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ })
-    $argumentList = '@(' + ($tokenLiterals -join ', ') + ')'
-    $scriptPathLiteral = ConvertTo-ReparoPowerShellLiteral -Value $PSCommandPath
-    $workerScript = "`$ErrorActionPreference = 'Continue'; & $scriptPathLiteral $argumentList; if (`$null -ne `$LASTEXITCODE) { exit [int]`$LASTEXITCODE }"
-    $encodedWorker = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($workerScript))
-    $powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    if (-not (Test-Path -LiteralPath $powershellPath)) { throw "Unable to locate Windows PowerShell: $powershellPath" }
-
-    $action = New-ScheduledTaskAction -Execute $powershellPath -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {0}' -f $encodedWorker)
-    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
-
-    Write-Done ("Created/updated persistent task '{0}' ({1} {2})." -f $taskName, $Task[0], $value)
-    Write-Info ("It runs as SYSTEM with highest privileges: Reparo {0}" -f ($tokens -join ' '))
-    Write-ReparoLog ("[TASK] Task={0}; Frequency={1}; Value={2}; Arguments={3}" -f $taskName, $Task[0], $value, ($tokens -join ' '))
-    Complete-ReparoUtilityLog -Status 'COMPLETE'
-    return $true
+    $recurrence=Resolve-ReparoRecurrence -Value ($RemainingInclude -join ' ') -Start $TaskStart
+    $run=Get-ReparoTaskRunParameters
+    $worker=New-ReparoTaskWorker -RunParameters $run -ScriptPath $PSCommandPath
+    $powershellPath=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $xml=New-ReparoTaskXml -Recurrence $recurrence -Worker $worker -Executable $powershellPath
+    $power=if ($run['ForceReboot']) { 'REBOOT at end' } elseif ($run['ForceShutdown']) { 'SHUTDOWN at end' } elseif ($run['AllowReboot']) { 'automatic reboot allowed' } else { 'no reboot requested' }
+    Write-Info "Task: $name | recurrence: $($recurrence.Text) | anchor: $($recurrence.Anchor.ToString('s')) | local timezone: $([TimeZoneInfo]::Local.Id)"
+    Write-Info "Identity: SYSTEM / highest | missed: start when available | overlap: IgnoreNew | limit: 4h | POWER: $power"
+    Write-Info "Exact worker: $worker"
+    if ($Preview) { Write-ReparoLog "[TASK-PREVIEW] $name; $power; $worker"; Complete-ReparoUtilityLog -Status 'PREVIEW'; return $true }
+    if ($existing -and -not $TaskReplace) { throw "Task '$name' already exists; use -TaskReplace explicitly." }
+    if (-not (Test-ReparoCurrentProcessElevated)) { throw '-Task creates a SYSTEM scheduled task and requires elevation; -Preview does not.' }
+    Register-ScheduledTask -TaskName $name -TaskPath '\' -Xml $xml -Force:$TaskReplace -ErrorAction Stop | Out-Null
+    Write-Done "Created owned task '$name'; $power."
+    Complete-ReparoUtilityLog -Status 'COMPLETE'; return $true
 }
 
 function Invoke-ReparoSchedule {
@@ -3028,13 +3176,13 @@ function Test-ReparoOperationalModeRequested {
 
 if ($PSBoundParameters.ContainsKey('Syslog') -and -not (Test-ReparoOperationalModeRequested)) {
     if (Test-ReparoSyslogDisableValue -Target $Syslog) {
-        Write-Host 'Reparo persistent TCP syslog forwarding disabled.' -ForegroundColor Yellow
+        Write-ReparoConsole 'Reparo persistent TCP syslog forwarding disabled.' Yellow
     }
     else {
-        Write-Host ("Reparo persistent TCP syslog target set to {0}:{1}." -f $script:ReparoSyslogHost, $script:ReparoSyslogPort) -ForegroundColor Green
+        Write-ReparoConsole ("Reparo persistent TCP syslog target set to {0}:{1}." -f $script:ReparoSyslogHost, $script:ReparoSyslogPort) Green
     }
 
-    Write-Host ("Settings: {0}" -f $script:ReparoSettingsPath) -ForegroundColor Cyan
+    Write-ReparoConsole ("Settings: {0}" -f $script:ReparoSettingsPath) Cyan
     Complete-ReparoUtilityLog -Status 'COMPLETE'
     return
 }
@@ -3043,7 +3191,8 @@ if (Invoke-ReparoSchedule) {
     return
 }
 
-if (Invoke-ReparoPersistentTask) {
+if ($Task) {
+    Invoke-ReparoPersistentTask | Where-Object { $_ -isnot [bool] }
     return
 }
 
@@ -3157,7 +3306,7 @@ if ($Status) {
     Show-ReparoStatus
     if ($Sweep) {
         Write-Host ''
-        Write-Host 'Sweeping stale running logs' -ForegroundColor Magenta
+        Write-ReparoConsole 'Sweeping stale running logs' Magenta
         Invoke-ReparoStaleLogSweep -Delete:$DeleteStale
     }
 
@@ -3180,7 +3329,7 @@ if ($DeleteStale) {
 if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $WingetHealth -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $Force -or $Preview -or $WindowsUpdate -or $WindowsFeatureUpdate -or $WslApt -or $SevenZip -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
-        Write-Host ("Following log: {0}" -f $tailTarget) -ForegroundColor Cyan
+        Write-ReparoConsole ("Following log: {0}" -f $tailTarget) Cyan
         Invoke-ReparoTailLog -LogPath $tailTarget -TailLines $TailLines -Follow
     }
     else {
@@ -3459,10 +3608,52 @@ function Install-ReparoPowerShell7ForWingetRepair {
     return Resolve-ReparoPowerShell7Path
 }
 
+function Get-ReparoRegisteredWingetPath {
+    param([object[]]$Packages = @(Get-AppxPackage -AllUsers -Name Microsoft.DesktopAppInstaller -ErrorAction Stop))
+    $root=[IO.Path]::GetFullPath((Join-Path $env:ProgramFiles 'WindowsApps')).TrimEnd('\')+'\'
+    foreach ($package in @($Packages | Sort-Object { [version]$_.Version } -Descending)) {
+        if ($package.Name -ne 'Microsoft.DesktopAppInstaller' -or $package.Publisher -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)' -or [string]::IsNullOrWhiteSpace($package.InstallLocation)) { continue }
+        $candidate=[IO.Path]::GetFullPath((Join-Path $package.InstallLocation 'winget.exe'))
+        if (-not $candidate.StartsWith($root,[StringComparison]::OrdinalIgnoreCase)) { continue }
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+    return $null
+}
+
+function Initialize-ReparoRegisteredWingetPath {
+    if (Test-ReparoExecutable -Name winget -Arguments @('--version')) { return $true }
+    try {
+        $candidate=Get-ReparoRegisteredWingetPath
+        if (-not $candidate) { return $false }
+        Import-ReparoBootstrapModule -Name 'Microsoft.PowerShell.Security'
+        $signature=Get-AuthenticodeSignature -FilePath $candidate -ErrorAction Stop
+        if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)') { return $false }
+        $version=(& $candidate --version 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $version -notmatch '^v?\d+\.\d+\.\d+') { return $false }
+        $env:PATH=(Split-Path -Parent $candidate)+';'+$env:PATH
+        Write-ReparoLog "[WINGET-DISCOVERY] Existing Microsoft App Installer runtime $version validated; process PATH only. No provisioning or user registration performed."
+        return (Test-ReparoExecutable -Name winget -Arguments @('--version'))
+    }
+    catch {
+        Write-ReparoLog "[WINGET-DISCOVERY] Registered-package discovery unavailable: $($_.Exception.GetType().Name). Existing repair policy retained."
+        return $false
+    }
+}
+
 function Ensure-ReparoWinget {
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
+    if (Test-ReparoExecutable -Name winget -Arguments @('--version')) {
         Write-ReparoDebug 'winget already available.'
         return $true
+    }
+
+    if (Test-ReparoSystemIdentity) {
+        if (Test-ReparoValidatedWingetOk) {
+            $script:ReparoWingetHealthStatus='OK'
+            Write-ReparoLog '[WINGET-HEALTH] SYSTEM runtime unavailable; previous validated WG:OK preserved, not a current maintenance success.'
+        }
+        else { Set-ReparoWingetHealth -Status USER -Detail 'SYSTEM repair/registration is blocked. Provision App Installer separately, then verify the runtime and user context.' }
+        Write-ReparoLog '[SKIP] SYSTEM AppX registration/module repair bypassed; use standalone provisioning and separate user/runtime validation.'
+        return $false
     }
 
     Write-ReparoLog '[ACTION] winget not found; attempting repair/registration.'
@@ -5779,7 +5970,7 @@ function Write-ReparoSummaryTable {
     }
 
     Write-Host ''
-    Write-Host ("{0} ({1})" -f $Title, $Rows.Count) -ForegroundColor Magenta
+    Write-ReparoConsole ("{0} ({1})" -f $Title, $Rows.Count) Magenta
     Write-ReparoLog ("[SUMMARY] {0} ({1})" -f $Title, $Rows.Count)
     foreach ($row in $Rows) {
         $versionDetail = if ($row.CurrentVersion -ne '-' -or $row.Version -ne '-') {
@@ -5788,7 +5979,12 @@ function Write-ReparoSummaryTable {
         else { '' }
         $reasonDetail = if ($IncludeReason -and $row.Reason -ne '-') { ": $($row.Reason)" } else { '' }
         $line = "  - $($row.Software)$versionDetail [$($row.Method)]$reasonDetail"
-        Write-Host $line
+        if (Test-ReparoConsoleColor) {
+            Write-ReparoConsole '  - ' -NoNewline
+            Write-ReparoConsole $row.Software Red -NoNewline
+            Write-ReparoConsole "$versionDetail [$($row.Method)]$reasonDetail"
+        }
+        else { Write-Host $line }
         Write-ReparoLog ("[SUMMARY] {0}" -f $line.TrimStart())
     }
 }
@@ -5833,7 +6029,7 @@ function Write-ReparoNotUpdatedReport {
     }
 
     Write-Host ''
-    Write-Host ("Not updated: reasons and actions ({0})" -f $rows.Count) -ForegroundColor Magenta
+    Write-ReparoConsole ("Not updated: reasons and actions ({0})" -f $rows.Count) Magenta
     Write-ReparoLog ("[SUMMARY] Not updated: reasons and actions ({0})" -f $rows.Count)
     foreach ($entry in $rows) {
         $row = $entry.Row
@@ -5845,7 +6041,12 @@ function Write-ReparoNotUpdatedReport {
         $heading = "  - $($row.Software)$versionDetail [$($row.Method)] - $($entry.Outcome)"
         $why = "      Why: $($row.Reason)"
         $next = "      Next: $action"
-        Write-Host $heading
+        if (Test-ReparoConsoleColor) {
+            Write-ReparoConsole '  - ' -NoNewline
+            Write-ReparoConsole $row.Software Red -NoNewline
+            Write-ReparoConsole "$versionDetail [$($row.Method)] - $($entry.Outcome)"
+        }
+        else { Write-Host $heading }
         Write-Host $why
         Write-Host $next
         Write-ReparoLog ("[SUMMARY] {0}" -f $heading.TrimStart())
@@ -5864,7 +6065,7 @@ function Write-ReparoSummaryNextSteps {
     if ($failed.Count -eq 0 -and $nonElevatedWinget.Count -eq 0 -and $manualWinget.Count -eq 0 -and $blockedWinget.Count -eq 0 -and -not $script:ReparoPendingRebootDetected) { return }
 
     Write-Host ''
-    Write-Host 'Next steps' -ForegroundColor Magenta
+    Write-ReparoConsole 'Next steps' Magenta
     Write-ReparoLog '[SUMMARY] Next steps'
     if ($nonElevatedWinget.Count -gt 0) {
         $packages = ($nonElevatedWinget | Select-Object -ExpandProperty Software -Unique) -join ', '
@@ -5900,9 +6101,9 @@ function Write-ReparoSummary {
     $resultColor = if ($failedCount -gt 0) { 'Red' } elseif ($Preview) { 'Yellow' } else { 'Green' }
 
     Write-Host ''
-    Write-Host 'REPARO summary' -ForegroundColor Magenta
+    Write-ReparoConsole 'REPARO summary' Magenta
     Write-ReparoLog '[SUMMARY] REPARO summary'
-    Write-Host ("  Result: {0}" -f $result) -ForegroundColor $resultColor
+    Write-ReparoConsole ("  Result: {0}" -f $result) $resultColor
     Write-Host ("  Updated: {0} | Skipped: {1} | Failed: {2}" -f $updatedCount, $skippedCount, $failedCount)
     Write-ReparoLog ("[SUMMARY] Result={0} Updated={1} Skipped={2} Failed={3}" -f $result, $updatedCount, $skippedCount, $failedCount)
 
@@ -5911,7 +6112,7 @@ function Write-ReparoSummary {
 
     if ($script:ReparoSummary['Notes'].Count -gt 0) {
         Write-Host ''
-        Write-Host 'Notes' -ForegroundColor Magenta
+        Write-ReparoConsole 'Notes' Magenta
         foreach ($note in $script:ReparoSummary['Notes']) {
             Write-Host ("  - {0}" -f $note)
             Write-ReparoLog ("[SUMMARY] NOTE {0}" -f $note)
@@ -5921,7 +6122,7 @@ function Write-ReparoSummary {
     Write-ReparoSummaryNextSteps
 
     Write-Host ''
-    Write-Host ("Working log: {0}" -f $script:ReparoLogPath) -ForegroundColor Cyan
+    Write-ReparoConsole ("Working log: {0}" -f $script:ReparoLogPath) Cyan
     Write-ReparoLog ("[SUMMARY] Working log: {0}" -f $script:ReparoLogPath)
 }
 
@@ -6743,7 +6944,7 @@ if ($CheckApp -or $LockApp) {
     $appMode = if ($LockApp) { 'LOCK APP' } else { 'CHECK APP' }
     if ($Preview) { $appMode = "$appMode + PREVIEW" }
 
-    Write-Host ("REPARO starting on {0} [{1}]" -f $script:ReparoHostName, $appMode) -ForegroundColor Magenta
+    Write-ReparoConsole ("REPARO starting on {0} [{1}]" -f $script:ReparoHostName, $appMode) Magenta
     Write-ReparoLog ("=== reparo start: {0} on {1} (PID {2}) ===" -f (Get-Date), $script:ReparoHostName, $PID)
     Write-ReparoLog ("[FLAGS] Bound parameters: {0}" -f ((($PSBoundParameters.Keys | Sort-Object) -join ', ')))
     Write-ReparoParameterBlock
@@ -6801,7 +7002,7 @@ else {
 
 if ($Preview) { $mode = "$mode + PREVIEW" }
 
-Write-Host ("REPARO starting on {0} [{1}]" -f $script:ReparoHostName, $mode) -ForegroundColor Magenta
+Write-ReparoConsole ("REPARO starting on {0} [{1}]" -f $script:ReparoHostName, $mode) Magenta
 Write-ReparoLog ("=== reparo start: {0} on {1} (PID {2}) ===" -f (Get-Date), $script:ReparoHostName, $PID)
 Write-ReparoLog ("[FLAGS] Bound parameters: {0}" -f ((($PSBoundParameters.Keys | Sort-Object) -join ', ')))
 Write-ReparoParameterBlock
@@ -6857,7 +7058,8 @@ if ($runWingetSections -and (Test-ReparoWingetUnsupportedWindows)) {
     $runWingetSections = $false
 }
 if ($runWingetSections) {
-    $hasWinget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
+    $hasWinget = Test-ReparoExecutable -Name winget -Arguments @('--version')
+    if (-not $hasWinget -and -not $Preview) { $hasWinget = Initialize-ReparoRegisteredWingetPath }
     Write-ReparoLog ("[CHECK] winget present: {0}" -f $hasWinget)
 
     if (-not $hasWinget) {
@@ -7939,7 +8141,7 @@ Log: $script:ReparoLogPath
 
 if ($Tail) {
     Write-Host ''
-    Write-Host 'Log tail' -ForegroundColor Magenta
+    Write-ReparoConsole 'Log tail' Magenta
 
     if (Test-Path -LiteralPath $script:ReparoLogPath) {
         try {

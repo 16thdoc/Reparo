@@ -280,6 +280,8 @@ foreach ($required in @(
 $reportFunctions = [regex]::Match($source, '(?s)function Get-ReparoNotUpdatedAction \{.*?(?=function Write-ReparoSummaryNextSteps)')
 if (-not $reportFunctions.Success) { throw 'Could not locate the actionable not-updated report functions.' }
 Invoke-Expression $reportFunctions.Value
+function Write-ReparoConsole { param([string]$Message, $Color, [switch]$NoNewline) Write-Host $Message -NoNewline:$NoNewline }
+function Test-ReparoConsoleColor { $false }
 function Write-ReparoLog { param([string]$Message) }
 $script:ReparoSummary = @{
     Skipped = New-Object System.Collections.Generic.List[object]

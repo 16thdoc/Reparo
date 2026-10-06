@@ -7,6 +7,28 @@ $ErrorActionPreference = 'Stop'
 
 $InstallRoot = 'C:\ProgramData\Reparo'
 $Reparo = Join-Path $InstallRoot 'Reparo.ps1'
+$script:ReparoOperation = 'initialization'
+$script:ReparoAutomationOutcome = 'unverified'
+
+function Get-ReparoAutomationOutcome {
+    param([string[]]$Arguments, [object[]]$Output)
+    $text=(@($Output) | ForEach-Object { [string]$_ }) -join "`n"
+    if ($Arguments -match '^-(?:Time|At|Task)$') { return 'scheduled-only' }
+    if ($Arguments -match '^-(?:WG|WingetHealth|WingetDiscover|WD)$') {
+        if ($text -match '(?i)requires an interactive user|unsupported legacy|WinGet/App Installer is unsupported|winget unavailable|could not be repaired|WG:(?:USER|FAIL|OLD)') { return 'blocked-no-work' }
+        return 'discovery-only'
+    }
+    if ($Arguments -match '^-(?:New|Install|N|Latest|Ninja)$') { return 'deployment' }
+    $summary=[regex]::Match($text,'Updated:\s*(?<updated>\d+)\s*\|\s*Skipped:\s*(?<skipped>\d+)\s*\|\s*Failed:\s*(?<failed>\d+)')
+    if ($summary.Success) {
+        if ([int]$summary.Groups['failed'].Value -gt 0) { return 'maintenance-failed' }
+        if ([int]$summary.Groups['updated'].Value -gt 0) { return 'maintenance-reported-changes' }
+        if ([int]$summary.Groups['skipped'].Value -gt 0) { return 'no-changes-with-skips' }
+        return 'no-changes'
+    }
+    if ($Arguments -match '^-(?:Force|F|Update|U|Winget)$') { return 'unverified-maintenance-receipt' }
+    return 'utility-only'
+}
 
 function Invoke-Reparo {
     param(
@@ -21,6 +43,7 @@ function Invoke-Reparo {
     $stageRoot = $null
 
     try {
+        $script:ReparoOperation = 'launch preparation'
         # Update commands run from a temporary copy so Reparo can safely
         # replace the installed runtime.
         if ($StageRuntime) {
@@ -85,12 +108,14 @@ $ErrorActionPreference = 'Stop'
 
         Write-Host ('Command: reparo {0}' -f ($Arguments -join ' '))
 
+        $script:ReparoOperation = 'Reparo child execution'
+        $childOutput = New-Object System.Collections.Generic.List[string]
         & powershell.exe `
             -NoProfile `
             -NonInteractive `
             -ExecutionPolicy Bypass `
             -File $launchPath `
-            @launchArguments
+            @launchArguments 2>&1 | ForEach-Object { [void]$childOutput.Add([string]$_); Write-Host $_ }
 
         $exitCode = $LASTEXITCODE
 
@@ -101,6 +126,9 @@ $ErrorActionPreference = 'Stop'
                 $exitCode
             )
         }
+        $script:ReparoAutomationOutcome = Get-ReparoAutomationOutcome -Arguments $Arguments -Output $childOutput.ToArray()
+        Write-Host "Reparo child outcome: $script:ReparoAutomationOutcome (exit=$exitCode)."
+        if ($script:ReparoAutomationOutcome -eq 'maintenance-failed') { throw 'Child summary reports maintenance failures despite its exit code.' }
     }
     finally {
         if ($stageRoot -and (Test-Path -LiteralPath $stageRoot)) {
@@ -114,6 +142,7 @@ $ErrorActionPreference = 'Stop'
 }
 
 function Publish-ReparoNinjaField {
+    $script:ReparoOperation = 'Ninja custom-field publication'
     $healthPath = Join-Path $InstallRoot 'winget-health.json'
     $health = $null
     $status = 'UNKNOWN'
@@ -536,10 +565,14 @@ try {
     }
 
     Write-Host ''
-    Write-Host '=== Reparo automation completed successfully ==='
+    Write-Host "=== Reparo automation outcome: $script:ReparoAutomationOutcome ==="
+    if ($script:ReparoAutomationOutcome -in @('blocked-no-work','unverified-maintenance-receipt')) {
+        Write-Warning 'Automation did not prove runnable maintenance; review operation diagnostics and execution identity.'
+        exit 2
+    }
     exit 0
 }
 catch {
-    Write-Error ('Reparo automation failed: {0}' -f $_.Exception.Message)
+    Write-Error ('Reparo automation failed during {0}: {1} (type={2}; error-id={3})' -f $script:ReparoOperation, $_.Exception.Message, $_.Exception.GetType().FullName, $_.FullyQualifiedErrorId)
     exit 1
 }

@@ -6,10 +6,10 @@ set -u
 umask 077
 
 # Native and Windows runners share one Reparo release number and version flavor.
-REPARO_LINUX_VERSION='1.4.0.0'
-REPARO_VERSION_QUOTE='All we have to decide is what to do with the time that is given us.'
-REPARO_VERSION_SOURCE='The Fellowship of the Ring by J. R. R. Tolkien'
-REPARO_VERSION_ART='  /\  GANDALF: a staff against unbounded waits and false victories'
+REPARO_LINUX_VERSION='1.4.1.0'
+REPARO_VERSION_QUOTE="DON'T PANIC"
+REPARO_VERSION_SOURCE="The Hitchhiker's Guide to the Galaxy by Douglas Adams"
+REPARO_VERSION_ART='  [ GUIDE ] schedules anchored; reboot decisions remain human'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
@@ -31,6 +31,8 @@ Usage:
   reparo [--update] [--preview] [--force] [--include SECTION ...]
   reparo --new | --install | --status | --kill | --tail [--tail-lines COUNT]
   reparo --task daily 6am | --task hourly 12hr
+  reparo --task 'weekdays at 5am,5pm' --task-name work --force --preview
+  reparo --task --task-name work --task-action show
   reparo --version | --help
 
 Modes:
@@ -47,11 +49,15 @@ Modes:
   --tail                   Follow the newest Reparo Linux log.
   --tail-lines COUNT       Print this many lines before following a log. Default: 120.
   --new / --install        Download and run the native Linux installer.
-  --task DAILY TIME         Create/update this user's cron entry for `reparo --update`
-                            every day at TIME (for example `6am` or `18:30`).
-  --task HOURLY INTERVAL    Create/update this user's cron entry at a whole-hour
-                            interval (for example `1hr` or `12hr`). Add --force to
-                            schedule the full developer-tool pass instead.
+  --task RECURRENCE         Named current-user cron schedule: daily, selected days,
+                            weekdays/weekends, monthly dates and multiple times.
+                            Legacy hourly Nhr is a midnight-reset cron pattern.
+                            Anchored every-N, ordinal and last-day calendars are
+                            intentionally unsupported, not approximated.
+  --task-name NAME          Owned schedule name (default: default).
+  --task-action ACTION      create/list/show/enable/disable/remove.
+  --task-replace            Explicitly replace an existing owned name.
+                            --preview makes no change; preserve Force/Include.
   --version                Show the shared Reparo release identity.
   --help                   Show this help.
 
@@ -85,7 +91,20 @@ ensure_log_root() {
 }
 
 log() {
-    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG_FILE"
+    stamp=$(date '+%Y-%m-%d %H:%M:%S')
+    printf '%s %s\n' "$stamp" "$*" >>"$LOG_FILE"
+    if [ -t 1 ] && [ "${NO_COLOR+x}" != x ] && [ "${TERM:-}" != dumb ]; then
+        case "$*" in
+            '[STEP] '*|'[CMD] '*|'[DRY-RUN] '*|'[SKIP] '*|'[WARN] '*|'[DONE] '*|'[FAIL] '*|'[ERROR] '*)
+                message=$*; prefix=${message%% *}; rest=${message#* }; label=${rest%%:*}; detail=${rest#"$label"}
+                color=33
+                case "$prefix" in '[FAIL]'|'[ERROR]') color=31 ;; '[DONE]') color=32 ;; esac
+                printf '%s \033[%sm%s\033[0m \033[31m%s\033[0m%s\n' "$stamp" "$color" "$prefix" "$label" "$detail" ;;
+            *) printf '%s %s\n' "$stamp" "$*" ;;
+        esac
+    else
+        printf '%s %s\n' "$stamp" "$*"
+    fi
 }
 
 syslog_value() {
@@ -155,47 +174,95 @@ run_native_installer() {
     return "$status"
 }
 
+quote_shell() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+resolve_cron_recurrence() {
+    printf '%s\n' "$TASK_TEXT" | awk '
+    function fail(message) { print message > "/dev/stderr"; exit 2 }
+    {
+        text=tolower($0); gsub(/,/, " ", text)
+        if (text ~ /[^a-z0-9: ]/) fail("Unsafe recurrence characters")
+        if (text ~ /^hourly /) {
+            n=split(text,w," "); h=w[2]; sub(/hr$/, "",h)
+            if (h !~ /^[0-9]+$/ || h<1 || h>23 || n!=2) fail("Hourly needs 1hr through 23hr")
+            print "0 */" h " * * *"; exit
+        }
+        if (text ~ /(^| )(first|second|third|fourth|last|every)( |$)/) fail("Anchored intervals/ordinal/last-day recurrence is Windows-only; cron must not approximate it")
+        day["sunday"]=0; day["monday"]=1; day["tuesday"]=2; day["wednesday"]=3; day["thursday"]=4; day["friday"]=5; day["saturday"]=6
+        n=split(text,w,/ +/); dow=""; dom=""; count=0
+        for(i=1;i<=n;i++) {
+            word=w[i]; if(word=="" || word=="at" || word=="and" || word=="daily" || word=="weekly" || word=="monthly") continue
+            if(word=="weekdays") { dow="1,2,3,4,5"; continue }
+            if(word=="weekends") { dow="0,6"; continue }
+            if(word ~ /am$|pm$|:/) {
+                meridian=""; if(word ~ /am$|pm$/) { meridian=substr(word,length(word)-1); sub(/am$|pm$/, "",word) }
+                if((meridian=="" && word !~ /^[0-9][0-9]?:[0-9][0-9]$/) || (meridian!="" && word !~ /^[0-9][0-9]?(:[0-9][0-9])?$/)) fail("Invalid clock time")
+                split(word,t,":"); hour=t[1]+0; minute=(t[2]==""?0:t[2]+0)
+                if((meridian=="" && word !~ /:/) || hour>23 || minute>59 || (meridian!="" && (hour<1 || hour>12))) fail("Invalid clock range")
+                if(meridian!="") { if(hour==12) hour=0; if(meridian=="pm") hour+=12 }
+                hours[++count]=hour; minutes[count]=minute; continue
+            }
+            sub(/s$/, "",word)
+            if(word in day) { dow=dow (dow==""?"":",") day[word]; continue }
+            sub(/st$|nd$|rd$|th$/, "",word)
+            if(word ~ /^[0-9]+$/ && word>=1 && word<=31) { dom=dom (dom==""?"":",") word; continue }
+            fail("Unknown calendar word: " word)
+        }
+        if(count==0 || (dom!="" && dow!="")) fail("Missing time or mixed month/day recurrence")
+        if(dom=="") dom="*"; if(dow=="") dow="*"
+        for(i=1;i<=count;i++) print minutes[i] " " hours[i] " " dom " * " dow
+    }'
+}
+
 configure_persistent_task() {
-    command_exists crontab || die 'crontab is required to create a Linux Reparo task'
-    [ "$TASK_COUNT" -eq 2 ] || die '--task needs exactly a frequency and time/interval; use --task daily 6am or --task hourly 12hr'
-
-    frequency=$(printf '%s' "$TASK_FREQUENCY" | tr '[:upper:]' '[:lower:]')
-    value=$TASK_VALUE
-    case "$frequency" in
-        daily)
-            clock=$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')
-            case "$clock" in
-                12am) cron_hour=0; cron_minute=0 ;;
-                12pm) cron_hour=12; cron_minute=0 ;;
-                [1-9]am|1[0-1]am) cron_hour=${clock%am}; cron_minute=0 ;;
-                [1-9]pm|1[0-1]pm) cron_hour=$(( ${clock%pm} + 12 )); cron_minute=0 ;;
-                [0-1][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9]) cron_hour=${clock%:*}; cron_minute=${clock#*:} ;;
-                *) die '--task daily needs a clock time such as 6am or 18:30' ;;
-            esac
-            cron_schedule="$cron_minute $cron_hour * * *"
-            ;;
-        hourly)
-            hours=${value%hr}
-            case "$value" in *hr) ;; *) die '--task hourly needs a whole-hour interval such as 1hr or 12hr' ;; esac
-            case "$hours" in ''|*[!0-9]*) die '--task hourly interval must be a whole number of hours' ;; esac
-            [ "$hours" -ge 1 ] && [ "$hours" -le 23 ] || die '--task hourly intervals must be from 1hr through 23hr'
-            cron_schedule="0 */$hours * * *"
-            ;;
-        *) die "Unsupported --task frequency: $TASK_FREQUENCY (use daily or hourly)" ;;
+    case "$TASK_NAME" in ''|*[!A-Za-z0-9_-]*) die 'Task name must use letters, digits, underscore or hyphen' ;; esac
+    [ "${#TASK_NAME}" -le 64 ] || die 'Task name too long'
+    marker="# Reparo managed task v2:$TASK_NAME"
+    command_exists crontab || { [ "$PREVIEW" -eq 1 ] && [ "$TASK_ACTION" = create ]; } || die 'crontab is required for task management'
+    existing=$(crontab -l 2>/dev/null || true)
+    owned=$(printf '%s\n' "$existing" | awk -v marker="$marker" 'substr($0,length($0)-length(marker)+1)==marker')
+    case "$TASK_ACTION" in
+        list) printf '%s\n' "$existing" | awk '/# Reparo managed task v2:[A-Za-z0-9_-]+$/'; return ;;
+        show) [ -n "$owned" ] || die 'Owned task does not exist'; printf '%s\n' "$owned"; return ;;
+        create|enable|disable|remove) ;;
+        *) die 'Task action must be create/list/show/enable/disable/remove' ;;
     esac
-
-    runner=$0
-    case "$runner" in /*) ;; *) runner=$(command -v reparo 2>/dev/null || printf '%s' "$runner") ;; esac
-    case "$runner" in /*) ;; *) die 'Cannot determine an absolute reparo path for cron; run the installed reparo command' ;; esac
-    scheduled_action='--update'
-    [ "$FORCE" -eq 1 ] && scheduled_action='--force'
-    marker='# Reparo managed task'
+    if [ "$TASK_ACTION" = create ]; then
+        schedules=$(resolve_cron_recurrence) || die 'Invalid/unsupported recurrence'
+        runner=$0
+        case "$runner" in /*) ;; *) die 'Use an absolute runtime path for cron' ;; esac
+        # Cron interprets percent and newlines before invoking a shell, even in quotes.
+        case "$runner$STATE_ROOT$INCLUDE" in *%*|*'
+'*) die 'Cron paths/arguments cannot contain percent or newline' ;; esac
+        action='--update'; [ "$FORCE" -eq 1 ] && action='--force'
+        if [ -n "$INCLUDE" ]; then
+            case "$INCLUDE" in *[!A-Za-z0-9_\|.-]*) die 'Scheduled section names must be plain supported section tokens' ;; esac
+            action="$action --include"
+            for section in $(printf '%s' "$INCLUDE" | tr '|' ' '); do action="$action $(quote_shell "$section")"; done
+        fi
+        lock="$STATE_ROOT/task-$TASK_NAME.lock"
+        worker="flock -n $(quote_shell "$lock") sh $(quote_shell "$runner") $action"
+        printf '%s\n' "Task: $TASK_NAME | user: $(id -un) | local cron timezone | POWER: no reboot | overlap: flock IgnoreNew | missed: not replayed" "Command: $worker" "$schedules"
+        if [ "$PREVIEW" -eq 1 ]; then printf '%s\n' 'Preview only; no crontab changed'; return; fi
+        [ -z "$owned" ] || [ "$TASK_REPLACE" -eq 1 ] || die 'Task exists; use --task-replace explicitly'
+        command_exists flock || die 'flock is required to protect overlapping scheduled runs'
+        mkdir -p "$STATE_ROOT" || die 'Cannot create task lock directory'
+    else
+        [ -n "$owned" ] || die 'Owned task does not exist'
+        if [ "$PREVIEW" -eq 1 ]; then printf '%s\n' "Preview: $TASK_ACTION $TASK_NAME; no crontab changed"; return; fi
+    fi
     temp_crontab=$(mktemp "${TMPDIR:-/tmp}/reparo-crontab.XXXXXX") || die 'Cannot create temporary crontab'
-    (crontab -l 2>/dev/null || true) | grep -F -v "$marker" >"$temp_crontab" || true
-    printf '%s %s %s %s\n' "$cron_schedule" "$runner" "$scheduled_action" "$marker" >>"$temp_crontab"
+    printf '%s\n' "$existing" | awk -v marker="$marker" 'substr($0,length($0)-length(marker)+1)!=marker' >"$temp_crontab"
+    case "$TASK_ACTION" in
+        create) printf '%s\n' "$schedules" | while IFS= read -r schedule; do printf '%s %s %s\n' "$schedule" "$worker" "$marker"; done >>"$temp_crontab" ;;
+        disable) printf '%s\n' "$owned" | sed '/^# DISABLED /!s/^/# DISABLED /' >>"$temp_crontab" ;;
+        enable) printf '%s\n' "$owned" | sed 's/^# DISABLED //' >>"$temp_crontab" ;;
+    esac
+    current=$(crontab -l 2>/dev/null || true)
+    [ "$current" = "$existing" ] || { rm -f "$temp_crontab"; die 'Crontab changed concurrently; refusing to overwrite it'; }
     crontab "$temp_crontab" || { rm -f "$temp_crontab"; die 'Could not install the Reparo crontab entry'; }
     rm -f "$temp_crontab"
-    printf '%s\n' "Created/updated user cron task: $cron_schedule $runner $scheduled_action"
+    printf '%s\n' "Task $TASK_ACTION complete: $TASK_NAME (unrelated and legacy schedules preserved)"
 }
 
 normalize_section() {
@@ -547,6 +614,9 @@ parse_args() {
     while [ "$#" -gt 0 ]; do
         original_option=$1
         option=$(normalize_option "$original_option")
+        if [ "$ACTION" = task ]; then
+            case "$option" in new|n|install|i|status|s|kill|k|tail|t|log|version|v|help|h) die 'Task cannot schedule lifecycle or utility modes' ;; esac
+        fi
         case "$option" in
             update|u) ;;
             force|f) FORCE=1 ;;
@@ -557,11 +627,11 @@ parse_args() {
             version|v) ACTION=version ;;
             new|n|install|i) ACTION=install ;;
             task)
-                ACTION=task
-                shift; [ "$#" -gt 0 ] || die '--task needs a frequency'
-                TASK_FREQUENCY=$1; TASK_COUNT=1
-                shift; [ "$#" -gt 0 ] || die '--task needs a time or interval'
-                TASK_VALUE=$1; TASK_COUNT=2 ;;
+                [ "$ACTION" = update ] || die 'Task cannot be combined with lifecycle/utility actions'
+                ACTION=task ;;
+            task-name|taskname) shift; [ "$#" -gt 0 ] || die '--task-name needs a name'; TASK_NAME=$1; TASK_CONTROLS=1 ;;
+            task-action|taskaction) shift; [ "$#" -gt 0 ] || die '--task-action needs an action'; TASK_ACTION=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]'); TASK_CONTROLS=1 ;;
+            task-replace|taskreplace) TASK_REPLACE=1; TASK_CONTROLS=1 ;;
             help|h) ACTION=help ;;
             tail-lines|taillines|tl)
                 shift; [ "$#" -gt 0 ] || die '--tail-lines needs a positive number'
@@ -574,6 +644,10 @@ parse_args() {
                 done
                 continue ;;
             *)
+                if [ "$ACTION" = task ]; then
+                    case "$original_option" in -*) die "Unsupported scheduling option: $original_option" ;; esac
+                    TASK_TEXT="${TASK_TEXT}${TASK_TEXT:+ }$original_option"; shift; continue
+                fi
                 if windows_only_option "$option"; then
                     die "$original_option is currently Windows-only; Linux does not pretend otherwise"
                 fi
@@ -584,12 +658,15 @@ parse_args() {
     done
     case "$TAIL_LINES" in ''|*[!0-9]*) die '--tail-lines must be a positive integer' ;; esac
     [ "$TAIL_LINES" -gt 0 ] || die '--tail-lines must be greater than zero'
+    [ "$TASK_CONTROLS" -eq 0 ] || [ "$ACTION" = task ] || die 'Task controls require --task; refusing accidental maintenance'
 }
 
 ACTION=update
-TASK_FREQUENCY=''
-TASK_VALUE=''
-TASK_COUNT=0
+TASK_TEXT=''
+TASK_NAME=default
+TASK_ACTION=create
+TASK_REPLACE=0
+TASK_CONTROLS=0
 parse_args "$@"
 build_protected_processes
 case "$ACTION" in
@@ -599,6 +676,7 @@ case "$ACTION" in
         printf '%s\n' "Runtime: $0"
         printf '  "%s"\n' "$REPARO_VERSION_QUOTE"
         printf '  - %s\n' "$REPARO_VERSION_SOURCE"
+        printf '%s\n' "$REPARO_VERSION_ART"
         exit 0
         ;;
     install) run_native_installer; exit $? ;;
