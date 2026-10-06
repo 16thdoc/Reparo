@@ -9,12 +9,24 @@ printf '%s\n' '7 7 * * * unrelated-command' '8 8 * * * old-command # Reparo mana
 cp "$FIXTURE_CRON" "$fixture/original"
 cat >"$fixture/bin/crontab" <<'EOF'
 #!/usr/bin/env sh
-if [ "${1:-}" = -l ]; then cat "$FIXTURE_CRON"; else cp "$1" "$FIXTURE_CRON"; fi
+if [ "${1:-}" = -l ]; then
+    if [ "${FIXTURE_CRON_READ_FAILURE:-0}" = 1 ]; then printf '%s\n' 'permission denied reading crontab' >&2; exit 2; fi
+    cat "$FIXTURE_CRON"
+else cp "$1" "$FIXTURE_CRON"; fi
 EOF
 chmod +x "$fixture/bin/crontab"
 export PATH="$fixture/bin:$PATH" XDG_STATE_HOME="$fixture/state" NO_COLOR=1
 runtime="$repo/linux/reparo-linux"
 sh "$runtime" --task 'weekdays at 5am,5pm' --preview >"$fixture/preview"
+cmp "$FIXTURE_CRON" "$fixture/original"
+if FIXTURE_CRON_READ_FAILURE=1 sh "$runtime" --task daily 6am --task-name readfailure; then echo 'Read failure treated as empty' >&2; exit 1; fi
+cmp "$FIXTURE_CRON" "$fixture/original"
+mkdir -p "$XDG_STATE_HOME/reparo"
+(
+    exec 9>"$XDG_STATE_HOME/reparo/task-management.lock"
+    flock -n 9
+    if sh "$runtime" --task daily 6am --task-name locked; then echo 'Concurrent task-manager lock ignored' >&2; exit 1; fi
+)
 cmp "$FIXTURE_CRON" "$fixture/original"
 grep -q '0 5 \* \* 1,2,3,4,5' "$fixture/preview"
 sh "$runtime" --task '15th at 5am' --task-name fixture --force --include Apt Npm

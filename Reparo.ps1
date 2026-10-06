@@ -150,7 +150,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.4.1.0'
+$script:ReparoVersion = '1.4.1.1'
 $script:ReparoBoundParameters = $PSBoundParameters
 $script:ReparoTaskBlockedParameters = @('Time','New','Latest','Install','Ninja','Status','Tail','Kill','Sweep','DeleteStale','Search','AddVersionLock','ListVersionLocks','CheckApp','LockApp','MigrateChocoToWinget','FinalizeChocolateyRemoval','Syslog','SkipNinjaPublish','SourceUrl','NoBackup')
 if (-not $Task -and @('TaskName','TaskAction','TaskStart','TaskReplace' | Where-Object { $PSBoundParameters.ContainsKey($_) }).Count -gt 0) { throw 'Task controls require -Task; refusing an accidental maintenance run.' }
@@ -322,6 +322,7 @@ function Get-ReparoVersionFlavor {
         '1.3.4.1' = [pscustomobject]@{ Quote = 'Never tell me the odds!'; Source = 'The Empire Strikes Back by Leigh Brackett and Lawrence Kasdan'; Art = '  ODDS: signature checks online before the feature-update jump' }
         '1.4.0.0' = [pscustomobject]@{ Quote = 'All we have to decide is what to do with the time that is given us.'; Source = 'The Fellowship of the Ring by J. R. R. Tolkien'; Art = '  /\  GANDALF: a staff against unbounded waits and false victories' }
         '1.4.1.0' = [pscustomobject]@{ Quote = 'DON''T PANIC'; Source = 'The Hitchhiker''s Guide to the Galaxy by Douglas Adams'; Art = '  [ GUIDE ] schedules anchored; reboot decisions remain human' }
+        '1.4.1.1' = [pscustomobject]@{ Quote = 'Engage.'; Source = 'Star Trek: The Next Generation, created by Gene Roddenberry'; Art = '  [ ENTERPRISE ] unreadable cron state denied overwrite clearance' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }

@@ -6,10 +6,10 @@ set -u
 umask 077
 
 # Native and Windows runners share one Reparo release number and version flavor.
-REPARO_LINUX_VERSION='1.4.1.0'
-REPARO_VERSION_QUOTE="DON'T PANIC"
-REPARO_VERSION_SOURCE="The Hitchhiker's Guide to the Galaxy by Douglas Adams"
-REPARO_VERSION_ART='  [ GUIDE ] schedules anchored; reboot decisions remain human'
+REPARO_LINUX_VERSION='1.4.1.1'
+REPARO_VERSION_QUOTE='Engage.'
+REPARO_VERSION_SOURCE='Star Trek: The Next Generation, created by Gene Roddenberry'
+REPARO_VERSION_ART='  [ ENTERPRISE ] unreadable cron state denied overwrite clearance'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
@@ -214,12 +214,39 @@ resolve_cron_recurrence() {
     }'
 }
 
+read_crontab_state() {
+    errors=$(mktemp "${TMPDIR:-/tmp}/reparo-crontab-read.XXXXXX") || return 1
+    if state=$(LC_ALL=C crontab -l 2>"$errors"); then
+        rm -f "$errors"
+        printf '%s' "$state"
+        return 0
+    else
+        read_status=$?
+    fi
+    if [ "$read_status" -eq 1 ] && [ "$(wc -l <"$errors")" -eq 1 ] && grep -Eq '^(no crontab for|crontab: no crontab for) ' "$errors"; then
+        rm -f "$errors"
+        return 0
+    fi
+    rm -f "$errors"
+    printf '%s\n' 'Cannot read existing crontab; refusing to treat an access/tool failure as empty.' >&2
+    return 1
+}
+
 configure_persistent_task() {
     case "$TASK_NAME" in ''|*[!A-Za-z0-9_-]*) die 'Task name must use letters, digits, underscore or hyphen' ;; esac
     [ "${#TASK_NAME}" -le 64 ] || die 'Task name too long'
     marker="# Reparo managed task v2:$TASK_NAME"
     command_exists crontab || { [ "$PREVIEW" -eq 1 ] && [ "$TASK_ACTION" = create ]; } || die 'crontab is required for task management'
-    existing=$(crontab -l 2>/dev/null || true)
+    case "$TASK_ACTION" in
+        create|enable|disable|remove)
+            if [ "$PREVIEW" -eq 0 ]; then
+                command_exists flock || die 'flock is required for serialized task management'
+                mkdir -p "$STATE_ROOT" || die 'Cannot create local task state directory'
+                exec 9>"$STATE_ROOT/task-management.lock"
+                flock -n 9 || die 'Another Reparo task manager owns the crontab; no changes made'
+            fi ;;
+    esac
+    if command_exists crontab; then existing=$(read_crontab_state) || die 'Existing crontab is unverified; no changes made'; else existing=''; fi
     owned=$(printf '%s\n' "$existing" | awk -v marker="$marker" 'substr($0,length($0)-length(marker)+1)==marker')
     case "$TASK_ACTION" in
         list) printf '%s\n' "$existing" | awk '/# Reparo managed task v2:[A-Za-z0-9_-]+$/'; return ;;
@@ -252,13 +279,17 @@ configure_persistent_task() {
         if [ "$PREVIEW" -eq 1 ]; then printf '%s\n' "Preview: $TASK_ACTION $TASK_NAME; no crontab changed"; return; fi
     fi
     temp_crontab=$(mktemp "${TMPDIR:-/tmp}/reparo-crontab.XXXXXX") || die 'Cannot create temporary crontab'
-    printf '%s\n' "$existing" | awk -v marker="$marker" 'substr($0,length($0)-length(marker)+1)!=marker' >"$temp_crontab"
+    if [ -n "$existing" ]; then
+        printf '%s\n' "$existing" | awk -v marker="$marker" 'substr($0,length($0)-length(marker)+1)!=marker' >"$temp_crontab"
+    else
+        : >"$temp_crontab"
+    fi
     case "$TASK_ACTION" in
         create) printf '%s\n' "$schedules" | while IFS= read -r schedule; do printf '%s %s %s\n' "$schedule" "$worker" "$marker"; done >>"$temp_crontab" ;;
         disable) printf '%s\n' "$owned" | sed '/^# DISABLED /!s/^/# DISABLED /' >>"$temp_crontab" ;;
         enable) printf '%s\n' "$owned" | sed 's/^# DISABLED //' >>"$temp_crontab" ;;
     esac
-    current=$(crontab -l 2>/dev/null || true)
+    current=$(read_crontab_state) || { rm -f "$temp_crontab"; die 'Crontab recheck failed; no changes made'; }
     [ "$current" = "$existing" ] || { rm -f "$temp_crontab"; die 'Crontab changed concurrently; refusing to overwrite it'; }
     crontab "$temp_crontab" || { rm -f "$temp_crontab"; die 'Could not install the Reparo crontab entry'; }
     rm -f "$temp_crontab"

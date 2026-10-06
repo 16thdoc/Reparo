@@ -603,6 +603,12 @@ Management is limited to root-folder `Reparo-Managed-<name>` tasks bearing the s
 
 Overlap guards apply to the **same named task**, not a global fleet/host lock. Different names, legacy schedules, manual commands and RMM runs can still overlap; coordinate those maintenance windows instead of assuming `IgnoreNew` or a per-name flock serializes unrelated jobs.
 
+As of 1.4.1.1, native management fails closed on crontab access/tool errors; only
+the explicit C-locale “no crontab for” result means empty. Reparo task-manager
+mutations share a nonblocking lock and recheck the original snapshot before writing.
+This serializes Reparo writers and detects observed external changes; the external
+crontab CLI does not provide atomic compare-and-swap against arbitrary other writers.
+
 CLI legacy spellings are retained, but the PowerShell parameter API deliberately
 changes `Task` from a string array to a selector switch so flags can precede recurrence
 words. Script callers that used `@{Task=@('Daily','6am')}` must instead use
