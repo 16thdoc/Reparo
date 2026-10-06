@@ -144,7 +144,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.3.4.1'
+$script:ReparoVersion = '1.4.0.0'
 $script:ReparoBoundParameters = $PSBoundParameters
 
 if ($ForceReboot -and $ForceShutdown) {
@@ -307,6 +307,7 @@ function Get-ReparoVersionFlavor {
         '1.3.3.9' = [pscustomobject]@{ Quote = 'The night is dark and full of terrors.'; Source = 'A Clash of Kings by George R.R. Martin'; Art = '  RED PRIESTESS: wrong-edition modules denied resurrection' }
         '1.3.4.0' = [pscustomobject]@{ Quote = 'The Wheel weaves as the Wheel wills.'; Source = 'The Eye of the World by Robert Jordan'; Art = '  WHEEL: feature releases pulled through the guarded upgrade gate' }
         '1.3.4.1' = [pscustomobject]@{ Quote = 'Never tell me the odds!'; Source = 'The Empire Strikes Back by Leigh Brackett and Lawrence Kasdan'; Art = '  ODDS: signature checks online before the feature-update jump' }
+        '1.4.0.0' = [pscustomobject]@{ Quote = 'All we have to decide is what to do with the time that is given us.'; Source = 'The Fellowship of the Ring by J. R. R. Tolkien'; Art = '  /\  GANDALF: a staff against unbounded waits and false victories' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -630,10 +631,10 @@ Modes:
   -Ninja               Install the reviewed manifest-pinned release transactionally and publish
                          the installed version plus saved WinGet health to Ninja's Reparo field.
   -FU,-FeatureUpdate,-11,-Win11
-                       Run Microsoft's Windows 11 Installation Assistant to move Windows 10
-                       or Windows 11 to the latest applicable Windows 11 feature release.
-                       Requires elevation. Reparo suppresses automatic reboot unless
-                       -AllowReboot is supplied. Included in -Force, excluded from -Update.
+                       Explicit feature-update request; currently skips safely with guidance.
+                       Assistant automation is unverified on Windows 10 and Windows 11.
+                       Use Settings > Windows Update for an offered Download & install action.
+                       Excluded from -Force and -Update; no staging or reboot is attempted.
    -7,-PowerShell7      Run only the machine-wide PowerShell 7 MSI section. This is safe
                         to invoke from Windows PowerShell 5.1; Reparo does not replace its host.
   -7Zip,-7z             Install 7-Zip through winget when missing, or update it when present.
@@ -811,7 +812,6 @@ $linuxForceSections = @($linuxPackageSections + $linuxAppSections + @(
 
 $windowsForceSections = @(
     'WindowsUpdate'
-    'WindowsFeatureUpdate'
     'Winget'
     'Winget(msstore)'
     'Choco'
@@ -3312,73 +3312,19 @@ function Invoke-ReparoWindowsFeatureUpdate {
         return
     }
 
-    $assistantUrl = 'https://go.microsoft.com/fwlink/?linkid=2171764'
-    $cacheRoot = Join-Path $InstallRoot 'Cache'
-    $assistantPath = Join-Path $cacheRoot 'Windows11InstallationAssistant.exe'
-    $upgradeLogRoot = Join-Path $LogRoot 'WindowsFeatureUpdate'
-
-    $assistantArguments = @('/QuietInstall', '/SkipEULA', '/Auto', 'Upgrade', '/NoRestartUI', '/CopyLogs', $upgradeLogRoot)
-    if (-not $AllowReboot) {
-        $assistantArguments += '/NoReboot'
+    # Process exit success is not evidence of offer discovery or upgrade staging.
+    # Neither existing Windows 11 seeker offers nor Windows 10 upgrades have a
+    # verified unattended transport. Retain the CLI, but perform no side effects.
+    $reason = if ($release.BuildNumber -ge 22000) {
+        'Windows 11 seeker-offer automation is unsupported; Assistant transport is unverified'
     }
-
-    $escapedAssistantPath = $assistantPath -replace "'", "''"
-    $assistantArgumentLiteral = '@({0})' -f ((@($assistantArguments | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))
-    $command = "`$p = '$escapedAssistantPath'; `$a = $assistantArgumentLiteral; `$proc = Start-Process -FilePath `$p -ArgumentList `$a -Wait -PassThru; exit `$proc.ExitCode"
-
-    Write-ReparoLog ("[INFO] Windows 11 Installation Assistant URL: {0}" -f $assistantUrl)
-    Write-ReparoLog ("[INFO] Windows feature-update reboot handling: {0}." -f $(if ($AllowReboot) { 'AllowReboot requested; automatic reboot permitted' } else { 'defaulting to /NoReboot' }))
-    Write-ReparoLog ("[CMD] {0}" -f $command)
-
-    if ($Preview) {
-        Write-ReparoLog ("[DRY-RUN] Download {0} to {1}" -f $assistantUrl, $assistantPath)
-        Write-ReparoLog ("[DRY-RUN] {0}" -f $command)
-        Write-Skip 'WindowsFeatureUpdate (preview only)'
-        Add-ReparoSummaryRecord -Bucket Skipped -Software 'WindowsFeatureUpdate' -CurrentVersion $release.Version -Version 'latest applicable Windows 11 release' -Method 'Windows11InstallationAssistant' -Reason 'preview only'
-        return
+    else {
+        'Windows 10 to Windows 11 automation is unverified; compatibility and transport require a separate pilot'
     }
-
-    if (-not (Test-Admin)) {
-        Write-Skip 'WindowsFeatureUpdate requested but shell is not elevated; skipping.'
-        Write-ReparoLog '[SKIP] WindowsFeatureUpdate requested but shell is not elevated.'
-        Add-ReparoSummaryRecord -Bucket Skipped -Software 'WindowsFeatureUpdate' -CurrentVersion $release.Version -Version 'latest applicable Windows 11 release' -Method 'Windows11InstallationAssistant' -Reason 'shell is not elevated'
-        return
-    }
-
-    try {
-        if (-not (Test-Path -LiteralPath $cacheRoot)) {
-            New-Item -ItemType Directory -Force -Path $cacheRoot | Out-Null
-        }
-
-        if (-not (Test-Path -LiteralPath $upgradeLogRoot)) {
-            New-Item -ItemType Directory -Force -Path $upgradeLogRoot | Out-Null
-        }
-
-        Write-ReparoLog ("[ACTION] Downloading Windows 11 Installation Assistant to {0}" -f $assistantPath)
-        Invoke-WebRequest -Uri $assistantUrl -OutFile $assistantPath -UseBasicParsing -ErrorAction Stop
-
-        Import-ReparoBootstrapModule -Name 'Microsoft.PowerShell.Security'
-        $signature = Get-AuthenticodeSignature -FilePath $assistantPath -ErrorAction Stop
-        if ($signature.Status -ne 'Valid' -or
-            -not $signature.SignerCertificate -or
-            $signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)') {
-            $signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '<none>' }
-            throw "Windows 11 Installation Assistant signature is not a valid Microsoft Authenticode signature: status $($signature.Status), signer $signer."
-        }
-        Write-ReparoLog ("[CHECK] Windows 11 Installation Assistant signature valid: {0}" -f $signature.SignerCertificate.Subject)
-    }
-    catch {
-        Write-Fail "WindowsFeatureUpdate preparation failed: $($_.Exception.Message)"
-        Write-ReparoLog ("[ERROR] WindowsFeatureUpdate preparation failed: {0}" -f $_.Exception.Message)
-        Add-ReparoSummaryRecord -Bucket Failed -Software 'WindowsFeatureUpdate' -CurrentVersion $release.Version -Version 'latest applicable Windows 11 release' -Method 'Windows11InstallationAssistant' -Reason $_.Exception.Message
-        return
-    }
-
-    Add-ReparoSummaryNote 'WindowsFeatureUpdate uses Microsoft Windows 11 Installation Assistant because seeker feature offers are not exposed through the legacy Windows Update Agent API.'
-    if (-not $AllowReboot) {
-        Add-ReparoSummaryNote 'WindowsFeatureUpdate suppressed automatic reboot; restart manually after staging completes when Windows reports one is required.'
-    }
-    Invoke-ReparoCommandStep -Section 'WindowsFeatureUpdate' -PresenceCmd '' -Command $command -TimeoutSeconds $WindowsUpdateTimeoutSeconds
+    Write-Skip "WindowsFeatureUpdate: $reason. No feature update was staged."
+    Write-ReparoLog "[SKIP] WindowsFeatureUpdate: $reason. No download, staging or reboot attempted."
+    Add-ReparoSummaryRecord -Bucket Skipped -Software 'WindowsFeatureUpdate' -CurrentVersion $release.Version -Version '-' -Method 'WindowsFeatureUpdate' -Reason $reason
+    Add-ReparoSummaryNote 'Open Settings > Windows Update, review compatibility and any offered Download & install action, and choose restart timing manually. Reparo has not verified feature-update staging.'
 }
 
 function Get-ReparoInteractiveUserName {
@@ -3853,6 +3799,27 @@ function Get-ReparoWingetBlockedReason {
     }
 
     return $null
+}
+
+function Get-ReparoWingetWorkerFailureReason {
+    param([Parameter(Mandatory)][object]$Result)
+
+    $text = (@($Result.Output) | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+    $code = '0x{0:X8}' -f ([long]$Result.ExitCode -band 0xffffffffL)
+    if (Get-ReparoWingetBlockedReason -Output $Result.Output) {
+        $detail = if ($text -match '(?i)Access is denied') { 'access denied replacing/removing installed files; file-in-use is not established' } else { 'sharing violation / files in use' }
+        return "installed files are in use or access was denied: $detail (worker exit $code)"
+    }
+    if (Get-ReparoWingetNotApplicableReason -Output $Result.Output) {
+        return "not applicable to this system or its current requirements (worker exit $code)"
+    }
+    if (Get-ReparoWingetManualInterventionReason -Output $Result.Output) {
+        return "manual uninstall/reinstall required by winget (worker exit $code)"
+    }
+    if (Get-ReparoWingetNonElevatedSessionReason -Output $Result.Output) {
+        return "non-elevated user session required by installer (worker exit $code)"
+    }
+    return "non-elevated worker exited $code; inspect retained worker output for the operation-specific error"
 }
 
 function Invoke-ReparoWingetRepair {
@@ -5834,6 +5801,7 @@ function Get-ReparoNotUpdatedAction {
 
     $reason = [string]$Row.Reason
     switch -Regex ($reason) {
+        'seeker-offer automation is unsupported|Windows 10 to Windows 11 automation is unverified' { return 'Open Settings > Windows Update; review compatibility and the offered Download & install action. Choose restart timing manually; Reparo did not stage a feature update.' }
         'protected from Reparo-managed updates' { return 'No action required; update it intentionally through its own launcher or installer.' }
         'manual uninstall/reinstall' { return 'Update it manually, or uninstall and reinstall it through Winget.' }
         'files are in use or access was denied' { return 'Close the app or stop its service, then rerun reparo -Include Winget.' }
@@ -6337,7 +6305,7 @@ catch {
     }
 
     Write-Info "Started non-elevated Winget worker for $Id; tailing its status."
-    Write-ReparoLog "[WINGET-NON-ELEVATED] Started Explorer-shell worker for $Id."
+    Write-ReparoLog "[WINGET-NON-ELEVATED] Started Explorer-shell worker for $Id; action=$Action; source=$Source."
     $output = New-Object System.Collections.Generic.List[string]
     $loggedLineCount = 0
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
@@ -6621,7 +6589,8 @@ function Invoke-ReparoCommandStep {
                         Add-ReparoSummaryRecord -Bucket Updated -Software $nonElevatedUpdate[0].Software -CurrentVersion $nonElevatedUpdate[0].CurrentVersion -Version $nonElevatedUpdate[0].Version -Method $nonElevatedUpdate[0].Method -Reason 'updated by non-elevated Explorer-shell worker'
                     }
                     else {
-                        Add-ReparoSummaryRecord -Bucket Skipped -Software $nonElevatedUpdate[0].Software -CurrentVersion $nonElevatedUpdate[0].CurrentVersion -Version $nonElevatedUpdate[0].Version -Method $nonElevatedUpdate[0].Method -Reason ("non-elevated worker exited {0}" -f $nonElevatedResult.ExitCode)
+                        $workerReason = Get-ReparoWingetWorkerFailureReason -Result $nonElevatedResult
+                        Add-ReparoSummaryRecord -Bucket Skipped -Software $nonElevatedUpdate[0].Software -CurrentVersion $nonElevatedUpdate[0].CurrentVersion -Version $nonElevatedUpdate[0].Version -Method $nonElevatedUpdate[0].Method -Reason $workerReason
                     }
                 }
             }
@@ -6642,6 +6611,12 @@ function Invoke-ReparoCommandStep {
                             $updatedWingetPackageIds += $packageId
                             continue
                         }
+                        if (-not (Get-ReparoWingetNotApplicableReason -Output $nonElevatedResult.Output)) {
+                            $workerReason = Get-ReparoWingetWorkerFailureReason -Result $nonElevatedResult
+                            Add-ReparoSummaryRecord -Bucket Skipped -Software $notApplicableUpdate[0].Software -CurrentVersion $notApplicableUpdate[0].CurrentVersion -Version $notApplicableUpdate[0].Version -Method $notApplicableUpdate[0].Method -Reason $workerReason
+                            continue
+                        }
+                        Write-ReparoLog "[WINGET-RETRY] ${packageId}: non-elevated upgrade was not applicable; trying explicit install fallback."
                         $installOverride = Get-ReparoWingetInstallerOverride -Id $packageId
                         $installFallbackResult = Invoke-ReparoNonElevatedWingetUpdate -Id $packageId -Source $notApplicableUpdate[0].Source -Action install -InstallerOverride $installOverride -TimeoutSeconds $WingetTimeoutSeconds
                         if ($installFallbackResult.ExitCode -eq 0) {
@@ -6649,6 +6624,9 @@ function Invoke-ReparoCommandStep {
                             $updatedWingetPackageIds += $packageId
                             continue
                         }
+                        $workerReason = Get-ReparoWingetWorkerFailureReason -Result $installFallbackResult
+                        Add-ReparoSummaryRecord -Bucket Skipped -Software $notApplicableUpdate[0].Software -CurrentVersion $notApplicableUpdate[0].CurrentVersion -Version $notApplicableUpdate[0].Version -Method $notApplicableUpdate[0].Method -Reason $workerReason
+                        continue
                     }
                     Add-ReparoSummaryRecord -Bucket Skipped -Software $notApplicableUpdate[0].Software -CurrentVersion $notApplicableUpdate[0].CurrentVersion -Version $notApplicableUpdate[0].Version -Method $notApplicableUpdate[0].Method -Reason 'not applicable to this system or its current requirements'
                 }

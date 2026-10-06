@@ -219,26 +219,22 @@ if (-not $featureUpdate.Success) { throw 'Could not locate the guarded Windows f
 foreach ($required in @(
     "Test-ReparoSectionSelected 'WindowsFeatureUpdate'",
     "`$release.BuildNumber -lt 10240",
-    "`$assistantArguments += '/NoReboot'",
-    "if (-not `$AllowReboot)",
-    "Import-ReparoBootstrapModule -Name 'Microsoft.PowerShell.Security'",
-    'Get-AuthenticodeSignature -FilePath $assistantPath',
-    "CN=Microsoft Corporation",
-    "Windows 11 Installation Assistant signature valid",
-    "Invoke-ReparoCommandStep -Section 'WindowsFeatureUpdate'",
-    'seeker feature offers are not exposed through the legacy Windows Update Agent API'
+    'Windows 11 seeker-offer automation is unsupported',
+    'Windows 10 to Windows 11 automation is unverified',
+    'No download, staging or reboot attempted.',
+    "Add-ReparoSummaryRecord -Bucket Skipped"
 )) {
     if (-not $featureUpdate.Value.Contains($required)) {
         throw "Windows feature-update safety contract is absent: $required"
     }
 }
-if ($featureUpdate.Value.Contains("`$release.BuildNumber -ge 22000")) {
-    throw 'Windows feature-update lane still skips machines that already run Windows 11.'
+if ($featureUpdate.Value -match 'Start-Process|Invoke-WebRequest|Invoke-ReparoCommandStep') {
+    throw 'Unverified feature-update transport must not execute or download.'
 }
 foreach ($required in @(
     "[Alias('Win11', 'Windows11', 'UpgradeToWindows11', 'Windows11Upgrade', 'FeatureUpdate', 'FU')]",
     "'WindowsFeatureUpdate'",
-    'Included in -Force, excluded from -Update.'
+    'Excluded from -Force and -Update'
 )) {
     if (-not $source.Contains($required)) {
         throw "Windows feature-update command surface is absent: $required"

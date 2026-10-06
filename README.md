@@ -443,7 +443,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Syslog <host[:port]>` | Persistently sets and uses a TCP syslog listener. Default port is `514`, so `-Syslog 192.168.50.31` and `-Syslog 192.168.50.31:514` target the same port. Use `-Syslog off` or `-Syslog disable` to clear the saved target. |
 | `-Status` | Shows whether Reparo is currently running, points at the active log file, and prints the registry evidence behind any pending reboot flag. |
 | `-IgnoreTimeouts` | Disables timeout enforcement even when timeout parameters are supplied. |
-| `-AllowReboot` / `-AllowRestart` | Allows `WindowsUpdate` to pass `-AutoReboot` and permits `WindowsFeatureUpdate` to omit its `/NoReboot` guard. |
+| `-AllowReboot` / `-AllowRestart` | Allows `WindowsUpdate` to pass `-AutoReboot`. The disabled feature-update transport never stages or reboots. |
 | `-Reboot` / `-Restart` / `-R` | Restarts the computer 30 seconds after Reparo completes. |
 | `-Shutdown` / `-S` | Shuts down the computer 30 seconds after Reparo completes. Cannot be combined with `-Reboot`; `-S` is **not** a silent-mode switch. |
 | `-InstallNuGetProvider` | Bootstraps the NuGet provider before PSGallery installs when `true` (default). Set it to `false` only if you want to suppress that bootstrap attempt. |
@@ -532,9 +532,11 @@ Available section names:
 
 ### Windows feature updates
 
-Legacy Windows Update Agent searches do not expose every opt-in seeker offer shown by the Settings app, including some annual Windows 11 releases with a separate **Download & install** button. `WindowsFeatureUpdate` covers that gap with Microsoft's Windows 11 Installation Assistant. It supports Windows 10-to-11 upgrades and Windows 11 feature-release upgrades, validates the downloaded assistant's Microsoft Authenticode signature, preserves Setup logs, and passes `/NoReboot` unless `-AllowReboot` is explicit.
+Legacy Windows Update Agent searches do not expose every opt-in seeker offer shown by the Settings app, including some annual Windows 11 releases with a separate **Download & install** button. As of **1.4.0.0**, `WindowsFeatureUpdate` is excluded from ordinary `-Force` and `-Update`. Explicit `-FU` and `-Include WindowsFeatureUpdate` remain accepted but emit an actionable **SKIPPED** receipt: the standalone Assistant transport is unverified for existing Windows 11 seeker offers and separately unverified for Windows 10-to-11 upgrades. No payload is downloaded, no process is launched, and no feature staging or reboot is attempted, including with `-AllowReboot` or `-Preview`. Use **Settings > Windows Update**, review compatibility and the offered **Download & install** action, and choose restart timing manually. A process exiting successfully is not proof of staging; Reparo does not claim it installed a feature release.
 
-The lane is included in `-Force` but deliberately excluded from the conservative `-Update` mode. The old `-11`, `-Win11`, `-Windows11`, `-UpgradeToWindows11`, and `-Windows11Upgrade` spellings remain aliases.
+Windows-only boundary: native Linux has no Windows feature-update/WinGet lane; its package-manager maintenance selection is unchanged. Windows worker receipts retain actionable access-denied/sharing-violation causes and unsigned hexadecimal exit codes rather than only signed numbers. An access-denied message alone does not prove a service/file lock. Reparo does not automatically stop services or kill apps. Moonlight's applicability fallback is a deliberate non-elevated upgrade followed by install only when that upgrade reports **not applicable**; worker logs now identify action/source explicitly, and other worker failures do not trigger an install retry.
+
+The old `-11`, `-Win11`, `-Windows11`, `-UpgradeToWindows11`, and `-Windows11Upgrade` spellings remain aliases for the same safe skip. An explicit Include can select the lane even alongside `-Force`; ordinary Force never selects it implicitly.
 
 ```powershell
 reparo -Preview -FU
@@ -542,7 +544,7 @@ reparo -FU
 reparo -FU -AllowReboot
 ```
 
-Use an elevated/admin or SYSTEM context and expect a long-running compatibility scan, download, staging pass, and eventual reboot requirement. Without `-AllowReboot`, restart manually after Reparo and Windows report that staging has completed.
+These commands return promptly with the unsupported/unverified receipt, regardless of elevation. They do not perform a compatibility scan or stage an upgrade. Separate explicit end-of-run `-Reboot` / `-Shutdown` commands retain their documented behavior; do not add those flags to a diagnostic request unless you intend that power action.
 
 ### PowerShell 7
 
@@ -772,7 +774,7 @@ For the live `Winget` upgrade path, Reparo now uses `--disable-interactivity`, `
 
 For `WindowsUpdate`, Reparo will try to install `PSWindowsUpdate` from PSGallery first. If that bootstrap fails because the session cannot reach PSGallery or cannot install modules, the section is skipped with a logged reason instead of failing silently.
 
-`WindowsFeatureUpdate` is intentionally separate from `WindowsUpdate`: it handles Settings-only seeker offers through Microsoft's signed Installation Assistant because those offers can be absent from the legacy WUA/PSWindowsUpdate result set.
+`WindowsFeatureUpdate` is intentionally separate from `WindowsUpdate`: Settings-only seeker offers can be absent from the legacy WUA/PSWindowsUpdate result set, but unattended feature staging is currently unsupported. Explicit selection skips safely with manual Settings guidance rather than using the unverified Assistant.
 
 For `Winget`, Reparo now tries a repair/registration path when `winget` is missing. It logs `winget source list` and `winget list --upgrade-available` when you run `-Winget` so you can see what the client can actually discover before the upgrade pass starts.
 

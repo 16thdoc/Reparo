@@ -16,12 +16,20 @@ if ($windowsOutput -notmatch '(?m)^  "(?<Quote>.+)"\r?$') { throw 'Could not rea
 $windowsQuote = $matches.Quote.Trim()
 if ($windowsOutput -notmatch '(?m)^  - (?<Source>.+)\r?$') { throw 'Could not read the Windows Reparo release quote source.' }
 $windowsQuoteSource = $matches.Source.Trim()
+$sourceContent = Get-Content -LiteralPath $windowsSource -Raw
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseInput($sourceContent, [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'Windows release source does not parse.' }
+$flavor = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-ReparoVersionFlavor' }, $true)
+Invoke-Expression $flavor.Extent.Text
+$windowsArt = (Get-ReparoVersionFlavor -Version $windowsVersion).Art
 
 $linuxContent = Get-Content -LiteralPath $linuxSource -Raw
 foreach ($entry in @(
     @{ Name = 'Version'; Pattern = "(?m)^REPARO_LINUX_VERSION='(?<Value>[^']+)'$"; Expected = $windowsVersion },
     @{ Name = 'Quote'; Pattern = '(?m)^REPARO_VERSION_QUOTE=(?<Delimiter>[''"])(?<Value>.+)\k<Delimiter>$'; Expected = $windowsQuote },
-    @{ Name = 'Quote source'; Pattern = '(?m)^REPARO_VERSION_SOURCE=(?<Delimiter>[''"])(?<Value>.+)\k<Delimiter>$'; Expected = $windowsQuoteSource }
+    @{ Name = 'Quote source'; Pattern = '(?m)^REPARO_VERSION_SOURCE=(?<Delimiter>[''"])(?<Value>.+)\k<Delimiter>$'; Expected = $windowsQuoteSource },
+    @{ Name = 'Art'; Pattern = '(?m)^REPARO_VERSION_ART=(?<Delimiter>[''"])(?<Value>.+)\k<Delimiter>$'; Expected = $windowsArt.Trim() }
 )) {
     if ($linuxContent -notmatch $entry.Pattern) { throw "Could not read native Linux Reparo $($entry.Name)." }
     $linuxValue = $matches.Value.Trim()
