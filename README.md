@@ -609,6 +609,13 @@ mutations share a nonblocking lock and recheck the original snapshot before writ
 This serializes Reparo writers and detects observed external changes; the external
 crontab CLI does not provide atomic compare-and-swap against arbitrary other writers.
 
+The 1.4.1.2 native installer uses the same fail-closed read and manager-lock policy
+for its separate self-update entry. It preflights before replacing runtime/shim,
+quotes paths (including spaces/quotes), rejects cron percent/newline hazards,
+verifies runtime release identity and the resulting crontab, and returns nonzero
+for incomplete scheduling instead of printing a successful full installation.
+Reruns replace only the exact self-update marker; unrelated jobs remain intact.
+
 CLI legacy spellings are retained, but the PowerShell parameter API deliberately
 changes `Task` from a string array to a selector switch so flags can precede recurrence
 words. Script callers that used `@{Task=@('Daily','6am')}` must instead use

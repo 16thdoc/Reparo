@@ -26,6 +26,21 @@ for required in curl mktemp install; do
     fi
 done
 
+quote_shell() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+read_crontab_state() {
+    errors=$(mktemp "${TMPDIR:-/tmp}/reparo-install-cron-read.XXXXXX") || return 1
+    if state=$(LC_ALL=C crontab -l 2>"$errors"); then
+        rm -f "$errors"; printf '%s' "$state"; return 0
+    else read_status=$?; fi
+    if [ "$read_status" -eq 1 ] && [ "$(wc -l <"$errors")" -eq 1 ] && grep -Eq '^(no crontab for|crontab: no crontab for) ' "$errors"; then
+        rm -f "$errors"; return 0
+    fi
+    rm -f "$errors"
+    printf '%s\n' 'ERROR: Existing crontab unreadable; self-update installation aborted without overwriting jobs.' >&2
+    return 1
+}
+
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/reparo-install-linux.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 runtime_download="$tmp_dir/reparo-linux"
@@ -34,6 +49,19 @@ install_root="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 runtime_path="$install_root/reparo-linux"
 shim_dir="$HOME/.local/bin"
 shim_path="$shim_dir/reparo"
+
+# Preflight before replacing runtime/shim: absence is distinct from read failure.
+self_update_existing=''
+if command -v crontab >/dev/null 2>&1; then
+    case "$shim_path" in *%*|*'
+'*) printf '%s\n' 'ERROR: Cron shim paths cannot contain percent or newline.' >&2; exit 1 ;; esac
+    command -v flock >/dev/null 2>&1 || { printf '%s\n' 'ERROR: flock is required for safe self-update scheduling.' >&2; exit 1; }
+    state_root="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
+    install -d -m 700 "$state_root"
+    exec 9>"$state_root/task-management.lock"
+    flock -n 9 || { printf '%s\n' 'ERROR: Another Reparo task manager owns the crontab; install deferred.' >&2; exit 1; }
+    self_update_existing=$(read_crontab_state) || exit 1
+fi
 
 printf '%s\n' '=== Reparo Linux installer ==='
 printf '%s\n' "Source:  $REPARO_URL"
@@ -52,6 +80,9 @@ if [ ! -s "$runtime_download" ] || ! sh -n "$runtime_download"; then
     printf '%s\n' 'ERROR: Downloaded runtime is empty or fails POSIX shell syntax validation.' >&2
     exit 1
 fi
+expected_version=$(sed -n "s/^REPARO_LINUX_VERSION='\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)'$/\1/p" "$runtime_download")
+case "$expected_version" in ''|*'
+'*) printf '%s\n' 'ERROR: Downloaded runtime has no unique four-part release identity.' >&2; exit 1 ;; esac
 
 install -d -m 700 "$install_root"
 mkdir -p "$shim_dir"
@@ -62,7 +93,7 @@ if ! install -m 755 "$runtime_download" "$runtime_path"; then
     printf '%s\n' 'ERROR: Failed to stage the native Reparo runtime.' >&2
     exit 1
 fi
-if ! sh -n "$runtime_path" || ! "$runtime_path" --version >/dev/null 2>&1; then
+if ! sh -n "$runtime_path" || ! version_output=$("$runtime_path" --version 2>/dev/null) || ! printf '%s\n' "$version_output" | grep -Fx "Reparo Linux $expected_version" >/dev/null; then
     if [ -f "$runtime_rollback" ]; then
         cp "$runtime_rollback" "$runtime_path"
         printf '%s\n' "ERROR: Native runtime post-install validation failed; restored previous runtime: $runtime_path" >&2
@@ -77,24 +108,30 @@ if [ -f "$legacy_runtime" ]; then
     rm -f "$legacy_runtime"
     printf '%s\n' "Removed legacy PowerShell runtime: $legacy_runtime"
 fi
-cat >"$shim_path" <<EOF
-#!/usr/bin/env sh
-exec "$runtime_path" "\$@"
-EOF
+printf '#!/usr/bin/env sh\nexec %s "$@"\n' "$(quote_shell "$runtime_path")" >"$shim_path"
 chmod 755 "$shim_path"
 
-# Keep the installed native runner on the reviewed release channel. This mirrors the
-# Windows self-update task, but remains a user crontab entry because Linux does not
-# have a universal machine-wide task scheduler.
+# Keep the native runner updated weekly. It currently follows main, unlike the
+# Windows manifest-pinned release; do not claim immutable native install receipts.
+# A user crontab entry is used because Linux has no universal machine scheduler.
 if command -v crontab >/dev/null 2>&1; then
     self_update_marker='# Reparo self-update task'
     self_update_crontab=$(mktemp "${TMPDIR:-/tmp}/reparo-self-update-crontab.XXXXXX")
-    (crontab -l 2>/dev/null || true) | grep -F -v "$self_update_marker" >"$self_update_crontab" || true
-    printf '%s\n' "0 10 * * 2 \"$shim_path\" --new $self_update_marker" >>"$self_update_crontab"
+    if [ -n "$self_update_existing" ]; then
+        printf '%s\n' "$self_update_existing" | awk -v marker="$self_update_marker" 'substr($0,length($0)-length(marker)+1)!=marker' >"$self_update_crontab"
+    else : >"$self_update_crontab"; fi
+    printf '%s\n' "0 10 * * 2 $(quote_shell "$shim_path") --new $self_update_marker" >>"$self_update_crontab"
+    current=$(read_crontab_state) || { rm -f "$self_update_crontab"; exit 1; }
+    [ "$current" = "$self_update_existing" ] || { rm -f "$self_update_crontab"; printf '%s\n' 'ERROR: Crontab changed concurrently; runtime installed but self-update schedule not replaced.' >&2; exit 1; }
     if crontab "$self_update_crontab"; then
+        registered=$(read_crontab_state) || { rm -f "$self_update_crontab"; exit 1; }
+        expected_crontab=$(cat "$self_update_crontab")
+        [ "$registered" = "$expected_crontab" ] || { rm -f "$self_update_crontab"; printf '%s\n' 'ERROR: Runtime installed, but self-update crontab verification failed.' >&2; exit 1; }
         printf '%s\n' 'Created/updated weekly self-update cron task: Tuesday 10:00 AM (reparo --new).'
     else
-        printf '%s\n' 'WARNING: Could not create the Reparo weekly self-update cron task.' >&2
+        rm -f "$self_update_crontab"
+        printf '%s\n' 'ERROR: Runtime installed, but weekly self-update registration failed; installation is incomplete.' >&2
+        exit 1
     fi
     rm -f "$self_update_crontab"
 else

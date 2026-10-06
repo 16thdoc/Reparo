@@ -21,7 +21,9 @@ foreach ($required in @(
 
 foreach ($required in @(
     "self_update_marker='# Reparo self-update task'",
-    '0 10 * * 2 \"$shim_path\" --new $self_update_marker',
+    '0 10 * * 2 $(quote_shell "$shim_path") --new $self_update_marker',
+    'read_crontab_state() {',
+    'self_update_existing=$(read_crontab_state) || exit 1',
     'Created/updated weekly self-update cron task: Tuesday 10:00 AM (reparo --new).'
 )) {
     if (-not $linuxInstaller.Contains($required)) {
