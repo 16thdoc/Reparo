@@ -33,6 +33,19 @@ $Update=$false; $WindowsFeatureUpdate=$true
 if (-not (Test-ReparoSectionSelected 'WindowsFeatureUpdate')) { throw 'Explicit switch was lost' }
 $WindowsFeatureUpdate=$false; $Include=@('WindowsFeatureUpdate')
 if (-not (Test-ReparoSectionSelected 'WindowsFeatureUpdate')) { throw 'Explicit Include was lost' }
+$normalization=$ast.Find({ param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and $n.Clauses[0].Item1.Extent.Text -eq '$PowerShell7Only' }, $true)
+if (-not $normalization) { throw 'CLI selection normalization was not found' }
+$PowerShell7Only=$false; $SevenZip=$false; $script:ReparoIsWindows=$true
+foreach ($selection in @('force','force-switch','force-include','update')) {
+    $Force=$selection -like 'force*'; $Update=$selection -eq 'update'
+    $WindowsFeatureUpdate=$selection -eq 'force-switch'
+    $Include=@(if ($selection -eq 'force-switch' -or $selection -eq 'force-include') { 'WindowsFeatureUpdate' })
+    $updateSections=@('WindowsUpdate','Winget'); $Preview=$false
+    Invoke-Expression $normalization.Extent.Text
+    $expected=$selection -eq 'force-switch' -or $selection -eq 'force-include'
+    if ((Test-ReparoSectionSelected 'WindowsFeatureUpdate') -ne $expected) { throw "CLI normalization lost feature selection for $selection" }
+}
+$Force=$false; $Update=$false; $WindowsFeatureUpdate=$false; $Include=@('WindowsFeatureUpdate')
 foreach ($build in @(19045,26300)) {
     foreach ($previewMode in @($false,$true)) {
         foreach ($rebootMode in @($false,$true)) {

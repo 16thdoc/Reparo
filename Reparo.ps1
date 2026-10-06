@@ -883,7 +883,7 @@ elseif ($SevenZip) {
 
     $Include = @('7Zip')
 }
-elseif ($Force) {
+elseif ($Force -and -not ($WindowsFeatureUpdate -or ($Include -contains 'WindowsFeatureUpdate'))) {
     $Preview = $false
     if ($script:ReparoIsWindows) {
         $WindowsUpdate = $true
