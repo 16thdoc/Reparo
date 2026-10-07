@@ -6,10 +6,10 @@ set -u
 umask 077
 
 # Native and Windows runners share one Reparo release number and version flavor.
-REPARO_LINUX_VERSION='1.4.1.3'
-REPARO_VERSION_QUOTE='Trust your feelings.'
-REPARO_VERSION_SOURCE='Star Wars (1977), written and directed by George Lucas'
-REPARO_VERSION_ART='  [ OBI-WAN ] ===[==========> immutable release artifacts verified'
+REPARO_LINUX_VERSION='1.4.2.0'
+REPARO_VERSION_QUOTE='Fear is the mind-killer.'
+REPARO_VERSION_SOURCE='Dune (1965), by Frank Herbert'
+REPARO_VERSION_ART='  [ GOM JABBAR ] ---{ BOX }--- bounded reporting, no hidden commands'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-}"
 REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
 LATEST=0
@@ -155,13 +155,107 @@ windows_only_option() {
     esac
 }
 
+report_native_result() {
+    [ "${REPARO_REPORT_SKIP:-0}" != 1 ] || return 0
+    reporting_root="$STATE_ROOT/reporting"
+    [ -f "$reporting_root/reporting-client.json" ] || return 0
+    case "$reporting_root" in */Proton/*|*/Dropbox/*|*/GitHub/*|*/.git/*) return 0 ;; esac
+    command_exists python3 && command_exists timeout || return 0
+    # Parent argv contains outcome/version facts only, never a credential. All
+    # private file/hash/network work is inside this 25-second owned process group.
+    timeout -k 1 25 python3 - "$reporting_root" "$DATA_ROOT/reparo-linux" "$1" "$2" "$3" "$4" <<'PY' >/dev/null 2>&1 || true
+import datetime, hashlib, json, os, pathlib, re, stat, subprocess, sys, uuid
+try:
+    root, runtime, kind, method, outcome, previous = sys.argv[1:]
+    def private(p, directory=False):
+        at=pathlib.Path(p)
+        while True:
+            if at.is_symlink(): raise ValueError()
+            if at.parent == at: break
+            at=at.parent
+        s=os.stat(p, follow_symlinks=False)
+        if s.st_uid != os.getuid() or stat.S_IMODE(s.st_mode) != (0o700 if directory else 0o600): raise ValueError()
+        if directory and not stat.S_ISDIR(s.st_mode): raise ValueError()
+        if not directory and (not stat.S_ISREG(s.st_mode) or s.st_nlink != 1): raise ValueError()
+    def read_json(p, limit):
+        private(p)
+        with open(p,'rb') as f: raw=f.read(limit+1)
+        if len(raw)>limit: raise ValueError()
+        def unique(pairs):
+            result={}
+            for k,v in pairs:
+                if k in result: raise ValueError()
+                result[k]=v
+            return result
+        return json.loads(raw, object_pairs_hook=unique)
+    def digest(p):
+        h=hashlib.sha256()
+        with open(p,'rb') as f:
+            for b in iter(lambda:f.read(65536),b''): h.update(b)
+        return h.hexdigest().upper()
+    private(root, True)
+    config=read_json(os.path.join(root,'reporting-client.json'),4096)
+    if set(config) != {'enabled','manifestSha256','nodePath','nodeSha256','schema'} or config['schema'] != 'reparo-reporting-client-1': raise ValueError()
+    if config['enabled'] is not True: sys.exit(0)
+    node=config['nodePath']
+    if not isinstance(node,str) or not os.path.isabs(node) or os.path.islink(node): raise ValueError()
+    for field in ['nodeSha256','manifestSha256']:
+        if not isinstance(config[field],str) or not re.fullmatch('[A-F0-9]{64}',config[field]): raise ValueError()
+    if digest(node) != config['nodeSha256']: raise ValueError()
+    package=os.path.join(root,'client')
+    for directory in [package,os.path.join(package,'src'),os.path.join(package,'scripts')]: private(directory,True)
+    manifest_path=os.path.join(package,'client-manifest.json')
+    manifest=read_json(manifest_path,8192)
+    if digest(manifest_path) != config['manifestSha256']: raise ValueError()
+    required={'src/bounded-client.js','src/collector-client.js','src/collector-client-state.js','src/protected-client-files.js','src/receipt-contract.js','scripts/client-report-worker.js','scripts/report-client-cli.js','package.json'}
+    if manifest.get('schema') != 'reparo-client-bundle-prototype-1' or set(manifest['files']) != required: raise ValueError()
+    for name in required:
+        p=os.path.join(package,name); private(p)
+        if digest(p) != manifest['files'][name]: raise ValueError()
+    current=None
+    if os.path.isfile(runtime):
+        with open(runtime,'r',encoding='utf-8') as f: text=f.read(1048576)
+        found=re.findall(r"^REPARO_LINUX_VERSION='([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)'$",text,re.M)
+        if len(found)==1: current=found[0]
+    previous=previous if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+',previous) else None
+    if kind=='lifecycle_result':
+        if outcome=='succeeded' and current is None: outcome='unknown'
+        data={'method':method,'previous_version':previous,'current_version':current,'outcome':outcome,'duration_ms':None,'failure_code':'LIFECYCLE_FAILED' if outcome=='failed' else None}
+    else:
+        # Native managers do batch commands, not verified per-package receipts.
+        # Preserve unknown counts rather than comparing commands with packages.
+        data={'outcome':outcome,'updated':None,'skipped':None,'failed':None,'duration_ms':None}
+    machine=os.uname().machine
+    arch={'x86_64':'x64','aarch64':'arm64','i386':'x86','i686':'x86','armv7l':'arm'}.get(machine,'unknown')
+    template={'event_type':kind,'event_id':str(uuid.uuid4()),'run_id':str(uuid.uuid4()),'client_time':datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z'),
+      'host':{'os_family':'linux','os_version':os.uname().release,'os_build':None,'architecture':arch,'runtime_version':None,'context':'native-root' if os.getuid()==0 else 'native-user'},'data':data}
+    env=dict(os.environ,NODE_OPTIONS='',NODE_TLS_REJECT_UNAUTHORIZED='1')
+    subprocess.run([node,os.path.join(package,'scripts/report-client-cli.js')],input=json.dumps({'enabled':True,'root':root,'storageMode':'user','template':template}).encode(),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=env,check=False)
+except Exception:
+    pass # Never change the caller's installation/maintenance result.
+PY
+    return 0
+}
+
+native_install_finalization() {
+    status=$?
+    [ -z "${bootstrap_dir:-}" ] || rm -rf "$bootstrap_dir"
+    outcome=failed
+    if [ "$status" -eq 0 ]; then
+        if [ "$PREVIEW" -eq 1 ]; then outcome=preview; else outcome=succeeded; fi
+    fi
+    report_native_result lifecycle_result native-installer "$outcome" "${reporting_previous_version:-}"
+    exit "$status"
+}
+
 run_native_installer() {
+    if [ "$PREVIEW" -eq 1 ]; then printf '%s\n' 'Preview: no installer download, runtime replacement or scheduling performed.'; return 0; fi
     for required in curl mktemp; do
         command_exists "$required" || die "$required is required to install or update Reparo Linux"
     done
 
     bootstrap_dir=$(mktemp -d "${TMPDIR:-/tmp}/reparo-linux-bootstrap.XXXXXX") || die 'Cannot create installer workspace'
-    trap 'rm -rf "$bootstrap_dir"' EXIT HUP INT TERM
+    trap native_install_finalization EXIT
     bootstrap_path="$bootstrap_dir/install-reparo-linux.sh"
     release_file="$bootstrap_dir/release.json"
     installer_hash=''
@@ -213,9 +307,9 @@ PY
 
     printf '%s\n' 'Running native Reparo installer...'
     if [ -n "$installer_hash" ]; then
-        if REPARO_URL='' REPARO_RELEASE_FILE="$release_file" sh "$bootstrap_path" --verbose; then status=0; else status=$?; fi
+        if REPARO_REPORT_SKIP=1 REPARO_URL='' REPARO_RELEASE_FILE="$release_file" sh "$bootstrap_path" --verbose; then status=0; else status=$?; fi
     else
-        if sh "$bootstrap_path" --verbose --latest; then status=0; else status=$?; fi
+        if REPARO_REPORT_SKIP=1 sh "$bootstrap_path" --verbose --latest; then status=0; else status=$?; fi
     fi
     rm -rf "$bootstrap_dir"
     return "$status"
@@ -693,7 +787,7 @@ parse_args() {
         original_option=$1
         option=$(normalize_option "$original_option")
         if [ "$ACTION" = task ]; then
-            case "$option" in new|n|install|i|latest|status|s|kill|k|tail|t|log|version|v|help|h) die 'Task cannot schedule lifecycle or utility modes' ;; esac
+            case "$option" in new|n|install|i|latest|report-lifecycle|status|s|kill|k|tail|t|log|version|v|help|h) die 'Task cannot schedule lifecycle or utility modes' ;; esac
         fi
         case "$option" in
             update|u) ;;
@@ -705,6 +799,7 @@ parse_args() {
             version|v) ACTION=version ;;
             new|n|install|i) ACTION=install ;;
             latest) ACTION=install; LATEST=1 ;;
+            report-lifecycle) ACTION=report-lifecycle ;;
             task)
                 [ "$ACTION" = update ] || die 'Task cannot be combined with lifecycle/utility actions'
                 ACTION=task ;;
@@ -747,6 +842,7 @@ TASK_ACTION=create
 TASK_REPLACE=0
 TASK_CONTROLS=0
 parse_args "$@"
+[ "$ACTION" != report-lifecycle ] || [ "$#" -eq 1 ] || die 'Report utility cannot run other operations'
 build_protected_processes
 case "$ACTION" in
     help) usage; exit 0 ;;
@@ -758,7 +854,14 @@ case "$ACTION" in
         printf '%s\n' "$REPARO_VERSION_ART"
         exit 0
         ;;
-    install) run_native_installer; exit $? ;;
+    report-lifecycle)
+        case "${REPARO_REPORT_OUTCOME:-}" in succeeded|failed|unchanged|preview|blocked|unknown) ;; *) die 'Report utility requires a bounded lifecycle outcome' ;; esac
+        report_native_result lifecycle_result native-installer "$REPARO_REPORT_OUTCOME" "${REPARO_REPORT_PREVIOUS_VERSION:-}"
+        exit 0 ;;
+    install)
+        reporting_previous_version=$(sed -n "s/^REPARO_LINUX_VERSION='\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)'$/\1/p" "$DATA_ROOT/reparo-linux" 2>/dev/null || true)
+        trap native_install_finalization EXIT
+        run_native_installer; exit $? ;;
     task) configure_persistent_task; exit $? ;;
     status) show_status; exit 0 ;;
     kill) kill_reparo_processes; exit 0 ;;
@@ -795,3 +898,7 @@ syslog_event notice run_complete -- "$final_state" "force_$FORCE"
 final_log="${LOG_FILE%_RUNNING.log}_$( [ "$PREVIEW" -eq 1 ] && printf PREVIEW || printf COMPLETE ).log"
 mv "$LOG_FILE" "$final_log"
 printf '%s\n' "Final log: $final_log"
+reporting_outcome=unknown
+[ "$RUN_RESULT" != failed ] || reporting_outcome=failed
+[ "$PREVIEW" -eq 0 ] || reporting_outcome=preview
+report_native_result maintenance_summary '' "$reporting_outcome" ''

@@ -4,6 +4,8 @@
 set -eu
 
 umask 077
+DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
 REPARO_URL="${REPARO_URL:-}"
 REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
 latest=0
@@ -46,7 +48,24 @@ read_crontab_state() {
 }
 
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/reparo-install-linux.XXXXXX")
-trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
+reporting_previous_version=$(sed -n "s/^REPARO_LINUX_VERSION='\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)'$/\1/p" "$DATA_ROOT/reparo-linux" 2>/dev/null || true)
+# The validated downloaded runtime contains the same report utility. Use it even
+# if replacement/rollback failed; never execute an unverified downloaded file.
+# Failures before a verified runtime is available cannot run this reporting code.
+installer_finalization() {
+    result=$?
+    if [ "${REPARO_REPORT_SKIP:-0}" != 1 ] && [ "${reporting_runtime_verified:-0}" -eq 1 ]; then
+        reporting_outcome=failed
+        [ "$result" -ne 0 ] || reporting_outcome=succeeded
+        REPARO_REPORT_PREVIOUS_VERSION="$reporting_previous_version" REPARO_REPORT_OUTCOME="$reporting_outcome" sh "$runtime_download" --report-lifecycle >/dev/null 2>&1 || true
+    fi
+    rm -rf "$tmp_dir"
+    exit "$result"
+}
+reporting_runtime_verified=0
+trap installer_finalization EXIT
+trap 'exit 130' INT
+trap 'exit 143' HUP TERM
 runtime_download="$tmp_dir/reparo-linux"
 runtime_rollback="$tmp_dir/reparo-linux.rollback"
 release_version=''
@@ -130,6 +149,7 @@ expected_version=$(sed -n "s/^REPARO_LINUX_VERSION='\([0-9][0-9]*\.[0-9][0-9]*\.
 case "$expected_version" in ''|*'
 '*) printf '%s\n' 'ERROR: Downloaded runtime has no unique four-part release identity.' >&2; exit 1 ;; esac
 [ -z "$release_version" ] || [ "$expected_version" = "$release_version" ] || { printf '%s\n' 'ERROR: Native runtime version does not match release pin.' >&2; exit 1; }
+reporting_runtime_verified=1
 
 install -d -m 700 "$install_root"
 mkdir -p "$shim_dir"

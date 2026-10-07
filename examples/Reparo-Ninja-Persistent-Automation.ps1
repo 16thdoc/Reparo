@@ -402,6 +402,17 @@ function ConvertFrom-ReparoArgumentString {
     return $arguments.ToArray()
 }
 
+$reportingAction = @('new','latest','ninja','winget health + ninja') -contains ([string]$Action).Trim().ToLowerInvariant()
+$previousReportSkip = $env:REPARO_REPORT_SKIP
+$reportingOutcome = 'failed'
+$reportingPreviousVersion = $null
+try {
+    if (Test-Path -LiteralPath $Reparo -PathType Leaf) {
+        $match = [regex]::Match([IO.File]::ReadAllText($Reparo), '(?m)^\$script:ReparoVersion\s*=\s*''(?<v>\d+\.\d+\.\d+\.\d+)''')
+        if ($match.Success) { $reportingPreviousVersion = $match.Groups['v'].Value }
+    }
+} catch {}
+if ($reportingAction) { $env:REPARO_REPORT_SKIP = '1' }
 try {
     if (-not (Test-Path -LiteralPath $Reparo -PathType Leaf)) {
         throw "Reparo is not installed: $Reparo"
@@ -538,6 +549,7 @@ try {
                     break
                 }
             }
+            if ($requiresStaging) { $reportingAction = $true; $env:REPARO_REPORT_SKIP = '1' }
 
             if ($customReparoArguments -icontains '-AllowReboot') {
                 Write-Warning (
@@ -570,9 +582,25 @@ try {
         Write-Warning 'Automation did not prove runnable maintenance; review operation diagnostics and execution identity.'
         exit 2
     }
+    $reportingOutcome = 'succeeded'
     exit 0
 }
 catch {
     Write-Error ('Reparo automation failed during {0}: {1} (type={2}; error-id={3})' -f $script:ReparoOperation, $_.Exception.Message, $_.Exception.GetType().FullName, $_.FullyQualifiedErrorId)
     exit 1
+}
+finally {
+    $env:REPARO_REPORT_SKIP = $previousReportSkip
+    if ($reportingAction) {
+        $savedExitCode = $global:LASTEXITCODE
+        try {
+            $match = [regex]::Match([IO.File]::ReadAllText($Reparo), '(?m)^\$script:ReparoVersion\s*=\s*''(?<v>\d+\.\d+\.\d+\.\d+)''')
+            # Older installed runtimes ignore the environment suppression safely;
+            # do not pass a new parameter before the reviewed upgrade succeeds.
+            if ($match.Success -and [version]$match.Groups['v'].Value -ge [version]'1.4.2.0') {
+                $finalOutcome = if ($reportingOutcome -eq 'succeeded' -and $reportingPreviousVersion -eq $match.Groups['v'].Value) { 'unchanged' } else { $reportingOutcome }
+                & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Reparo -ReportLifecycle -ReportingOutcome $finalOutcome -ReportingPreviousVersion $reportingPreviousVersion -InstallRoot $InstallRoot *> $null
+            }
+        } catch {} finally { $global:LASTEXITCODE = $savedExitCode }
+    }
 }

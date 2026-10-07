@@ -145,14 +145,25 @@ param(
     [switch]$TaskReplace,
     [Alias('I')]
     [string[]]$Include,
+    [switch]$ReportLifecycle,
+    [ValidateSet('succeeded','failed','unchanged','preview','blocked','unknown')]
+    [string]$ReportingOutcome,
+    [string]$ReportingPreviousVersion,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RemainingInclude
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.4.1.3'
+$script:ReparoVersion = '1.4.2.0'
 $script:ReparoBoundParameters = $PSBoundParameters
-$script:ReparoTaskBlockedParameters = @('Time','New','Latest','Install','Ninja','Status','Tail','Kill','Sweep','DeleteStale','Search','AddVersionLock','ListVersionLocks','CheckApp','LockApp','MigrateChocoToWinget','FinalizeChocolateyRemoval','Syslog','SkipNinjaPublish','SourceUrl','NoBackup')
+$script:ReparoTaskBlockedParameters = @('Time','New','Latest','Install','Ninja','Status','Tail','Kill','Sweep','DeleteStale','Search','AddVersionLock','ListVersionLocks','CheckApp','LockApp','MigrateChocoToWinget','FinalizeChocolateyRemoval','Syslog','SkipNinjaPublish','SourceUrl','NoBackup','ReportLifecycle','ReportingOutcome','ReportingPreviousVersion')
+if (($ReportingOutcome -or $PSBoundParameters.ContainsKey('ReportingPreviousVersion')) -and -not $ReportLifecycle) { throw 'Reporting fields require -ReportLifecycle; refusing accidental maintenance.' }
+if ($ReportLifecycle -and (-not $ReportingOutcome -or $Install -or $New -or $Latest -or $Ninja -or $Update -or $Force -or $Task -or $Include)) { throw 'ReportLifecycle requires an explicit outcome and cannot run maintenance/lifecycle work.' }
+if ($ReportLifecycle) {
+    foreach ($key in $PSBoundParameters.Keys) {
+        if ($key -notin @('ReportLifecycle','ReportingOutcome','ReportingPreviousVersion','InstallRoot','LogRoot','InstallNuGetProvider')) { throw "ReportLifecycle does not accept -$key; run that operation separately." }
+    }
+}
 if (-not $Task -and @('TaskName','TaskAction','TaskStart','TaskReplace' | Where-Object { $PSBoundParameters.ContainsKey($_) }).Count -gt 0) { throw 'Task controls require -Task; refusing an accidental maintenance run.' }
 if ($Task) {
     foreach ($key in $script:ReparoTaskBlockedParameters) {
@@ -325,6 +336,7 @@ function Get-ReparoVersionFlavor {
         '1.4.1.1' = [pscustomobject]@{ Quote = 'Engage.'; Source = 'Star Trek: The Next Generation, created by Gene Roddenberry'; Art = '  [ ENTERPRISE ] unreadable cron state denied overwrite clearance' }
         '1.4.1.2' = [pscustomobject]@{ Quote = 'You shall not pass!'; Source = 'The Lord of the Rings: The Fellowship of the Ring (screenplay by Fran Walsh, Philippa Boyens and Peter Jackson)'; Art = '  [ GANDALF ] self-update refuses unreadable cron and unsafe shim paths' }
         '1.4.1.3' = [pscustomobject]@{ Quote = 'Trust your feelings.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ OBI-WAN ] ===[==========> immutable release artifacts verified' }
+        '1.4.2.0' = [pscustomobject]@{ Quote = 'Fear is the mind-killer.'; Source = 'Dune (1965), by Frank Herbert'; Art = '  [ GOM JABBAR ] ---{ BOX }--- bounded reporting, no hidden commands' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -1682,6 +1694,123 @@ function Copy-ReparoFileWithRetry {
     throw "Unable to replace '$Destination' after $Attempts attempts: $($lastError.Message)"
 }
 
+function Invoke-ReparoReporting {
+    param([ValidateSet('lifecycle_result','maintenance_summary')][string]$EventType, [hashtable]$Data)
+    # Optional, operator-installed client only. Never install Node, discover a
+    # collector or create an identity/network call for unconfigured public copies.
+    if (-not $script:ReparoIsWindows -or $env:REPARO_REPORT_SKIP -eq '1') { return }
+    $root = Join-Path $InstallRoot 'Reporting'
+    $marker = Join-Path $root 'reporting-client.json'
+    if ($root -match '(?i)[\\/](Proton|Dropbox|GitHub|\.git)[\\/]') { return }
+    try {
+        if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) { return }
+        $script:ReparoReportingFinalized = $true
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $context = if ($identity.User.Value -eq 'S-1-5-18') { 'system' } elseif (Test-Admin) { 'admin' } else { 'standard-user' }
+        # Old SYSTEM wrappers can nest New/offline finalization without an owner.
+        # Require the built-in Ninja parent or correlated wrapper's final API.
+        if ($EventType -eq 'lifecycle_result' -and $context -eq 'system' -and $Data.method -ne 'ninja') { return }
+        $architecture = switch ($env:PROCESSOR_ARCHITECTURE) { 'AMD64' { 'x64' }; 'ARM64' { 'arm64' }; 'x86' { 'x86' }; default { 'unknown' } }
+        $template = [ordered]@{
+            event_type = $EventType; event_id = $null; run_id = $null
+            client_time = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            host = [ordered]@{ os_family = 'windows'; os_version = [Environment]::OSVersion.Version.ToString(); os_build = $null; architecture = $architecture; runtime_version = $PSVersionTable.PSVersion.ToString(); context = $context }
+            data = $Data
+        }
+        $rootLiteral = ConvertTo-ReparoPowerShellLiteral -Value $root
+        # All private disk/ACL/hash checks occur in this disposable child, not in
+        # maintenance. Config has paths/pins only; credentials stay in state.json.
+        $worker = @'
+$ErrorActionPreference='Stop'
+$env:PSModulePath=([Environment]::GetEnvironmentVariable('PSModulePath','Machine')+';'+(Join-Path $PSHOME 'Modules'))
+function privatePath($path,$directory,$protected) {
+    $item=Get-Item -LiteralPath $path -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'unsafe' }
+    if ($directory) { $acl=[IO.Directory]::GetAccessControl($path) } else { $acl=[IO.File]::GetAccessControl($path) }
+    if ($protected -and -not $acl.AreAccessRulesProtected) { throw 'unsafe' }
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin @('S-1-5-18','S-1-5-32-544')) { throw 'unsafe' }
+    $rules=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+    if ($rules.Count -ne 2) { throw 'unsafe' }
+    foreach($id in @('S-1-5-18','S-1-5-32-544')) {
+        $r=@($rules | Where-Object {$_.IdentityReference.Value -eq $id})
+        if($r.Count -ne 1 -or $r[0].AccessControlType -ne 'Allow' -or $r[0].FileSystemRights -ne 'FullControl') { throw 'unsafe' }
+    }
+}
+try {
+    $root=__ROOT_LITERAL__
+    $ancestor=$root
+    while($ancestor) { if(((Get-Item -LiteralPath $ancestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'unsafe' }; $ancestor=[IO.Path]::GetDirectoryName($ancestor) }
+    privatePath $root $true $true
+    $marker=Join-Path $root 'reporting-client.json'; privatePath $marker $false $true
+    if((Get-Item -LiteralPath $marker).Length -gt 4096) { throw 'unsafe' }
+    $config=[IO.File]::ReadAllText($marker) | ConvertFrom-Json
+    if((($config.PSObject.Properties.Name | Sort-Object) -join ',') -ne 'enabled,manifestSha256,nodePath,nodeSha256,schema' -or $config.schema -ne 'reparo-reporting-client-1') { throw 'unsafe' }
+    if($config.enabled -isnot [bool] -or -not $config.enabled) { exit 0 }
+    if($config.nodePath -notmatch '^[A-Za-z]:\\' -or $config.nodeSha256 -notmatch '^[A-F0-9]{64}$' -or $config.manifestSha256 -notmatch '^[A-F0-9]{64}$') { throw 'unsafe' }
+    if((Get-FileHash -LiteralPath $config.nodePath -Algorithm SHA256).Hash -ne $config.nodeSha256) { throw 'unsafe' }
+    $package=Join-Path $root 'client'; privatePath $package $true $false
+    privatePath (Join-Path $package 'src') $true $false; privatePath (Join-Path $package 'scripts') $true $false
+    $manifestPath=Join-Path $package 'client-manifest.json'; privatePath $manifestPath $false $false
+    if((Get-Item -LiteralPath $manifestPath).Length -gt 8192 -or (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -ne $config.manifestSha256) { throw 'unsafe' }
+    $manifest=[IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
+    $required=@('src/bounded-client.js','src/collector-client.js','src/collector-client-state.js','src/protected-client-files.js','src/receipt-contract.js','scripts/client-report-worker.js','scripts/report-client-cli.js','package.json')
+    if($manifest.schema -ne 'reparo-client-bundle-prototype-1' -or (($manifest.files.PSObject.Properties.Name | Sort-Object) -join ',') -ne (($required | Sort-Object) -join ',')) { throw 'unsafe' }
+    foreach($name in $required) {
+        $file=Join-Path $package $name; privatePath $file $false $false
+        $hash=$manifest.files.PSObject.Properties[$name].Value
+        if($hash -notmatch '^[A-F0-9]{64}$' -or (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $hash) { throw 'unsafe' }
+    }
+    $template=[Console]::In.ReadToEnd() | ConvertFrom-Json
+    if($template.event_type -eq 'lifecycle_result') {
+        $template.data.current_version=$null
+        $runtime=Join-Path ([IO.Path]::GetDirectoryName($root)) 'Reparo.ps1'
+        if((Test-Path -LiteralPath $runtime -PathType Leaf) -and (Get-Item -LiteralPath $runtime).Length -le 2097152) {
+            $found=[regex]::Matches([IO.File]::ReadAllText($runtime),'(?m)^\$script:ReparoVersion\s*=\s*''(?<v>\d+\.\d+\.\d+\.\d+)''\s*\r?$')
+            if($found.Count -eq 1) { $template.data.current_version=$found[0].Groups['v'].Value }
+        }
+        if($template.data.outcome -eq 'succeeded' -and -not $template.data.current_version) { $template.data.outcome='unknown' }
+    }
+    $template.event_id=[guid]::NewGuid().ToString(); $template.run_id=[guid]::NewGuid().ToString()
+    $inputJson=@{ enabled=$true; root=$root; storageMode='machine'; template=$template } | ConvertTo-Json -Depth 8 -Compress
+    $env:NODE_OPTIONS=''; $env:NODE_TLS_REJECT_UNAUTHORIZED='1'
+    $start=New-Object Diagnostics.ProcessStartInfo
+    $start.FileName=$config.nodePath; $start.Arguments='"'+(Join-Path $package 'scripts/report-client-cli.js')+'"'
+    $start.UseShellExecute=$false; $start.CreateNoWindow=$true
+    $start.RedirectStandardInput=$true; $start.RedirectStandardOutput=$true; $start.RedirectStandardError=$true
+    $child=New-Object Diagnostics.Process; $child.StartInfo=$start; [void]$child.Start()
+    $child.StandardInput.Write($inputJson); $child.StandardInput.Close()
+    $child.BeginOutputReadLine(); $child.BeginErrorReadLine(); $child.WaitForExit()
+} catch { } # Reporting never turns a successful install/maintenance into failure.
+'@
+        $worker = $worker.Replace('__ROOT_LITERAL__', $rootLiteral)
+        $start = New-Object Diagnostics.ProcessStartInfo
+        $start.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $start.Arguments = '-NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($worker))
+        $start.UseShellExecute = $false; $start.CreateNoWindow = $true
+        $start.RedirectStandardInput = $true; $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+        $process = New-Object Diagnostics.Process; $process.StartInfo = $start
+        [void]$process.Start(); $process.StandardInput.Write(($template | ConvertTo-Json -Depth 8 -Compress)); $process.StandardInput.Close()
+        $process.BeginOutputReadLine(); $process.BeginErrorReadLine()
+        if (-not $process.WaitForExit(25000)) {
+            $killer = New-Object Diagnostics.ProcessStartInfo
+            $killer.FileName = Join-Path $env:SystemRoot 'System32\taskkill.exe'; $killer.Arguments = '/PID ' + $process.Id + ' /T /F'
+            $killer.UseShellExecute = $false; $killer.CreateNoWindow = $true; $killer.RedirectStandardOutput = $true; $killer.RedirectStandardError = $true
+            $kill = New-Object Diagnostics.Process; $kill.StartInfo = $killer; [void]$kill.Start(); $kill.BeginOutputReadLine(); $kill.BeginErrorReadLine()
+            if (-not $kill.WaitForExit(2000)) { try { $kill.Kill(); $process.Kill() } catch {} }
+        }
+        try { Write-ReparoLog '[REPORTING] Optional private reporting attempt finished; not proof of collector receipt or Graylog indexing.' } catch {}
+    } catch { try { Write-ReparoLog '[REPORTING] Optional client unavailable; installation/maintenance result unchanged.' } catch {} }
+}
+
+function Invoke-ReparoLifecycleReporting {
+    param([string]$Method, [string]$Outcome, [AllowNull()][string]$PreviousVersion)
+    try {
+        if ($PreviousVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') { $PreviousVersion = $null }
+        $code = if ($Outcome -eq 'failed') { 'LIFECYCLE_FAILED' } else { $null }
+        Invoke-ReparoReporting -EventType lifecycle_result -Data @{ method=$Method; previous_version=$PreviousVersion; current_version=$null; outcome=$Outcome; duration_ms=$null; failure_code=$code }
+    } catch { } # An observer must never replace the original deployment error.
+}
+
 function Invoke-ReparoNew {
     param(
         [Parameter(Mandatory)][string]$TargetRoot,
@@ -1697,6 +1826,7 @@ function Invoke-ReparoNew {
     $tempScript = Join-Path $tempRoot 'Reparo.ps1'
     $rollbackPath = Join-Path $tempRoot 'Reparo.rollback.ps1'
     $deploymentStarted = $false
+    $script:ReparoDeploymentChanged = $false
 
     Write-Info "Install root: $TargetRoot"
     Write-Info "Source: $Url"
@@ -1796,6 +1926,7 @@ Log: $script:ReparoLogPath
         $deploymentStarted = $true
         Copy-ReparoFileWithRetry -Source $tempScript -Destination $scriptPath
         Test-ReparoInstalledRuntime -Path $scriptPath -ExpectedHash $newHash
+        $script:ReparoDeploymentChanged = $true
         Write-Done "Installed Reparo.ps1 updated ($newHash)."
         Write-Info "Live script: $scriptPath"
         Install-ReparoCommandShim -TargetRoot $TargetRoot
@@ -3139,6 +3270,7 @@ Log: $script:ReparoLogPath
 function Test-ReparoOperationalModeRequested {
     $modeParameters = @(
         'Install',
+        'ReportLifecycle',
         'New',
         'Latest',
         'Ninja',
@@ -3199,6 +3331,12 @@ if ($Task) {
     return
 }
 
+if ($ReportLifecycle) {
+    Invoke-ReparoLifecycleReporting -Method ninja -Outcome $ReportingOutcome -PreviousVersion $ReportingPreviousVersion
+    Complete-ReparoUtilityLog -Status 'COMPLETE'
+    return
+}
+
 if ($Ninja) {
     $ninjaBootstrapRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ReparoNinja_{0}_{1}" -f $PID, (Get-Date -Format 'yyyyMMddHHmmss'))
     $ninjaBootstrapPath = Join-Path $ninjaBootstrapRoot 'Reparo.bootstrap.ps1'
@@ -3207,6 +3345,8 @@ if ($Ninja) {
     if ($NoBackup) { $ninjaInstallArguments += '-NoBackup' }
     if (-not $InstallNuGetProvider) { $ninjaInstallArguments += '-InstallNuGetProvider:$false' }
     $previousNinjaVersion = Get-ReparoInstalledVersion -TargetRoot $InstallRoot
+    $ninjaReportingOutcome = 'failed'
+    $previousReportSkip = $env:REPARO_REPORT_SKIP
 
     try {
         New-Item -ItemType Directory -Force -Path $ninjaBootstrapRoot | Out-Null
@@ -3214,12 +3354,14 @@ if ($Ninja) {
         Unblock-File -LiteralPath $ninjaBootstrapPath -ErrorAction SilentlyContinue
         Write-ReparoLog ("[NINJA] Staged self-update bootstrap away from the installed target: {0}" -f $ninjaBootstrapPath)
         Write-Info 'Ninja mode: installing the reviewed, pinned Reparo release.'
+        $env:REPARO_REPORT_SKIP = '1'
         & powershell.exe @ninjaInstallArguments
         if ($LASTEXITCODE -ne 0) { throw "Pinned Reparo install exited with code $LASTEXITCODE." }
         $installedNinjaVersion = if ($Preview) { $previousNinjaVersion } else { Get-ReparoInstalledVersion -TargetRoot $InstallRoot }
         Publish-ReparoInstalledNinjaVersion -TargetRoot $InstallRoot | Out-Null
         Complete-ReparoUtilityLog -Status $(if ($Preview) { 'PREVIEW' } else { 'COMPLETE' })
         Write-ReparoNinjaSelfUpdateActivity -Status $(if ($Preview) { 'PREVIEW' } else { 'COMPLETE' }) -PreviousVersion $previousNinjaVersion -InstalledVersion $installedNinjaVersion
+        $ninjaReportingOutcome = if ($Preview) { 'preview' } elseif ($previousNinjaVersion -eq $installedNinjaVersion) { 'unchanged' } else { 'succeeded' }
         return
     }
     catch {
@@ -3238,10 +3380,16 @@ if ($Ninja) {
         if (Test-Path -LiteralPath $ninjaBootstrapRoot) {
             Remove-Item -LiteralPath $ninjaBootstrapRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
+        $env:REPARO_REPORT_SKIP = $previousReportSkip
+        Invoke-ReparoLifecycleReporting -Method ninja -Outcome $ninjaReportingOutcome -PreviousVersion $previousNinjaVersion
     }
 }
 
 if ($Install -or $New -or $Latest) {
+    $installReportingOutcome = 'failed'
+    $previousReportingVersion = $null
+    try { $previousReportingVersion = Get-ReparoInstalledVersion -TargetRoot $InstallRoot } catch {}
+    try {
     $installSource = $null
     $installMode = if ($Install) { 'offline self-install' } elseif ($New) { 'reviewed pinned release' } else { 'latest main (unpinned)' }
     if ($Install) {
@@ -3290,7 +3438,13 @@ if ($Install -or $New -or $Latest) {
     }
 
     Complete-ReparoUtilityLog -Status $(if ($Preview) { 'PREVIEW' } else { 'COMPLETE' })
+    $installReportingOutcome = if ($Preview) { 'preview' } elseif ($script:ReparoDeploymentChanged) { 'succeeded' } else { 'unchanged' }
     return
+    }
+    finally {
+        $reportMethod = if ($Install) { 'offline-install' } elseif ($New) { 'pinned-new' } else { 'latest' }
+        Invoke-ReparoLifecycleReporting -Method $reportMethod -Outcome $installReportingOutcome -PreviousVersion $previousReportingVersion
+    }
 }
 
 if ($Msi -and -not $Kill) {
@@ -8159,6 +8313,10 @@ if ($Tail) {
     }
 }
 
+Invoke-ReparoReporting -EventType maintenance_summary -Data @{
+    outcome = $(if ($script:ReparoFinalStatus -eq 'FAILED') { 'failed' } elseif ($Preview) { 'preview' } elseif ($script:ReparoSummary['Updated'].Count -gt 0) { 'succeeded' } else { 'unchanged' })
+    updated = $script:ReparoSummary['Updated'].Count; skipped = $script:ReparoSummary['Skipped'].Count; failed = $script:ReparoSummary['Failed'].Count; duration_ms = $null
+}
 Invoke-ReparoForcedReboot
 Invoke-ReparoForcedShutdown
 if ($script:ReparoFinalStatus -eq 'FAILED') {

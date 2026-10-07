@@ -103,6 +103,89 @@ unpinned; native N retains its historical New meaning, with Latest spelled out.
 
 ## Windows quick start
 
+## Optional authenticated reporting — 1.4.2.0
+
+**Off by default.** Ordinary public installs require no Node/client bundle and send
+no added identity, inventory or reports. This is separate from local logs/syslog
+and from a download-request gateway. Reporting requires one-time authorized
+operator setup of a protected, reviewed client bundle and device-scoped credential.
+Configured clients report during existing runs; no consent popups, service,
+heartbeat, remote command channel, credential redirects or raw-log upload.
+
+The isolated collector is intended to feed **Graylog**, not an operator workstation.
+No production collector/feed is activated by this release. Owner/placement, public
+TLS/non-bypassable origin, private administration/export, capacity/retention and
+independent recovery acceptance still precede any real-data pilot.
+
+### Client setup and protected files
+
+- Optional client implementation/artifact is maintained separately in private
+  `16thdoc/Reparo-Analytics`; `scripts/build-client-bundle.js` produces a dependency-free
+  Node24 client manifest with immutable SHA-256 for every included source file.
+  Select an explicitly reviewed Node24 executable/publisher and artifact. Do not
+  treat a tool's bundled Node, PATH discovery, mutable source or a dirty snapshot
+  as an approved fleet runtime. Node is never installed by ordinary Reparo.
+- Windows runner uses `<InstallRoot>\Reporting`, normally ProgramData/Reparo:
+  machine ACL grants only SYSTEM/Administrators; root/config must be protected,
+  owned by those principals, with no reparse path. Code hashes and binary hash are
+  checked inside the disposable reporting child before execution. Standard-user
+  access is intentionally unsupported for this machine credential, not silently
+  changed into sharing it with all users.
+- Native runner uses `$XDG_STATE_HOME/reparo/reporting` (default
+  `~/.local/state/reparo/reporting`): own UID, 0700 directories, 0600 regular
+  single-link files, no symlink paths. It needs Python3/timeout only when configured,
+  plus the approved Node24 client. Ordinary native maintenance remains self-contained.
+- `state.json` contains private per-install config/credential/queue, `disabled.json`
+  is the retained opt-out fence, `client/` contains only pinned code/artifact manifest.
+  `reporting-client.json` is written **last** after enrollment/persistence and contains
+  exactly `schema=reparo-reporting-client-1`, boolean `enabled`, absolute `nodePath`,
+  uppercase 64-hex `nodeSha256` and `manifestSha256`. It contains no fleet/collector
+  admin secret. `scripts/enroll-client-cli.js` accepts protected stdin JSON with
+  `root`, HTTPS `/ingest/v1` `endpoint`, one-use `token`, boolean `inventoryConsent`;
+  it returns status/installation ID, never a credential. Never put tokens in shell
+  arguments, source, Proton, logs or this documentation.
+- Source/runtime state and real telemetry/keys/databases belong outside Git/Proton.
+  Opt-out removes activation/credential/queue after retaining the disabled-ID fence;
+  keep the latest fence across uninstall/restore and revoke/delete privately on the
+  collector. Old/whole-root restore without current independent authority is unsafe.
+
+### Outcomes, bounds and deliberate boundaries
+
+Windows Install/New/Latest report after replacement, shim, publication and eligible
+self-update scheduling/finalization; late failure wins over early replacement.
+Native New/Install owns the installer transaction and suppresses its nested report;
+standalone native installer reports only after downloaded runtime verification has
+made reporting code available. Earlier failures in a first bootstrap have no verified
+reporting runtime; they remain local diagnostics, not fabricated receipts. Native
+New/Install + Preview now performs no download/replacement/scheduling and can report
+an explicitly configured preview outcome.
+
+Windows built-in Ninja and the updated reference persistent automation report one
+outer lifecycle result. Environment suppression is understood by new runners and
+safely ignored by old ones while upgrading. Update/verify the controller before
+enrollment. Direct SYSTEM New/Install/Latest reporting is deliberately suppressed
+because older RMM wrappers can nest those calls without a transaction owner: use
+the built-in `-Ninja` or updated correlated reference automation. Its final-only
+`-ReportLifecycle -ReportingOutcome ...` API cannot be mixed with maintenance,
+scheduling/power/other controls. This does not resume deferred SYSTEM/user-session
+WinGet orchestration, replace a Ninja portal script or prove an actual agent pilot.
+
+Completed maintenance reports Windows summary counts. Native batched managers do
+not provide equivalent verified per-package counts: report null/unknown counts,
+known failure/preview or unknown completion outcome rather than invented totals.
+No hardware inventory collection or IP/GeoIP enrichment is silently enabled.
+
+The optional client uses <=48 receipts/1 MiB, seven-day expiry, ten-attempt cap,
+persisted jitter/backoff and stable event IDs/occurrence timestamps on lost replies.
+One aggregate HTTP budget is <=2 seconds; isolated client work has a ten-second
+deadline. The runner bounds the **entire reporting process tree**, including private
+file/hash checks and interruption cleanup, to 25 seconds (plus at most a two-second
+Windows tree-stop or one-second native kill grace). Certificate validation stays
+on; missing client, bad pins/permissions, revoked auth, full queue, TLS or reporting
+failure never changes the installation/maintenance outcome. These are bounded
+best-effort self-reports, not hardware attestation, exactly-once installation or
+proof of Graylog indexing.
+
 ### What it does
 
 By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, PowerShell 7 through Microsoft's machine-wide MSI, 7-Zip deployment through winget, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, and WSL, plus a Chocolatey-to-winget migration pass.
