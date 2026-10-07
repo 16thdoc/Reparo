@@ -18,5 +18,14 @@ if ($manifest.version -ne $sourceVersion) { throw "Release manifest version $($m
 
 $sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash
 if ($manifest.sha256 -ne $sourceHash) { throw "Release manifest SHA-256 does not match Reparo.ps1. Manifest=$($manifest.sha256) Source=$sourceHash" }
+foreach ($artifact in @(
+    @{ Url = 'linuxUrl'; Hash = 'linuxSha256'; Path = 'linux/reparo-linux' },
+    @{ Url = 'linuxInstallerUrl'; Hash = 'linuxInstallerSha256'; Path = 'deploy/install-reparo-linux.sh' }
+)) {
+    $expected = 'https://raw.githubusercontent.com/16thdoc/Reparo/{0}/{1}' -f $manifest.commit, $artifact.Path
+    if ($manifest.($artifact.Url) -cne $expected) { throw "Native artifact URL is not commit-pinned: $($artifact.Path)" }
+    $digest = (Get-FileHash -LiteralPath (Join-Path $repoRoot $artifact.Path) -Algorithm SHA256).Hash
+    if ($manifest.($artifact.Hash) -cne $digest) { throw "Native artifact digest mismatch: $($artifact.Path)" }
+}
 
 Write-Host "Reparo release manifest passed: $($manifest.version) $($manifest.commit)" -ForegroundColor Green

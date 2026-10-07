@@ -6,6 +6,7 @@ trap 'rm -rf "$fixture"' EXIT HUP INT TERM
 mkdir -p "$fixture/bin"
 export HOME="$fixture/home's \"quoted\" space" XDG_DATA_HOME="$fixture/data's \"quoted\" space" XDG_STATE_HOME="$fixture/state"
 export FIXTURE_NATIVE_SOURCE="$repo/linux/reparo-linux" FIXTURE_INSTALL_CRON="$fixture/crontab"
+export REPARO_URL='https://fixture.invalid/custom-runtime'
 printf '%s\n' '7 7 * * * unrelated-command' '8 8 * * * echo protected # Reparo self-update task extra' >"$FIXTURE_INSTALL_CRON"
 cp "$FIXTURE_INSTALL_CRON" "$fixture/original"
 cat >"$fixture/bin/curl" <<'EOF'

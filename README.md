@@ -14,7 +14,8 @@ Install or update the native Linux runtime from a clone of this repository:
 sh ./deploy/install-reparo-linux.sh --verbose
 ```
 
-The installer downloads `linux/reparo-linux`, validates it with `sh -n`, installs it
+The installer reads `deploy/reparo-release.json`, downloads commit-pinned
+`linux/reparo-linux`, verifies its SHA-256/version and POSIX syntax, and installs it
 at `~/.local/share/reparo/reparo-linux` (respecting `XDG_DATA_HOME`), and creates a
 shell-neutral `reparo` shim at `~/.local/bin/reparo`. It works from Bash, Zsh, Fish,
 Dash, or any shell that can launch a POSIX command. Add `~/.local/bin` to `PATH` if
@@ -28,8 +29,9 @@ reparo --include Apt Flatpak     # restrict the pass to named sections
 reparo --status                  # other Reparo Linux processes and latest log
 reparo --tail                    # follow the newest log
 reparo -Version                  # runtime version; see alias lexicon below
-reparo -New                      # download and run the current native installer
+reparo -New                      # verify immutable installer/runtime release pins
 reparo -Install                  # same native install/update action
+reparo --latest                  # explicitly unreviewed main, not the release pin
 ```
 
 Linux detects its native manager from `/etc/os-release`: Apt (Debian, Ubuntu, Mint,
@@ -83,6 +85,21 @@ update Reparo itself; `--update` updates the machine's installed packages and to
 instead. Windows-only commands are identified plainly rather than pretending they
 work on Linux. The native and Windows runners share the Reparo release number and
 the same CyberShell-style version quote/source flavor.
+
+As of 1.4.1.3, native New/Install verify both the installer and runtime against one
+manifest snapshot, with no silent main fallback. Python 3 (standard library only)
+validates bounded JSON, unique keys, four-part version, full commit, exact GitHub
+artifact URLs and digests; `sha256sum` verifies bytes before code execution/replacement.
+HTTPS certificate validation remains enabled; downloads have 10-second connection
+and 60-second total limits. The mutable manifest is a reviewed channel pointer,
+not a signed trust root or rollback-prevention mechanism. Keep a prior verified
+manifest/artifacts for rollback. `--latest` and explicit `REPARO_URL` or
+`REPARO_INSTALLER_URL` overrides are labeled unpinned; never use them to claim
+reviewed-release provenance. `REPARO_RELEASE_URL` can select a protected HTTPS mirror;
+artifact URLs remain strictly GitHub/commit-bound. A clone's standalone installer
+is operator-trusted bootstrap code; an installed native runner verifies the downloaded
+bootstrap first. Windows Install remains offline and Windows Latest/N remains
+unpinned; native N retains its historical New meaning, with Latest spelled out.
 
 ## Windows quick start
 

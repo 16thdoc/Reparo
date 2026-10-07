@@ -3,7 +3,10 @@
 
 set -eu
 
-REPARO_URL="${REPARO_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/linux/reparo-linux}"
+umask 077
+REPARO_URL="${REPARO_URL:-}"
+REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
+latest=0
 REPARO_QUIET="${REPARO_QUIET:-1}"
 REPARO_INSTALL_LOG="${REPARO_INSTALL_LOG:-${TMPDIR:-/tmp}/reparo-install-linux.log}"
 
@@ -11,6 +14,7 @@ for arg in "$@"; do
     case "$arg" in
         -q|--quiet|--silent|-quiet|-silent) REPARO_QUIET=1 ;;
         -v|--verbose|-verbose) REPARO_QUIET=0 ;;
+        --latest) latest=1 ;;
         *) printf '%s\n' "ERROR: Unknown installer option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -45,6 +49,44 @@ tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/reparo-install-linux.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 runtime_download="$tmp_dir/reparo-linux"
 runtime_rollback="$tmp_dir/reparo-linux.rollback"
+release_version=''
+release_hash=''
+if [ -n "$REPARO_URL" ] || [ "$latest" -eq 1 ]; then
+    REPARO_URL="${REPARO_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/linux/reparo-linux}"
+    printf '%s\n' 'WARNING: Explicit latest/custom source is unpinned.'
+else
+    command -v python3 >/dev/null 2>&1 || { printf '%s\n' 'ERROR: python3 is required for strict release-manifest validation.' >&2; exit 1; }
+    command -v sha256sum >/dev/null 2>&1 || { printf '%s\n' 'ERROR: sha256sum is required for release verification.' >&2; exit 1; }
+    release_file="${REPARO_RELEASE_FILE:-$tmp_dir/release.json}"
+    if [ -z "${REPARO_RELEASE_FILE:-}" ]; then
+        curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL "$REPARO_RELEASE_URL" -o "$release_file"
+    fi
+    release_values=$(python3 - "$release_file" <<'PY'
+import json, re, sys
+try:
+    raw = open(sys.argv[1], 'rb').read(16385)
+    if len(raw) > 16384: raise ValueError()
+    def unique(pairs):
+        result = {}
+        for k, v in pairs:
+            if k in result: raise ValueError()
+            result[k] = v
+        return result
+    m = json.loads(raw, object_pairs_hook=unique)
+    if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+', m['version']): raise ValueError()
+    if not re.fullmatch(r'[0-9a-f]{40}', m['commit']): raise ValueError()
+    base = 'https://raw.githubusercontent.com/16thdoc/Reparo/' + m['commit'] + '/'
+    for url, digest, path in [('linuxUrl', 'linuxSha256', 'linux/reparo-linux'), ('linuxInstallerUrl', 'linuxInstallerSha256', 'deploy/install-reparo-linux.sh')]:
+        if m[url] != base + path or not re.fullmatch(r'[A-F0-9]{64}', m[digest]): raise ValueError()
+    print(m['version']); print(m['linuxUrl']); print(m['linuxSha256'])
+except (ValueError, TypeError, KeyError, OSError):
+    sys.exit('ERROR: Invalid immutable Linux release manifest.')
+PY
+    ) || exit 1
+    release_version=$(printf '%s\n' "$release_values" | sed -n '1p')
+    REPARO_URL=$(printf '%s\n' "$release_values" | sed -n '2p')
+    release_hash=$(printf '%s\n' "$release_values" | sed -n '3p')
+fi
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 runtime_path="$install_root/reparo-linux"
 shim_dir="$HOME/.local/bin"
@@ -74,7 +116,11 @@ case "$download_url" in
         download_url="${download_url}${separator}x=$(date +%s)"
         ;;
 esac
-curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$download_url" -o "$runtime_download"
+curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$download_url" -o "$runtime_download"
+if [ -n "$release_hash" ]; then
+    actual_hash=$(sha256sum "$runtime_download" | cut -d ' ' -f 1 | tr '[:lower:]' '[:upper:]')
+    [ "$actual_hash" = "$release_hash" ] || { printf '%s\n' 'ERROR: Native runtime SHA-256 does not match release pin; nothing installed.' >&2; exit 1; }
+fi
 
 if [ ! -s "$runtime_download" ] || ! sh -n "$runtime_download"; then
     printf '%s\n' 'ERROR: Downloaded runtime is empty or fails POSIX shell syntax validation.' >&2
@@ -83,6 +129,7 @@ fi
 expected_version=$(sed -n "s/^REPARO_LINUX_VERSION='\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)'$/\1/p" "$runtime_download")
 case "$expected_version" in ''|*'
 '*) printf '%s\n' 'ERROR: Downloaded runtime has no unique four-part release identity.' >&2; exit 1 ;; esac
+[ -z "$release_version" ] || [ "$expected_version" = "$release_version" ] || { printf '%s\n' 'ERROR: Native runtime version does not match release pin.' >&2; exit 1; }
 
 install -d -m 700 "$install_root"
 mkdir -p "$shim_dir"
@@ -93,7 +140,12 @@ if ! install -m 755 "$runtime_download" "$runtime_path"; then
     printf '%s\n' 'ERROR: Failed to stage the native Reparo runtime.' >&2
     exit 1
 fi
-if ! sh -n "$runtime_path" || ! version_output=$("$runtime_path" --version 2>/dev/null) || ! printf '%s\n' "$version_output" | grep -Fx "Reparo Linux $expected_version" >/dev/null; then
+installed_hash_valid=1
+if [ -n "$release_hash" ]; then
+    installed_hash=$(sha256sum "$runtime_path" | cut -d ' ' -f 1 | tr '[:lower:]' '[:upper:]')
+    [ "$installed_hash" = "$release_hash" ] || installed_hash_valid=0
+fi
+if [ "$installed_hash_valid" -ne 1 ] || ! sh -n "$runtime_path" || ! version_output=$("$runtime_path" --version 2>/dev/null) || ! printf '%s\n' "$version_output" | grep -Fx "Reparo Linux $expected_version" >/dev/null; then
     if [ -f "$runtime_rollback" ]; then
         cp "$runtime_rollback" "$runtime_path"
         printf '%s\n' "ERROR: Native runtime post-install validation failed; restored previous runtime: $runtime_path" >&2
@@ -111,8 +163,7 @@ fi
 printf '#!/usr/bin/env sh\nexec %s "$@"\n' "$(quote_shell "$runtime_path")" >"$shim_path"
 chmod 755 "$shim_path"
 
-# Keep the native runner updated weekly. It currently follows main, unlike the
-# Windows manifest-pinned release; do not claim immutable native install receipts.
+# Keep the native runner on the reviewed immutable release channel weekly.
 # A user crontab entry is used because Linux has no universal machine scheduler.
 if command -v crontab >/dev/null 2>&1; then
     self_update_marker='# Reparo self-update task'

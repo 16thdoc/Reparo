@@ -6,11 +6,13 @@ set -u
 umask 077
 
 # Native and Windows runners share one Reparo release number and version flavor.
-REPARO_LINUX_VERSION='1.4.1.2'
-REPARO_VERSION_QUOTE='You shall not pass!'
-REPARO_VERSION_SOURCE='The Lord of the Rings: The Fellowship of the Ring (screenplay by Fran Walsh, Philippa Boyens and Peter Jackson)'
-REPARO_VERSION_ART='  [ GANDALF ] self-update refuses unreadable cron and unsafe shim paths'
-REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
+REPARO_LINUX_VERSION='1.4.1.3'
+REPARO_VERSION_QUOTE='Trust your feelings.'
+REPARO_VERSION_SOURCE='Star Wars (1977), written and directed by George Lucas'
+REPARO_VERSION_ART='  [ OBI-WAN ] ===[==========> immutable release artifacts verified'
+REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-}"
+REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
+LATEST=0
 DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/reparo"
 LOG_ROOT="$STATE_ROOT/logs"
@@ -48,7 +50,8 @@ Modes:
   --kill                   Send SIGTERM only to other Reparo Linux instances.
   --tail                   Follow the newest Reparo Linux log.
   --tail-lines COUNT       Print this many lines before following a log. Default: 120.
-  --new / --install        Download and run the native Linux installer.
+  --new / --install        Verify pinned installer/runtime hashes and version.
+  --latest                 Explicitly install unreviewed main (no release pin).
   --task RECURRENCE         Named current-user cron schedule: daily, selected days,
                             weekdays/weekends, monthly dates and multiple times.
                             Legacy hourly Nhr is a midnight-reset cron pattern.
@@ -71,8 +74,9 @@ will skip rather than hang on a password prompt. Global npm installs under a sys
 prefix such as /usr/local use that same privilege path; user-owned npm prefixes do
 not.
 
-Native --new validates POSIX shell syntax. Windows -New validates PowerShell syntax
-and the installed runtime hash before completing the transaction.
+Native --new requires python3 for strict JSON validation and sha256sum for digests.
+Both platforms validate immutable release artifacts before installation. Native
+Install shares New's download behavior; Windows Install remains offline.
 EOF
 }
 
@@ -157,11 +161,50 @@ run_native_installer() {
     done
 
     bootstrap_dir=$(mktemp -d "${TMPDIR:-/tmp}/reparo-linux-bootstrap.XXXXXX") || die 'Cannot create installer workspace'
+    trap 'rm -rf "$bootstrap_dir"' EXIT HUP INT TERM
     bootstrap_path="$bootstrap_dir/install-reparo-linux.sh"
+    release_file="$bootstrap_dir/release.json"
+    installer_hash=''
+    if [ -n "$REPARO_INSTALLER_URL" ] || [ "$LATEST" -eq 1 ]; then
+        REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
+        printf '%s\n' 'WARNING: Explicit latest/custom installer is unpinned.'
+    else
+        command_exists python3 || die 'python3 is required for strict release-manifest validation'
+        command_exists sha256sum || die 'sha256sum is required for release verification'
+        curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL "$REPARO_RELEASE_URL" -o "$release_file" || die 'Could not download release manifest'
+        release_values=$(python3 - "$release_file" <<'PY'
+import json, re, sys
+try:
+    raw = open(sys.argv[1], 'rb').read(16385)
+    if len(raw) > 16384: raise ValueError()
+    def unique(pairs):
+        result = {}
+        for k, v in pairs:
+            if k in result: raise ValueError()
+            result[k] = v
+        return result
+    m = json.loads(raw, object_pairs_hook=unique)
+    if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+', m['version']): raise ValueError()
+    if not re.fullmatch(r'[0-9a-f]{40}', m['commit']): raise ValueError()
+    base = 'https://raw.githubusercontent.com/16thdoc/Reparo/' + m['commit'] + '/'
+    for url, digest, path in [('linuxUrl', 'linuxSha256', 'linux/reparo-linux'), ('linuxInstallerUrl', 'linuxInstallerSha256', 'deploy/install-reparo-linux.sh')]:
+        if m[url] != base + path or not re.fullmatch(r'[A-F0-9]{64}', m[digest]): raise ValueError()
+    print(m['linuxInstallerUrl']); print(m['linuxInstallerSha256'])
+except (ValueError, TypeError, KeyError, OSError):
+    sys.exit('ERROR: Invalid immutable Linux release manifest.')
+PY
+        ) || die 'Invalid release manifest; refusing unpinned fallback'
+        REPARO_INSTALLER_URL=$(printf '%s\n' "$release_values" | sed -n '1p')
+        installer_hash=$(printf '%s\n' "$release_values" | sed -n '2p')
+    fi
     printf '%s\n' "Downloading native Reparo installer: $REPARO_INSTALLER_URL"
-    if ! curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$REPARO_INSTALLER_URL" -o "$bootstrap_path"; then
+    if ! curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$REPARO_INSTALLER_URL" -o "$bootstrap_path"; then
         rm -rf "$bootstrap_dir"
         die 'Could not download native Reparo installer'
+    fi
+    if [ -n "$installer_hash" ]; then
+        actual_hash=$(sha256sum "$bootstrap_path" | cut -d ' ' -f 1 | tr '[:lower:]' '[:upper:]')
+        [ "$actual_hash" = "$installer_hash" ] || die 'Installer SHA-256 does not match release pin; refusing execution'
     fi
     if [ ! -s "$bootstrap_path" ] || ! sh -n "$bootstrap_path"; then
         rm -rf "$bootstrap_dir"
@@ -169,7 +212,11 @@ run_native_installer() {
     fi
 
     printf '%s\n' 'Running native Reparo installer...'
-    if sh "$bootstrap_path" --verbose; then status=0; else status=$?; fi
+    if [ -n "$installer_hash" ]; then
+        if REPARO_URL='' REPARO_RELEASE_FILE="$release_file" sh "$bootstrap_path" --verbose; then status=0; else status=$?; fi
+    else
+        if sh "$bootstrap_path" --verbose --latest; then status=0; else status=$?; fi
+    fi
     rm -rf "$bootstrap_dir"
     return "$status"
 }
@@ -646,7 +693,7 @@ parse_args() {
         original_option=$1
         option=$(normalize_option "$original_option")
         if [ "$ACTION" = task ]; then
-            case "$option" in new|n|install|i|status|s|kill|k|tail|t|log|version|v|help|h) die 'Task cannot schedule lifecycle or utility modes' ;; esac
+            case "$option" in new|n|install|i|latest|status|s|kill|k|tail|t|log|version|v|help|h) die 'Task cannot schedule lifecycle or utility modes' ;; esac
         fi
         case "$option" in
             update|u) ;;
@@ -657,6 +704,7 @@ parse_args() {
             tail|t|log) ACTION=tail ;;
             version|v) ACTION=version ;;
             new|n|install|i) ACTION=install ;;
+            latest) ACTION=install; LATEST=1 ;;
             task)
                 [ "$ACTION" = update ] || die 'Task cannot be combined with lifecycle/utility actions'
                 ACTION=task ;;

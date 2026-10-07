@@ -150,7 +150,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.4.1.2'
+$script:ReparoVersion = '1.4.1.3'
 $script:ReparoBoundParameters = $PSBoundParameters
 $script:ReparoTaskBlockedParameters = @('Time','New','Latest','Install','Ninja','Status','Tail','Kill','Sweep','DeleteStale','Search','AddVersionLock','ListVersionLocks','CheckApp','LockApp','MigrateChocoToWinget','FinalizeChocolateyRemoval','Syslog','SkipNinjaPublish','SourceUrl','NoBackup')
 if (-not $Task -and @('TaskName','TaskAction','TaskStart','TaskReplace' | Where-Object { $PSBoundParameters.ContainsKey($_) }).Count -gt 0) { throw 'Task controls require -Task; refusing an accidental maintenance run.' }
@@ -324,6 +324,7 @@ function Get-ReparoVersionFlavor {
         '1.4.1.0' = [pscustomobject]@{ Quote = 'DON''T PANIC'; Source = 'The Hitchhiker''s Guide to the Galaxy by Douglas Adams'; Art = '  [ GUIDE ] schedules anchored; reboot decisions remain human' }
         '1.4.1.1' = [pscustomobject]@{ Quote = 'Engage.'; Source = 'Star Trek: The Next Generation, created by Gene Roddenberry'; Art = '  [ ENTERPRISE ] unreadable cron state denied overwrite clearance' }
         '1.4.1.2' = [pscustomobject]@{ Quote = 'You shall not pass!'; Source = 'The Lord of the Rings: The Fellowship of the Ring (screenplay by Fran Walsh, Philippa Boyens and Peter Jackson)'; Art = '  [ GANDALF ] self-update refuses unreadable cron and unsafe shim paths' }
+        '1.4.1.3' = [pscustomobject]@{ Quote = 'Trust your feelings.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ OBI-WAN ] ===[==========> immutable release artifacts verified' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
