@@ -6,10 +6,13 @@ set -u
 umask 077
 
 # Native and Windows runners share one Reparo release number and version flavor.
-REPARO_LINUX_VERSION='1.4.2.1'
-REPARO_VERSION_QUOTE='I am a leaf on the wind. Watch how I soar.'
-REPARO_VERSION_SOURCE='Serenity (2005), written and directed by Joss Whedon'
-REPARO_VERSION_ART='  [ SERENITY ] <===> live pilots spared; updates follow their owning ship'
+# Interactive Esc cancellation is Windows-only: this POSIX runner does not own
+# a portable cooperative-cancel API for native package managers. No fake skip,
+# keyboard polling, or wrapper kill is substituted for installer completion.
+REPARO_LINUX_VERSION='1.4.3.0'
+REPARO_VERSION_QUOTE='Stay on target.'
+REPARO_VERSION_SOURCE='Star Wars (1977), written and directed by George Lucas'
+REPARO_VERSION_ART='  [ GOLD FIVE ] ===[ + ]=== safe boundaries; update telemetry on target'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-}"
 REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
 LATEST=0
@@ -77,6 +80,10 @@ not.
 Native --new requires python3 for strict JSON validation and sha256sum for digests.
 Both platforms validate immutable release artifacts before installation. Native
 Install shares New's download behavior; Windows Install remains offline.
+
+Windows-only: staged Windows Update details and interactive Esc safe-boundary
+skip requests. Native package managers have no portable cooperative-cancel API;
+this runner does not poll keys or kill a wrapper to pretend its installer stopped.
 EOF
 }
 

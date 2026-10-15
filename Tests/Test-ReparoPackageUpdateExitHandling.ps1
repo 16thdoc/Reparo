@@ -204,9 +204,8 @@ if (-not $windowsUpdateBootstrap.Value.Contains("Import-ReparoBootstrapModule -N
 $windowsUpdate = [regex]::Match($source, '(?s)if \(Test-ReparoSectionSelected ''WindowsUpdate''\) \{.*')
 if (-not $windowsUpdate.Success) { throw 'Could not locate the Windows Update section.' }
 foreach ($required in @(
-    "`$ErrorActionPreference = ''Stop''",
-    'Get-WindowsUpdate -AcceptAll -Install -AutoReboot -ErrorAction Stop -Verbose 4>&1; $global:LASTEXITCODE = 0',
-    'Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot -ErrorAction Stop -Verbose 4>&1; $global:LASTEXITCODE = 0',
+    'New-ReparoWindowsUpdateCommand -AutoReboot',
+    '$windowsUpdateCommand = New-ReparoWindowsUpdateCommand',
     'WindowsUpdate started; console heartbeat enabled every 60 seconds while active.'
 )) {
     if (-not $windowsUpdate.Value.Contains($required)) {

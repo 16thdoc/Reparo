@@ -154,7 +154,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.4.2.1'
+$script:ReparoVersion = '1.4.3.0'
 $script:ReparoBoundParameters = $PSBoundParameters
 $script:ReparoTaskBlockedParameters = @('Time','New','Latest','Install','Ninja','Status','Tail','Kill','Sweep','DeleteStale','Search','AddVersionLock','ListVersionLocks','CheckApp','LockApp','MigrateChocoToWinget','FinalizeChocolateyRemoval','Syslog','SkipNinjaPublish','SourceUrl','NoBackup','ReportLifecycle','ReportingOutcome','ReportingPreviousVersion')
 if (($ReportingOutcome -or $PSBoundParameters.ContainsKey('ReportingPreviousVersion')) -and -not $ReportLifecycle) { throw 'Reporting fields require -ReportLifecycle; refusing accidental maintenance.' }
@@ -338,6 +338,7 @@ function Get-ReparoVersionFlavor {
         '1.4.1.3' = [pscustomobject]@{ Quote = 'Trust your feelings.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ OBI-WAN ] ===[==========> immutable release artifacts verified' }
         '1.4.2.0' = [pscustomobject]@{ Quote = 'Fear is the mind-killer.'; Source = 'Dune (1965), by Frank Herbert'; Art = '  [ GOM JABBAR ] ---{ BOX }--- bounded reporting, no hidden commands' }
         '1.4.2.1' = [pscustomobject]@{ Quote = 'I am a leaf on the wind. Watch how I soar.'; Source = 'Serenity (2005), written and directed by Joss Whedon'; Art = '  [ SERENITY ] <===> live pilots spared; updates follow their owning ship' }
+        '1.4.3.0' = [pscustomobject]@{ Quote = 'Stay on target.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ GOLD FIVE ] ===[ + ]=== safe boundaries; update telemetry on target' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -6155,6 +6156,7 @@ function Get-ReparoNotUpdatedAction {
 
     $reason = [string]$Row.Reason
     switch -Regex ($reason) {
+        '^safe boundary:' { return 'Remaining work was deliberately not started. Rerun the affected section when ready; earlier completed updates remain recorded.' }
         'seeker-offer automation is unsupported|Windows 10 to Windows 11 automation is unverified' { return 'Open Settings > Windows Update; review compatibility and the offered Download & install action. Choose restart timing manually; Reparo did not stage a feature update.' }
         'protected from Reparo-managed updates' { return 'No action required; update it intentionally through its own launcher or installer.' }
         'manual uninstall/reinstall' { return 'Update it manually, or uninstall and reinstall it through Winget.' }
@@ -6336,6 +6338,133 @@ function Write-ReparoNinjaMaintenanceActivity {
     Write-ReparoNinjaActivityLine ("Log: {0}" -f $script:ReparoLogPath)
 }
 
+function Test-ReparoInteractiveSkip {
+    # Never poll redirected input, RMM, ISE, or a headless host.
+    try {
+        return ([Environment]::UserInteractive -and $Host.Name -eq 'ConsoleHost' -and
+            -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected)
+    }
+    catch { return $false }
+}
+
+function Read-ReparoSkipKey {
+    if (-not (Test-ReparoInteractiveSkip)) { return $false }
+    try {
+        $requested = $false
+        $count = 0
+        while ([Console]::KeyAvailable -and $count -lt 32) {
+            if ([Console]::ReadKey($true).Key -eq [ConsoleKey]::Escape) { $requested = $true }
+            $count++
+        }
+        return $requested
+    }
+    catch { return $false }
+}
+
+function New-ReparoWindowsUpdateCommand {
+    param([switch]$AutoReboot)
+    $template = @'
+$ErrorActionPreference = 'Stop'
+Import-Module PSWindowsUpdate -ErrorAction Stop
+function Write-ReparoWUStatus {
+    param([string]$Text)
+    # Write explicitly, not [string]COMObject or a buffered formatting table.
+    Write-ReparoChildOutput -Value $Text
+}
+function Write-ReparoWUObject {
+    param($Record, [string]$Phase)
+    if ($Record -is [System.Management.Automation.VerboseRecord]) {
+        Write-ReparoWUStatus ("[WU] {0}" -f $Record.Message)
+        return
+    }
+    $title = [string]$Record.Title
+    if ($title) {
+        $title = $title -replace '[\r\n\x00-\x1f]', ' '
+        Write-ReparoWUStatus ("[WU-{0}] {1} | KB={2} | backendSize(metadata)={3} | result={4} | HRESULT={5}" -f $Phase, $title, $Record.KB, $Record.Size, $Record.Result, $Record.HResult)
+    }
+}
+function Write-ReparoWUReceipt {
+    param([string]$Title, [string]$Outcome, [string]$Reason)
+    $receipt = @{ Software = $Title; Outcome = $Outcome; Reason = $Reason } | ConvertTo-Json -Compress
+    Write-ReparoWUStatus "REPARO-WU-RESULT $receipt"
+}
+
+Stop-ReparoAtSafeBoundary 'before Windows Update scan'
+Write-ReparoWUStatus '[WU-PHASE] Scanning configured update service; percentage unavailable. No installation has started.'
+$updates = @(Get-WindowsUpdate -ErrorAction Stop -Verbose 4>&1 | ForEach-Object {
+    Write-ReparoWUObject -Record $_ -Phase 'FOUND'
+    if ($_ -isnot [System.Management.Automation.VerboseRecord] -and $_.Title) { $_ }
+})
+Write-ReparoWUStatus ("[WU-SCAN] Applicable updates: {0}" -f $updates.Count)
+Stop-ReparoAtSafeBoundary 'after scan, before download/install'
+if ($updates.Count -eq 0) {
+    Write-ReparoWUStatus 'REPARO-WU-EMPTY No applicable Windows updates were returned by the configured service.'
+}
+$failed = $false
+$index = 0
+foreach ($update in $updates) {
+    Stop-ReparoAtSafeBoundary 'between Windows updates'
+    $index++
+    $id = [string]$update.Identity.UpdateID
+    if ($id -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') { throw 'An update has no valid identity; refusing an unscoped installation.' }
+    $title = ([string]$update.Title) -replace '[\r\n\x00-\x1f]', ' '
+    Write-ReparoWUStatus ("[WU-PHASE] Download {0}/{1}: {2}; percentage unavailable unless the backend reports it." -f $index, $updates.Count, $title)
+    $downloadFailed = $false
+    Get-WindowsUpdate -UpdateID $id -AcceptAll -Download -IgnoreReboot -ErrorAction Stop -Verbose 4>&1 | ForEach-Object {
+        Write-ReparoWUObject -Record $_ -Phase 'DOWNLOAD'
+        if ($_ -isnot [System.Management.Automation.VerboseRecord] -and [string]$_.Result -match 'Failed|Aborted|Error') { $downloadFailed = $true }
+    }
+    if ($downloadFailed) {
+        Write-ReparoWUReceipt -Title $title -Outcome Failed -Reason 'download failed or aborted; no installation requested'
+        $failed = $true
+        continue
+    }
+    Stop-ReparoAtSafeBoundary 'after download, before installation'
+    Write-ReparoWUStatus ("[WU-PHASE] Install {0}/{1}: {2}; Esc cannot interrupt this indivisible installer, only request the next safe boundary." -f $index, $updates.Count, $title)
+    $terminalResult = ''
+    $installHadFailure = $false
+    $installArguments = @{ UpdateID = $id; AcceptAll = $true; Install = $true; ErrorAction = 'Stop'; Verbose = $true }
+    __REBOOT_ARGUMENT__
+    Get-WindowsUpdate @installArguments 4>&1 | ForEach-Object {
+        Write-ReparoWUObject -Record $_ -Phase 'INSTALL'
+        if ($_ -isnot [System.Management.Automation.VerboseRecord] -and [string]$_.Result -match '^(Installed|Failed|Aborted|InstalledWithErrors)$') { $terminalResult = [string]$_.Result }
+        if ($_ -isnot [System.Management.Automation.VerboseRecord] -and [string]$_.Result -match 'Failed|Aborted|Error') { $installHadFailure = $true }
+    }
+    if ($terminalResult -eq 'Installed' -and -not $installHadFailure) {
+        Write-ReparoWUReceipt -Title $title -Outcome Updated -Reason 'PSWindowsUpdate reported Installed'
+    }
+    else {
+        $failed = $true
+        if ($installHadFailure) { $terminalResult = 'one or more installation results failed/aborted or contained errors; inspect per-update output' }
+        if (-not $terminalResult) { $terminalResult = 'no terminal per-update installation result returned; verify Windows Update history' }
+        Write-ReparoWUReceipt -Title $title -Outcome Failed -Reason $terminalResult
+    }
+}
+Write-ReparoWUStatus '[WU-PHASE] Finished requested updates; reboot state is checked by the parent runner.'
+if ($failed) { exit 1 }
+$global:LASTEXITCODE = 0
+'@
+    $rebootArgument = if ($AutoReboot) { '$installArguments.AutoReboot = $true' } else { '$installArguments.IgnoreReboot = $true' }
+    $template.Replace('__REBOOT_ARGUMENT__', $rebootArgument)
+}
+
+function Add-ReparoWindowsUpdateReceipts {
+    param([string[]]$Output)
+    foreach ($line in $Output) {
+        if ($line -match '^REPARO-WU-RESULT (?<Json>.+)$') {
+            try {
+                $receipt = $matches.Json | ConvertFrom-Json -ErrorAction Stop
+                if ($receipt.Outcome -notin @('Updated', 'Failed', 'Skipped') -or [string]::IsNullOrWhiteSpace($receipt.Software)) { throw 'Invalid Windows Update receipt.' }
+                Add-ReparoSummaryRecord -Bucket $receipt.Outcome -Software $receipt.Software -Version '-' -Method 'PSWindowsUpdate' -Reason $receipt.Reason
+            }
+            catch { throw "Invalid Windows Update receipt: $($_.Exception.Message)" }
+        }
+        elseif ($line -match '^REPARO-WU-EMPTY ') {
+            Add-ReparoSummaryNote ($line -replace '^REPARO-WU-EMPTY ', '')
+        }
+    }
+}
+
 function Invoke-ReparoTimedCommand {
     param(
         [Parameter(Mandatory)][string]$ShellPath,
@@ -6352,6 +6481,8 @@ function Invoke-ReparoTimedCommand {
     $safeSection = ConvertTo-ReparoSafeFileName -Value $Section
     $commandOutputPath = Join-Path $LogRoot ("{0}_{1}.out.log" -f $script:ReparoLogBaseName, $safeSection)
     $commandScriptPath = Join-Path $LogRoot ("{0}_{1}.command.ps1" -f $script:ReparoLogBaseName, $safeSection)
+    $skipRequestPath = Join-Path $LogRoot ("{0}_{1}_{2}.skip" -f $script:ReparoLogBaseName, $safeSection, [guid]::NewGuid().ToString('N'))
+    $safeSkipSupported = $Command.Contains('Stop-ReparoAtSafeBoundary')
 
     Remove-Item -LiteralPath $commandOutputPath, $commandScriptPath -Force -ErrorAction SilentlyContinue
 
@@ -6365,8 +6496,17 @@ function Invoke-ReparoTimedCommand {
         '    $line = [string]$Value'
         '    Add-Content -LiteralPath $outputPath -Value $line -Encoding UTF8'
         '}'
+        ('$skipRequestPath = {0}' -f (ConvertTo-ReparoPowerShellLiteral -Value $skipRequestPath))
+        'function Stop-ReparoAtSafeBoundary {'
+        '    param([string]$Boundary)'
+        '    if (Test-Path -LiteralPath $skipRequestPath) {'
+        '        Write-ReparoChildOutput -Value ("REPARO-STEP-SKIPPED safe boundary: {0}; remaining work not started" -f $Boundary)'
+        '        exit 130'
+        '    }'
+        '}'
         'try {'
         '    & {'
+        'Stop-ReparoAtSafeBoundary ''before starting the section'''
         $Command
         '    } 2>&1 | ForEach-Object { Write-ReparoChildOutput -Value $_ }'
         '    if ($null -ne $global:LASTEXITCODE) { exit $global:LASTEXITCODE }'
@@ -6406,12 +6546,32 @@ function Invoke-ReparoTimedCommand {
     Write-ReparoDebug ("Started PID {0} for section {1}" -f $process.Id, $Section)
 
     $timedOut = $false
+    $skipRequested = $false
+    $timeoutDeferred = $false
+    if (Test-ReparoInteractiveSkip) {
+        $skipHint = if ($safeSkipSupported) { 'Esc requests skip at the next safe boundary; it never kills an active installer.' } else { 'Esc cannot cancel this backend safely; a request waits for completion without killing its worker.' }
+        Write-Info $skipHint
+    }
     $output = New-Object System.Collections.Generic.List[string]
     $loggedLineCount = 0
     while (-not $process.HasExited) {
         Start-Sleep -Milliseconds 500
 
         Sync-ReparoCommandOutputLog -Path $commandOutputPath -LineCount ([ref]$loggedLineCount) -Output $output -Section $Section
+
+        $skipKey = Read-ReparoSkipKey
+        if (-not $skipRequested -and $skipKey) {
+            try {
+                Set-Content -LiteralPath $skipRequestPath -Value 'skip requested by interactive operator' -Encoding UTF8 -ErrorAction Stop
+                $skipRequested = $true
+            }
+            catch {
+                Write-ReparoLog ("[WARN] Cannot deliver skip request for {0}; continuing to wait safely: {1}" -f $Section, $_.Exception.Message)
+            }
+            $skipMessage = if (-not $skipRequested) { 'Skip request could not be delivered; still waiting safely.' } elseif ($safeSkipSupported) { 'Skip requested; waiting for the next supported safe boundary. No process was killed.' } else { 'Skip unavailable during this backend operation; waiting for completion. No process was killed.' }
+            Write-Info $skipMessage
+            Write-ReparoLog ("[SKIP-REQUEST] {0}: {1}" -f $Section, $skipMessage)
+        }
 
         if ([DateTime]::UtcNow -ge $nextHeartbeat) {
             Write-ReparoLog ("[CMD-WAIT] {0} still running elapsed={1} pid={2}" -f $Section, $stopwatch.Elapsed, $process.Id)
@@ -6422,6 +6582,21 @@ function Invoke-ReparoTimedCommand {
         }
 
         if ($timeoutEnabled -and $stopwatch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+            if ($skipRequested -or $Section -eq 'WindowsUpdate') {
+                if (-not $timeoutDeferred) {
+                    if (-not $skipRequested) {
+                        try {
+                            Set-Content -LiteralPath $skipRequestPath -Value 'Windows Update deadline reached; safe boundary requested' -Encoding UTF8 -ErrorAction Stop
+                            $skipRequested = $true
+                        }
+                        catch { Write-ReparoLog '[WARN] Could not deliver Windows Update safe-boundary request; still waiting without killing servicing.' }
+                    }
+                    $timeoutDeferred = $true
+                    Write-ReparoLog ("[SAFE-WAIT] {0} deadline reached; not killing an installer or abandoning Windows servicing. Waiting for completion/safe boundary." -f $Section)
+                    Write-Info 'Deadline reached; safe cancellation is pending. This is not a hard upper bound on installer completion.'
+                }
+                continue
+            }
             $timedOut = $true
             Stop-ReparoProcessTree -ProcessId $process.Id
             break
@@ -6431,6 +6606,7 @@ function Invoke-ReparoTimedCommand {
     $process.WaitForExit()
     Sync-ReparoCommandOutputLog -Path $commandOutputPath -LineCount ([ref]$loggedLineCount) -Output $output -Section $Section
     $stopwatch.Stop()
+    Remove-Item -LiteralPath $skipRequestPath -Force -ErrorAction SilentlyContinue
 
     if ($timedOut) {
         Write-ReparoLog ("[CMD-TIMEOUT] {0} timed out after {1}s elapsed={2}" -f $Section, $TimeoutSeconds, $stopwatch.Elapsed)
@@ -6470,6 +6646,7 @@ Log: $script:ReparoLogPath
         ExitCode = $process.ExitCode
         Output   = $output.ToArray()
         Elapsed  = $stopwatch.Elapsed
+        SkipRequested = $skipRequested
     }
 }
 
@@ -6850,6 +7027,15 @@ function Invoke-ReparoCommandStep {
             }
         }
         Write-ReparoDebug ("{0} output lines captured: {1}" -f $Section, $output.Count)
+
+        if ($Section -eq 'WindowsUpdate') { Add-ReparoWindowsUpdateReceipts -Output $output }
+        if ($exitCode -eq 130 -and @($output | Where-Object { $_ -match '^REPARO-STEP-SKIPPED safe boundary:' }).Count -gt 0) {
+            $skipDetail = ($output | Where-Object { $_ -match '^REPARO-STEP-SKIPPED safe boundary:' } | Select-Object -Last 1) -replace '^REPARO-STEP-SKIPPED ', ''
+            Write-Skip "${Section}: $skipDetail"
+            Write-ReparoLog ("[SKIPPED] {0}: {1}" -f $Section, $skipDetail)
+            Add-ReparoSummaryRecord -Bucket Skipped -Software $Section -Version '-' -Method $Section -Reason $skipDetail
+            return
+        }
 
         if ($Section -eq 'Opencode' -and $exitCode -eq 0) {
             $opencodeSkip = @($output | ForEach-Object {
@@ -7767,6 +7953,7 @@ if (`$pipUpdate.ExitCode -ne 0) {
 if (-not [string]::IsNullOrWhiteSpace(`$outdated)) {
     `$packages = `$outdated | ConvertFrom-Json
     foreach (`$pkg in `$packages) {
+        Stop-ReparoAtSafeBoundary 'between pip package updates'
         if (`$pkg.name) {
             if ([string]`$pkg.name -ieq 'pip') {
                 continue
@@ -7940,6 +8127,7 @@ if (-not [string]::IsNullOrWhiteSpace(`$jsonText)) {
     try { `$outdated = `$jsonText | ConvertFrom-Json } catch { `$outdated = `$null }
     if (`$outdated) {
         foreach (`$property in `$outdated.PSObject.Properties) {
+            if (Get-Command Stop-ReparoAtSafeBoundary -ErrorAction SilentlyContinue) { Stop-ReparoAtSafeBoundary 'between npm package updates' }
             if (`$property.Name -eq 'npm') {
                 if (`$npmSelfUpdated) {
                     Write-Host 'Skipping npm during global package update; npm self-update already handled the compatible target.'
@@ -8134,6 +8322,7 @@ if (-not `$toolIds -or `$toolIds.Count -eq 0) {
 }
 else {
     foreach (`$tool in `$toolIds) {
+        Stop-ReparoAtSafeBoundary 'between dotnet tool updates'
         if (`$lockedPackages -contains `$tool) {
             Write-Host "Skipping locked .NET tool: `$tool"
             continue
@@ -8273,11 +8462,11 @@ if (Test-ReparoSectionSelected 'WindowsUpdate') {
             Write-ReparoLog '[INFO] WindowsUpdate started; console heartbeat enabled every 60 seconds while active.'
             if ($AllowReboot) {
                 Write-ReparoLog '[INFO] WindowsUpdate reboot handling: AllowReboot requested; passing -AutoReboot.'
-                $windowsUpdateCommand = '$ErrorActionPreference = ''Stop''; Import-Module PSWindowsUpdate -ErrorAction Stop; Get-WindowsUpdate -AcceptAll -Install -AutoReboot -ErrorAction Stop -Verbose 4>&1; $global:LASTEXITCODE = 0'
+                $windowsUpdateCommand = New-ReparoWindowsUpdateCommand -AutoReboot
             }
             else {
                 Write-ReparoLog '[INFO] WindowsUpdate reboot handling: defaulting to -IgnoreReboot.'
-                $windowsUpdateCommand = '$ErrorActionPreference = ''Stop''; Import-Module PSWindowsUpdate -ErrorAction Stop; Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot -ErrorAction Stop -Verbose 4>&1; $global:LASTEXITCODE = 0'
+                $windowsUpdateCommand = New-ReparoWindowsUpdateCommand
             }
 
             Invoke-ReparoCommandStep -Section 'WindowsUpdate' -PresenceCmd '' -Command $windowsUpdateCommand -TimeoutSeconds $WindowsUpdateTimeoutSeconds

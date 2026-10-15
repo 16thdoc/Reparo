@@ -103,6 +103,50 @@ unpinned; native N retains its historical New meaning, with Latest spelled out.
 
 ## Windows quick start
 
+## Windows Update details and graceful skip requests — 1.4.3.0
+
+In a real interactive Windows console, **Esc requests a skip**, not a process kill.
+Supported boundaries are before a worker's first command, between pip/npm/.NET package
+updates, and between Windows Update scan/download/install operations and individual
+updates. The active indivisible operation must finish before Reparo acknowledges
+`REPARO-STEP-SKIPPED`, records remaining work as skipped and moves on. Already
+completed work and Windows Update receipts are retained. Requests use a unique
+per-worker signal file, removed after exit; repeated presses do not queue later
+skips. Redirected/headless/RMM runs never poll the keyboard or prompt.
+
+There is **no universal safe cancel API** for package installers. During an
+unsupported backend, Esc reports that cancellation is unavailable and waits for
+completion; it does not detach, kill a wrapper, manufacture success or claim an
+installer stopped. A hung indivisible operation may still require separate
+diagnosis. After an interactive skip request, an expired deadline also waits
+safely rather than escalating that request into a process kill.
+
+Windows Update now emits explicit scan/applicable-count, download and installation
+phases, update titles/KBs/sizes/backend results and available HRESULT values.
+Backend-reported size is metadata, not measured network bytes or a download estimate.
+It pins each phase to a discovered UpdateID and lets PSWindowsUpdate revalidate
+that identity (phase calls can rescan and add latency). Only a terminal `Installed`
+result without any failure is counted as Updated; empty scans are explicit and
+missing/failed/aborted results are not called success. Per-update receipts join the
+final software summary, including partial success before a skip. Percentage is
+explicitly unavailable when PSWindowsUpdate does not expose one; the existing
+heartbeat reports liveness, not invented progress. Default `-IgnoreReboot` and
+explicit `-AllowReboot` policy are preserved.
+
+`-WindowsUpdateTimeoutSeconds` is now a **cooperative safe-boundary deadline**, not
+a hard servicing kill: after the deadline Reparo requests the next boundary and
+waits for the active operation to finish, which can exceed the configured time.
+It never abandons an installer or starts the next section while servicing remains
+inside its worker. `-IgnoreTimeouts` disables deadline requests.
+
+Native Linux intentionally does not implement Windows Update or Esc cancellation:
+its POSIX package-manager path has no portable cooperative-cancel adapter. This
+boundary is documented in native help and regression-tested; no unsafe keyboard
+or wrapper-kill imitation was added. Shared version/quote/source/art stay aligned.
+
+Regression fixtures: `Test-ReparoGracefulSkip.ps1` and
+`Test-ReparoWindowsUpdateDetails.ps1` (no real installation or power action).
+
 ## OpenCode V2 updater compatibility — 1.4.2.1
 
 The dedicated `Opencode` section recognizes npm-owned OpenCode V2
@@ -925,7 +969,7 @@ Use `-WingetDiscover` when you want to refresh the winget discovery list without
 Use `-Kill` when a run is stuck; it stops matched Reparo process trees and then sweeps known updater front ends so orphaned `winget.exe` or similar package-manager processes are not left running. Reparo does not kill generic shells or installer engines by default; add extra process base names with `-KillUpdaterNames` when you intentionally want that broader cleanup.
 Use `-IgnoreTimeouts` when you explicitly want to suppress timeout enforcement even if timeout values are supplied.
 Use `-AllowReboot` only when Windows Update may auto-reboot before the rest of the Reparo run finishes. Use `-Reboot` to restart, or `-Shutdown` / `-S` to power off, 30 seconds after Reparo completes. Both post-run power actions honor `-Preview`; `-Reboot` and `-Shutdown` cannot be combined.
-Winget upgrades default to `-WingetTimeoutSeconds 1800` so an unattended installer cannot wait forever; set it to `0` or use `-IgnoreTimeouts` only when indefinite execution is intentional. Discovery and Windows Update timeouts remain opt-in. `WslApt` defaults to `-WslAptTimeoutSeconds 1800` because unattended sudo/apt sessions can otherwise wait forever.
+Winget upgrades default to `-WingetTimeoutSeconds 1800`; set it to `0` or use `-IgnoreTimeouts` only when indefinite execution is intentional. Discovery and Windows Update deadlines remain opt-in; Windows Update waits for a safe boundary rather than killing servicing, and an interactive Esc request never escalates to a timeout kill. `WslApt` defaults to `-WslAptTimeoutSeconds 1800` because unattended sudo/apt sessions can otherwise wait forever.
 Use `-InstallNuGetProvider:$false` if a managed environment wants to block NuGet provider bootstrapping, or leave it at the default `true` so Reparo can install it before PSGallery module installs.
 
 At the end of the run, Reparo prints a `REPARO summary` with:
