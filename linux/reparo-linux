@@ -6,10 +6,10 @@ set -u
 umask 077
 
 # Native and Windows runners share one Reparo release number and version flavor.
-REPARO_LINUX_VERSION='1.4.2.0'
-REPARO_VERSION_QUOTE='Fear is the mind-killer.'
-REPARO_VERSION_SOURCE='Dune (1965), by Frank Herbert'
-REPARO_VERSION_ART='  [ GOM JABBAR ] ---{ BOX }--- bounded reporting, no hidden commands'
+REPARO_LINUX_VERSION='1.4.2.1'
+REPARO_VERSION_QUOTE='I am a leaf on the wind. Watch how I soar.'
+REPARO_VERSION_SOURCE='Serenity (2005), written and directed by Joss Whedon'
+REPARO_VERSION_ART='  [ SERENITY ] <===> live pilots spared; updates follow their owning ship'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-}"
 REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
 LATEST=0
@@ -620,13 +620,44 @@ run_npm_global_update() {
 
     # Preview is a strict non-executing mode: do not even query npm configuration.
     if [ "$PREVIEW" -eq 1 ]; then
-        run_command Npm 'npm update -g' "$npm_executable" update -g || true
-    elif npm_system_scope; then
+        run_command Npm 'npm update -g (excluding opencode-ai and @opencode/cli; dedicated Opencode section)' "$npm_executable" update -g || true
+        return 0
+    fi
+
+    # A broad npm update would bypass OpenCode ownership/process safeguards.
+    npm_inventory=$(mktemp "${TMPDIR:-/tmp}/reparo-npm-inventory.XXXXXX") || return 1
+    if ! "$npm_executable" ls -g --depth=0 --parseable >"$npm_inventory"; then
+        rm -f "$npm_inventory"
+        RUN_RESULT=partial
+        record_not_updated FAILED Npm 'cannot enumerate global npm packages' 'Repair npm ls -g --depth=0 before retrying; no broad update was attempted.'
+        return 0
+    fi
+    set --
+    npm_first_line=1
+    while IFS= read -r npm_package_path; do
+        if [ "$npm_first_line" -eq 1 ]; then npm_first_line=0; continue; fi
+        [ -n "$npm_package_path" ] || continue
+        npm_package_name=$(basename "$npm_package_path")
+        npm_package_parent=$(basename "$(dirname "$npm_package_path")")
+        case "$npm_package_parent" in @*) npm_package_name="$npm_package_parent/$npm_package_name" ;; esac
+        case "$npm_package_name" in
+            opencode-ai|@opencode/cli)
+                log "[SKIP] Npm: $npm_package_name is handled by the dedicated Opencode section"
+                ;;
+            *) set -- "$@" "$npm_package_name" ;;
+        esac
+    done <"$npm_inventory"
+    rm -f "$npm_inventory"
+    if [ "$#" -eq 0 ]; then
+        log '[SKIP] Npm: no global packages outside the dedicated Opencode section'
+        return 0
+    fi
+    if npm_system_scope; then
         log '[INFO] Npm: detected system global prefix; using root or passwordless sudo'
         syslog_event notice npm_scope Npm detected system_global
-        run_privileged Npm 'npm update -g (system global prefix)' "$npm_executable" update -g || true
+        run_privileged Npm 'npm update -g (system global prefix, excluding OpenCode)' "$npm_executable" update -g -- "$@" || true
     else
-        run_command Npm 'npm update -g' "$npm_executable" update -g || true
+        run_command Npm 'npm update -g (excluding OpenCode)' "$npm_executable" update -g -- "$@" || true
     fi
 }
 
@@ -647,24 +678,89 @@ run_opencode_update() {
 
     opencode_path=$(command -v opencode)
     opencode_prefix=$(dirname "$(dirname "$opencode_path")")
-    opencode_package="$opencode_prefix/lib/node_modules/opencode-ai"
-    if [ ! -d "$opencode_package" ]; then
+    opencode_target=$(readlink -f "$opencode_path" 2>/dev/null || true)
+    opencode_package=''
+    for opencode_candidate in @opencode/cli opencode-ai; do
+        case "$opencode_target" in
+            "$opencode_prefix/lib/node_modules/$opencode_candidate/"*)
+                if [ -f "$opencode_prefix/lib/node_modules/$opencode_candidate/package.json" ]; then
+                    opencode_package=$opencode_candidate
+                    break
+                fi
+                ;;
+        esac
+    done
+    if [ -z "$opencode_package" ]; then
         log "[SKIP] Opencode: $opencode_path is not a standard npm global installation"
         syslog_event notice command_skipped Opencode skipped unsupported_installation
         record_not_updated SKIPPED Opencode 'active command is not a standard npm global installation' 'Update OpenCode through the installer or package manager that owns the active command.'
         return 0
     fi
 
+    # Do not stop a service or client to replace its executable. pgrep checks all
+    # users conservatively; unknown process state is not permission to update.
+    if ! command_exists pgrep; then
+        record_not_updated SKIPPED Opencode 'pgrep unavailable; cannot check running OpenCode' 'Install procps, then retry with OpenCode stopped.'
+        return 0
+    fi
+    opencode_process_status=0
+    pgrep -x 'opencode|opencode2' >/dev/null 2>&1 || opencode_process_status=$?
+    if [ "$opencode_process_status" -ne 1 ]; then
+        log '[SKIP] Opencode: OpenCode is running or process state is unknown; no sessions will be terminated'
+        record_not_updated SKIPPED Opencode 'OpenCode running or process state unknown' 'Close clients and stop the OpenCode service, then rerun; Reparo never terminates sessions.'
+        return 0
+    fi
+
     npm_executable=$(command -v npm)
+    if [ "$opencode_package" = opencode-ai ]; then
+        if [ -f "$opencode_prefix/lib/node_modules/@opencode/cli/package.json" ]; then
+            log '[SKIP] Opencode: V1 owns the command but V2 is also installed; resolve the mixed installation before migrating'
+            record_not_updated SKIPPED Opencode 'mixed V1/V2 installation with V1 active' 'Remove the conflicting installation through its owning package manager, then rerun.'
+            return 0
+        fi
+        opencode_legacy_version=$(node -e 'const v = require(process.argv[1]).version; if (!/^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/.test(v)) process.exit(1); console.log(v)' "$opencode_prefix/lib/node_modules/opencode-ai/package.json" 2>/dev/null || true)
+        case "$opencode_legacy_version" in
+            ''|*[!0-9A-Za-z.+-]*)
+                record_not_updated FAILED Opencode 'cannot read installed V1 version for rollback' 'Repair the package manifest and node installation before migrating.'
+                RUN_RESULT=partial
+                return 0 ;;
+        esac
+        opencode_migration_script='
+npm=$1; prefix=$2; old_version=$3
+"$npm" uninstall --global --prefix "$prefix" opencode-ai
+status=$?
+if [ "$status" -eq 0 ]; then
+    "$npm" install --global --prefix "$prefix" @opencode/cli@latest
+    status=$?
+fi
+if [ "$status" -ne 0 ]; then
+    printf "%s\n" "[ROLLBACK] OpenCode V2 migration failed; attempting to restore opencode-ai $old_version"
+    "$npm" uninstall --global --prefix "$prefix" @opencode/cli
+    if "$npm" install --global --prefix "$prefix" "opencode-ai@$old_version"; then
+        printf "%s\n" "[ROLLBACK] Restored opencode-ai $old_version"
+    else
+        printf "%s\n" "[FAIL] V1 rollback also failed; repair this npm prefix manually" >&2
+    fi
+fi
+exit "$status"
+'
+        case "$opencode_prefix" in
+            /usr|/usr/*|/opt|/opt/*)
+                run_privileged Opencode 'migrate npm-owned OpenCode V1 to V2 (owning prefix; rollback on failure)' sh -c "$opencode_migration_script" reparo "$npm_executable" "$opencode_prefix" "$opencode_legacy_version" || true ;;
+            *)
+                run_command Opencode 'migrate npm-owned OpenCode V1 to V2 (owning prefix; rollback on failure)' sh -c "$opencode_migration_script" reparo "$npm_executable" "$opencode_prefix" "$opencode_legacy_version" || true ;;
+        esac
+        return 0
+    fi
     # Do not invoke `opencode upgrade`: it prompts before modifying an npm-owned
     # executable, and its npm method follows npm's configured prefix rather than the
     # prefix that owns the active OpenCode command. Update that owning prefix directly.
     case "$opencode_prefix" in
         /usr|/usr/*|/opt|/opt/*)
-            run_privileged Opencode 'npm install --global opencode-ai@latest (owning prefix)' "$npm_executable" install --global --prefix "$opencode_prefix" opencode-ai@latest || true
+            run_privileged Opencode "npm install --global $opencode_package@latest (owning prefix)" "$npm_executable" install --global --prefix "$opencode_prefix" "$opencode_package@latest" || true
             ;;
         *)
-            run_command Opencode 'npm install --global opencode-ai@latest (owning prefix)' "$npm_executable" install --global --prefix "$opencode_prefix" opencode-ai@latest || true
+            run_command Opencode "npm install --global $opencode_package@latest (owning prefix)" "$npm_executable" install --global --prefix "$opencode_prefix" "$opencode_package@latest" || true
             ;;
     esac
 }

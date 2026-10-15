@@ -154,7 +154,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.4.2.0'
+$script:ReparoVersion = '1.4.2.1'
 $script:ReparoBoundParameters = $PSBoundParameters
 $script:ReparoTaskBlockedParameters = @('Time','New','Latest','Install','Ninja','Status','Tail','Kill','Sweep','DeleteStale','Search','AddVersionLock','ListVersionLocks','CheckApp','LockApp','MigrateChocoToWinget','FinalizeChocolateyRemoval','Syslog','SkipNinjaPublish','SourceUrl','NoBackup','ReportLifecycle','ReportingOutcome','ReportingPreviousVersion')
 if (($ReportingOutcome -or $PSBoundParameters.ContainsKey('ReportingPreviousVersion')) -and -not $ReportLifecycle) { throw 'Reporting fields require -ReportLifecycle; refusing accidental maintenance.' }
@@ -337,6 +337,7 @@ function Get-ReparoVersionFlavor {
         '1.4.1.2' = [pscustomobject]@{ Quote = 'You shall not pass!'; Source = 'The Lord of the Rings: The Fellowship of the Ring (screenplay by Fran Walsh, Philippa Boyens and Peter Jackson)'; Art = '  [ GANDALF ] self-update refuses unreadable cron and unsafe shim paths' }
         '1.4.1.3' = [pscustomobject]@{ Quote = 'Trust your feelings.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ OBI-WAN ] ===[==========> immutable release artifacts verified' }
         '1.4.2.0' = [pscustomobject]@{ Quote = 'Fear is the mind-killer.'; Source = 'Dune (1965), by Frank Herbert'; Art = '  [ GOM JABBAR ] ---{ BOX }--- bounded reporting, no hidden commands' }
+        '1.4.2.1' = [pscustomobject]@{ Quote = 'I am a leaf on the wind. Watch how I soar.'; Source = 'Serenity (2005), written and directed by Joss Whedon'; Art = '  [ SERENITY ] <===> live pilots spared; updates follow their owning ship' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -6850,6 +6851,16 @@ function Invoke-ReparoCommandStep {
         }
         Write-ReparoDebug ("{0} output lines captured: {1}" -f $Section, $output.Count)
 
+        if ($Section -eq 'Opencode' -and $exitCode -eq 0) {
+            $opencodeSkip = @($output | ForEach-Object {
+                if ([string]$_ -match '^\[SKIP\] Opencode: (?<Reason>.+)$') { $matches.Reason }
+            })
+            if ($opencodeSkip.Count -gt 0) {
+                Add-ReparoSummaryRecord -Bucket Skipped -Software 'Opencode' -Version '-' -Method 'Opencode' -Reason ($opencodeSkip -join '; ')
+                return
+            }
+        }
+
         $manualWingetReason = Get-ReparoWingetManualInterventionReason -Output $output
         $manualWingetPackageIds = @(
             $output |
@@ -7944,6 +7955,11 @@ if (-not [string]::IsNullOrWhiteSpace(`$jsonText)) {
                 continue
             }
 
+            if (`$property.Name -in @('opencode-ai', '@opencode/cli')) {
+                Write-Host "Skipping `$(`$property.Name) during npm updates; use the dedicated Opencode section for ownership and running-process checks."
+                continue
+            }
+
             Write-Host "Updating npm package: `$(`$property.Name)"
             npm update -g `$property.Name
             if (`$LASTEXITCODE -ne 0) { throw "Failed updating npm package: `$(`$property.Name)" }
@@ -7960,80 +7976,127 @@ exit 0
 
 
 function New-ReparoOpencodeUpdateCommand {
-@"
-`$ErrorActionPreference = 'Continue'
+    param([string[]]$LockedPackages = @())
+    $lockedLiteral = '@({0})' -f (($LockedPackages | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { "'{0}'" -f $_.Replace("'", "''") }) -join ', ')
+    $template = @'
+$ErrorActionPreference = 'Stop'
+$lockedPackages = __LOCKED_PACKAGES__
 function Add-ReparoNpmPrefixToPathForOpencode {
-    `$npm = Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not `$npm) { return }
+    $npm = Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $npm) { return }
 
-    `$prefix = (& npm config get prefix 2>`$null | Select-Object -First 1)
-    if ([string]::IsNullOrWhiteSpace(`$prefix)) { return }
+    $prefixOutput = @(& $npm.Source config get prefix 2>$null)
+    $prefix = $prefixOutput | Select-Object -First 1
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($prefix)) { throw 'Cannot determine the npm global prefix.' }
 
-    `$prefix = `$prefix.Trim()
-    `$prefixBin = if (`$IsWindows) { `$prefix } else { Join-Path `$prefix 'bin' }
-    if (-not (Test-Path -LiteralPath `$prefixBin)) { return }
+    $prefix = $prefix.Trim()
+    $prefixBin = if ($env:OS -eq 'Windows_NT') { $prefix } else { Join-Path $prefix 'bin' }
+    if (-not (Test-Path -LiteralPath $prefixBin)) { return }
 
-    `$pathParts = @((`$env:PATH -split [IO.Path]::PathSeparator) | Where-Object { -not [string]::IsNullOrWhiteSpace(`$_) })
-    if (`$pathParts -notcontains `$prefixBin) {
-        `$env:PATH = (`@(`$prefixBin) + `$pathParts) -join [IO.Path]::PathSeparator
-        Write-Host "Added npm global bin to PATH for this run: `$prefixBin"
+    $pathParts = @(($env:PATH -split [IO.Path]::PathSeparator) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($pathParts -notcontains $prefixBin) {
+        $env:PATH = (@($prefixBin) + $pathParts) -join [IO.Path]::PathSeparator
+        Write-Host "Added npm global bin to PATH for this run: $prefixBin"
     }
 }
 
-Add-ReparoNpmPrefixToPathForOpencode
-`$ran = `$false
-`$npm = Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-`$opencode = Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-
-if (`$opencode) {
-    `$beforeVersion = (& opencode --version 2>`$null | Select-Object -First 1)
-    Write-Host "Active opencode before update: `$(`$opencode.Source) `$beforeVersion"
-
-    if (`$npm) {
-        opencode upgrade --method npm
-    }
-    else {
-        opencode upgrade
-    }
-
-    if (`$LASTEXITCODE -ne 0) { throw "opencode upgrade failed with exit code `$LASTEXITCODE" }
-    `$ran = `$true
-}
-elseif (`$npm) {
-    Write-Host 'opencode not found; installing/updating opencode-ai via npm.'
-    npm install -g opencode-ai@latest
-    if (`$LASTEXITCODE -ne 0) { throw "npm install -g opencode-ai@latest failed with exit code `$LASTEXITCODE" }
+if (-not (Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1)) {
     Add-ReparoNpmPrefixToPathForOpencode
-    `$ran = `$true
+}
+$npm = Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+$opencode = Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $npm) {
+    Write-Host '[SKIP] Opencode: npm not found; use the installer or package manager that owns OpenCode.'
+    exit 0
+}
+if (Get-Process -Name opencode,opencode2 -ErrorAction SilentlyContinue) {
+    Write-Host '[SKIP] Opencode: OpenCode is running (client or background service). Close clients and stop the service, then rerun; Reparo will not terminate sessions.'
+    exit 0
 }
 
-`$opencode = Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-if (`$opencode) {
-    `$afterVersion = (& opencode --version 2>`$null | Select-Object -First 1)
-    Write-Host "Active opencode after update: `$(`$opencode.Source) `$afterVersion"
-}
-
-`$oc = Get-Command oc -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-if (`$oc) {
-    Write-Host "Running opencode sync: `$(`$oc.Source) -s"
-    oc -s
-    if (`$LASTEXITCODE -ne 0) { throw "oc -s failed with exit code `$LASTEXITCODE" }
-    `$ran = `$true
+$package = '@opencode/cli'
+if ($opencode) {
+    # Only update an npm installation proven to own the active shim. Never force
+    # npm onto a standalone, curl, or another package manager's executable.
+    $commandDir = Split-Path -Parent $opencode.Source
+    $prefix = if ($env:OS -eq 'Windows_NT') { $commandDir } else { Split-Path -Parent $commandDir }
+    $moduleRoot = if ($env:OS -eq 'Windows_NT') { Join-Path $prefix 'node_modules' } else { Join-Path $prefix 'lib/node_modules' }
+    $shim = if ($opencode.Source -match '\.(cmd|ps1)$') { Get-Content -LiteralPath $opencode.Source -Raw } else { '' }
+    $target = (Get-Item -LiteralPath $opencode.Source).Target
+    $owner = $null
+    foreach ($candidate in @('@opencode/cli', 'opencode-ai')) {
+        $packageDir = Join-Path $moduleRoot $candidate
+        $marker = 'node_modules[\\/]' + [regex]::Escape($candidate).Replace('/', '[\\/]') + '[\\/]'
+        if ((Test-Path -LiteralPath (Join-Path $packageDir 'package.json')) -and
+            ($shim -match $marker -or ($target -and [string]$target -match $marker))) {
+            $owner = $candidate
+            break
+        }
+    }
+    if (-not $owner) {
+        Write-Host "[SKIP] Opencode: $($opencode.Source) is not a recognized npm-owned command; update it through its owning installer or package manager."
+        exit 0
+    }
+    $package = $owner
+    Write-Host "Active opencode before update: $($opencode.Source)"
 }
 else {
-    Write-Host 'oc sync command not found; skipping oc -s.'
+    $prefixOutput = @(& $npm.Source config get prefix 2>$null)
+    $prefix = $prefixOutput | Select-Object -First 1
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($prefix)) { throw 'Cannot determine the npm global prefix.' }
+    $prefix = $prefix.Trim()
+    Write-Host 'opencode not found; installing OpenCode V2 via @opencode/cli.'
+}
+if ($lockedPackages -contains $package -or $lockedPackages -contains '@opencode/cli') {
+    Write-Host "[SKIP] Opencode: locked npm package: $package"
+    exit 0
 }
 
-if (-not `$ran) {
-    Write-Host 'Neither opencode nor npm nor oc was found; nothing to update.'
+if ($package -eq 'opencode-ai') {
+    if (Test-Path -LiteralPath (Join-Path $moduleRoot '@opencode/cli/package.json')) {
+        Write-Host '[SKIP] Opencode: V1 owns the command but V2 is also installed; resolve the mixed installation before migrating.'
+        exit 0
+    }
+    $legacyManifest = Get-Content -LiteralPath (Join-Path $moduleRoot 'opencode-ai/package.json') -Raw | ConvertFrom-Json
+    $legacyVersion = [string]$legacyManifest.version
+    if ($legacyVersion -notmatch '^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$') { throw 'Cannot read the installed OpenCode V1 version for rollback.' }
+    Write-Host "Migrating opencode-ai $legacyVersion to @opencode/cli in owning npm prefix: $prefix"
+    & $npm.Source uninstall --global --prefix $prefix opencode-ai
+    $migrationExit = $LASTEXITCODE
+    if ($migrationExit -eq 0) {
+        & $npm.Source install --global --prefix $prefix '@opencode/cli@latest'
+        $migrationExit = $LASTEXITCODE
+    }
+    if ($migrationExit -ne 0) {
+        Write-Host '[ROLLBACK] OpenCode V2 migration failed; attempting to restore the original V1 package version.'
+        & $npm.Source uninstall --global --prefix $prefix '@opencode/cli'
+        & $npm.Source install --global --prefix $prefix "opencode-ai@$legacyVersion"
+        if ($LASTEXITCODE -ne 0) { throw "OpenCode V2 migration failed (exit $migrationExit); V1 rollback also failed (exit $LASTEXITCODE). Repair this npm prefix manually." }
+        throw "OpenCode V2 migration failed with exit code $migrationExit; restored opencode-ai $legacyVersion."
+    }
 }
+else {
+    Write-Host "Updating $package in owning npm prefix: $prefix"
+    & $npm.Source install --global --prefix $prefix "$package@latest"
+    if ($LASTEXITCODE -ne 0) { throw "npm install for $package failed with exit code $LASTEXITCODE" }
+}
+if (-not (Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+    Add-ReparoNpmPrefixToPathForOpencode
+}
+$opencode = Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $opencode) { throw 'opencode is unavailable after npm installation.' }
+$versionOutput = @(& $opencode.Source --version 2>$null)
+$afterVersion = $versionOutput | Select-Object -First 1
+if ($LASTEXITCODE -ne 0) { throw 'opencode --version failed after npm installation.' }
+Write-Host "Active opencode after update: $($opencode.Source) $afterVersion"
 
 exit 0
-"@
+'@
+    $template.Replace('__LOCKED_PACKAGES__', $lockedLiteral)
 }
 
-$opencodeCommand = New-ReparoOpencodeUpdateCommand
 $lockedNpmIds = @(Get-ReparoLockedPackageIds -Method 'npm')
+$opencodeCommand = New-ReparoOpencodeUpdateCommand -LockedPackages $lockedNpmIds
 if ($lockedNpmIds.Count -gt 0) {
     $npmCommand = New-ReparoNpmUpdateCommand -LockedPackages $lockedNpmIds
     Add-ReparoSummaryNote ("npm version locks active; excluding: {0}" -f ($lockedNpmIds -join ', '))

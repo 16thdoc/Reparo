@@ -103,6 +103,40 @@ unpinned; native N retains its historical New meaning, with Latest spelled out.
 
 ## Windows quick start
 
+## OpenCode V2 updater compatibility — 1.4.2.1
+
+The dedicated `Opencode` section recognizes npm-owned OpenCode V2
+(`@opencode/cli`) and V1 (`opencode-ai`) and updates the package in the prefix
+that owns the active command, not npm's possibly different configured prefix.
+An npm-owned V1 installation is migrated to V2: Reparo records the installed
+V1 version, removes `opencode-ai` before installing `@opencode/cli`, and attempts
+to reinstall the exact original V1 version if migration fails. Rollback needs
+working npm registry/cache access; rollback failure is reported, never hidden.
+Mixed installs where V1 owns the command but V2 is already installed are skipped
+for manual resolution rather than risking the other package. Windows' existing install-if-missing behavior
+now installs `@opencode/cli`; native Linux remains update-installed-only.
+
+Both runners skip OpenCode while a client or background service is running.
+Close clients and, for V2, run `opencode service stop` before rerunning Reparo
+outside OpenCode. Reparo never stops that service or terminates sessions to
+perform an upgrade. Native Linux requires `pgrep` (procps) to establish that
+OpenCode is stopped. Unrecognized/standalone installations are skipped; update
+them through their owning installer. No interactive `opencode upgrade` or
+legacy `oc -s` synchronization is invoked.
+
+The general `Npm` section excludes both OpenCode packages, so it cannot bypass
+these safeguards. Select `Opencode` as well if you want those packages updated.
+Windows npm version locks apply to the dedicated updater too. Native Linux's
+general npm section enumerates installed packages explicitly and refuses a
+broad update when that inventory fails.
+
+Regression coverage: `Tests/Test-ReparoOpencodeUpdate.ps1` and
+`Tests/test-reparo-linux-opencode.sh`. An opt-in real npm migration pilot is
+available as `REPARO_OPENCODE_LIVE_PROBE=1 sh Tests/test-reparo-linux-opencode-live.sh`;
+it uses a disposable prefix and never starts a service. See the official
+[V2 installation](https://opencode.ai/v2/docs/) and
+[migration guide](https://opencode.ai/v2/docs/migrate-v1).
+
 ## Optional authenticated reporting — 1.4.2.0
 
 **Off by default.** Ordinary public installs require no Node/client bundle and send
@@ -530,6 +564,11 @@ creates and enables a systemd user service; `-EnableLinger` also keeps that user
 service alive after logout. Moshi's current pairing CLI accepts its token only
 as an argument, so the token is briefly visible in the remote host's process
 list; do not pair this way on an untrusted multi-user host.
+
+Reparo delegates hook generation to upstream `moshi-hook`; it does not ship an
+OpenCode plugin. OpenCode V2 changes the plugin API, so treat Moshi's generated
+plugin as a separate compatibility check before enabling it on V2. This release
+does not certify that upstream integration or rewrite existing project plugins.
 
 Mosh bootstraps over the configured SSH TCP port (normally 22) and then uses UDP
 60000-61000. Prefer Tailscale or another VPN instead of exposing those ports
