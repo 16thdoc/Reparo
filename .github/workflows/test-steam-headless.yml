@@ -16,6 +16,17 @@ jobs:
       - name: Steam integration regression
         shell: powershell
         run: .\Tests\Test-ReparoSteamHeadless.ps1
+      - name: Steam client session-safety regression
+        shell: powershell
+        run: |
+          try {
+            .\Tests\Test-ReparoSteamClient.ps1
+            if (-not $?) { throw 'Steam client regression failed' }
+            exit 0
+          } catch {
+            Write-Error $_
+            exit 1
+          }
       - name: Existing scheduling regression
         shell: powershell
         run: |
