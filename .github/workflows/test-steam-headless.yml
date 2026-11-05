@@ -18,4 +18,12 @@ jobs:
         run: .\Tests\Test-ReparoSteamHeadless.ps1
       - name: Existing scheduling regression
         shell: powershell
-        run: .\Tests\Test-ReparoFlexibleScheduling.ps1
+        run: |
+          try {
+            .\Tests\Test-ReparoFlexibleScheduling.ps1
+            if (-not $?) { throw 'Scheduling regression failed' }
+            exit 0
+          } catch {
+            Write-Error $_
+            exit 1
+          }
