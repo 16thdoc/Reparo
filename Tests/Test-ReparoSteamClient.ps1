@@ -77,6 +77,11 @@ try {
         param($Bucket,$Software,$Method,$Reason)
         [void]$script:receipts.Add([pscustomobject]@{ Bucket=$Bucket; Reason=$Reason })
     }
+    function Get-AuthenticodeSignature {
+        [CmdletBinding()]
+        param([string]$LiteralPath)
+        [pscustomobject]@{ Status='Valid'; SignerCertificate=[pscustomobject]@{ Subject='CN=Valve Corp.,O=Valve Corp.,C=US' } }
+    }
     function Start-ReparoProcessWithExplorerToken {
         param($ApplicationPath,$Arguments)
         $script:launches++
