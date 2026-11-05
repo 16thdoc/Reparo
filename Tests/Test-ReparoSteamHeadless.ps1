@@ -31,7 +31,7 @@ try {
     New-Item -ItemType Directory -Force -Path $steamApps,$otherApps | Out-Null
     # Valve KeyValues Windows escapes backslashes in libraryfolders.vdf.
     $escaped=$library.Replace('\','\\')
-    ('"libraryfolders" { "1" { "path" "'+$escaped+'" } }') | Set-Content -LiteralPath (Join-Path $steamApps 'libraryfolders.vdf')
+    @('"libraryfolders"','{','    "1"','    {',('        "path" "'+$escaped+'"'),'    }','}') | Set-Content -LiteralPath (Join-Path $steamApps 'libraryfolders.vdf')
     @'
 "AppState"
 {
