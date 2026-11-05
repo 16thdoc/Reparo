@@ -10,7 +10,7 @@ foreach ($name in @('Get-ReparoSteamClientPath','Get-ReparoSteamGameInventory','
     if (-not $node) { throw "Missing Steam function: $name" }
     Invoke-Expression $node.Extent.Text
 }
-if ($source -notmatch "(?s)\$windowsForceSections = @\(.*?'Steam'.*?\)") {
+if ($source -notmatch '(?s)\$windowsForceSections = @\(.*?''Steam''.*?\)') {
     throw 'Steam was not added to Windows -Force sections'
 }
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('reparo-steam-fixture-' + [guid]::NewGuid().ToString('N'))
