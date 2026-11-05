@@ -7055,6 +7055,21 @@ function Invoke-ReparoSteamGameUpdates {
         Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'already running; updates governed by Steam settings, not verified'
         return
     }
+    # Steam will execute in a user's session; verify Valve's code-signing identity
+    # before launching any executable discovered through a process/registry path.
+    try {
+        $signature = Get-AuthenticodeSignature -LiteralPath $exe -ErrorAction Stop
+        if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
+            $signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Valve Corp\.(,|$)') {
+            Write-Skip 'Steam executable does not have a valid Valve code signature; refusing to launch.'
+            Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'Steam executable signature could not be verified'
+            return
+        }
+    } catch {
+        Write-Skip 'Steam executable signature check failed; refusing to launch.'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'Steam executable signature check failed'
+        return
+    }
     try {
         $startedPid = Start-ReparoProcessWithExplorerToken -ApplicationPath $exe -Arguments '-silent'
         Write-Info ("Steam started in desktop session (PID {0}); it will apply its own update policy." -f $startedPid)
