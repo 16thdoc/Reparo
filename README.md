@@ -101,6 +101,50 @@ is operator-trusted bootstrap code; an installed native runner verifies the down
 bootstrap first. Windows Install remains offline and Windows Latest/N remains
 unpinned; native N retains its historical New meaning, with Latest spelled out.
 
+## Steam desktop games and SSH-detached maintenance (experimental)
+
+Windows `-Force` includes `Steam`; `-Include Steam` runs the section on its own.
+Reparo discovers the installed Steam desktop executable and the app manifests
+under Steam libraries (including extra libraries from `libraryfolders.vdf`).
+Local appmanifest state flags are inventory hints, not proof that an update is
+available, downloading, or complete.
+
+**SteamCMD is NOT used for games installed by the desktop client.** SteamCMD
+is designed for dedicated game server deployment and some supported depots.
+It does not universally update the Steam desktop library. Reparo will not
+modify Steam settings, force the client download queue, verify remote depot
+builds, or claim games updated when it merely requested Steam startup.
+
+With exactly one interactive Explorer desktop session, Reparo leaves an
+already-running Steam process alone. If Steam is closed, it validates
+the Steam executable's Valve Authenticode signature and starts Steam in the
+logged-in desktop user's session. With no desktop session or an ambiguous
+user, it skips safely. Steam account authentication and update/download
+policies still apply. No games are launched.
+
+`-Headless` reuses Reparo's existing one-shot Task Scheduler mechanism.
+From elevated PowerShell it registers a SYSTEM maintenance task for ~5
+seconds later and immediately returns to SSH. The job continues without
+the SSH session and writes standard Reparo logs and Windows event records.
+It requires an explicit maintenance selector; it rejects `-Time`, `-Task`,
+`-Preview`, and administrative modes. User-scoped installers may behave
+differently under SYSTEM.
+
+```powershell
+reparo -Force -Headless
+reparo -Include Steam -Headless
+reparo -Status
+reparo -Tail
+```
+
+Important: a successful `-Headless` return proves task registration, NOT
+successful completion of the scheduled worker. Inspect the later log and
+Reparo Application event records. Steam startup is never reported as
+completed game updates.
+
+Regression coverage: `Tests/Test-ReparoSteamHeadless.ps1` (non-mutating
+PowerShell AST validation, Steam inventory fixtures, scheduler flag checks).
+
 ## Windows quick start
 
 ## Windows Update details and graceful skip requests — 1.4.3.0
