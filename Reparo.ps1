@@ -137,6 +137,7 @@ param(
     [Alias('At')]
     [string]$Time,
     [switch]$Task,
+    [switch]$Headless,
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$')]
     [string]$TaskName = 'default',
     [ValidateSet('Create', 'List', 'Show', 'Enable', 'Disable', 'Remove')]
@@ -156,7 +157,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $script:ReparoVersion = '1.4.3.0'
 $script:ReparoBoundParameters = $PSBoundParameters
-$script:ReparoTaskBlockedParameters = @('Time','New','Latest','Install','Ninja','Status','Tail','Kill','Sweep','DeleteStale','Search','AddVersionLock','ListVersionLocks','CheckApp','LockApp','MigrateChocoToWinget','FinalizeChocolateyRemoval','Syslog','SkipNinjaPublish','SourceUrl','NoBackup','ReportLifecycle','ReportingOutcome','ReportingPreviousVersion')
+if ($Headless) {
+    if ($Task -or $PSBoundParameters.ContainsKey('Time')) { throw '-Headless cannot be combined with -Task or -Time.' }
+    if ($Preview -or $Help -or $Version -or $Install -or $New -or $Latest -or $Ninja -or $Status -or $Tail -or $Kill -or $Sweep -or $DeleteStale -or $Search -or $Msi -or $ReportLifecycle -or $AddVersionLock -or $ListVersionLocks -or $CheckApp -or $LockApp -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $WingetDiscover -or $WingetHealth) { throw '-Headless only supports maintenance runs. Run administrative and read-only commands normally.' }
+    if (-not $Force -and -not $Update -and -not $WindowsUpdate -and -not $Winget -and -not $WslApt -and -not $Include) { throw '-Headless requires -Force, -Update, -WindowsUpdate, -Winget, -WslApt, or -Include. No implicit maintenance.' }
+    $Time = '5s'
+    $script:ReparoBoundParameters['Time'] = $Time
+}
+$script:ReparoTaskBlockedParameters = @('Headless','Time','New','Latest','Install','Ninja','Status','Tail','Kill','Sweep','DeleteStale','Search','AddVersionLock','ListVersionLocks','CheckApp','LockApp','MigrateChocoToWinget','FinalizeChocolateyRemoval','Syslog','SkipNinjaPublish','SourceUrl','NoBackup','ReportLifecycle','ReportingOutcome','ReportingPreviousVersion')
 if (($ReportingOutcome -or $PSBoundParameters.ContainsKey('ReportingPreviousVersion')) -and -not $ReportLifecycle) { throw 'Reporting fields require -ReportLifecycle; refusing accidental maintenance.' }
 if ($ReportLifecycle -and (-not $ReportingOutcome -or $Install -or $New -or $Latest -or $Ninja -or $Update -or $Force -or $Task -or $Include)) { throw 'ReportLifecycle requires an explicit outcome and cannot run maintenance/lifecycle work.' }
 if ($ReportLifecycle) {
@@ -504,6 +512,7 @@ function Write-ReparoParameterBlock {
         Tail                         = $Tail
         TailLines                    = $TailLines
         Time                         = $Time
+        Headless                     = $Headless
         Include                      = $Include
         RemainingInclude             = $RemainingInclude
         Debug                        = [bool]($PSBoundParameters.ContainsKey('Debug'))
@@ -792,7 +801,8 @@ After install, new PowerShell sessions can usually run:
 Common sections:
   Winget, Winget(msstore), 7Zip, Choco, PowerShell7, WindowsUpdate, WindowsFeatureUpdate,
   Scoop, Apt, Dnf, Pacman, Zypper, Flatpak, Snap, Fwupd, Pip, Pipx, Npm, Opencode, Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer,
-  Wsl, WslApt.
+  Wsl, WslApt, Steam (Windows client auto-update startup; not verified completion).
+  -Headless: detached one-shot SYSTEM maintenance through Task Scheduler (requires elevation).
 
 Logs:
   C:\ProgramData\Reparo\Logs
@@ -863,6 +873,7 @@ $windowsForceSections = @(
     'Pipx'
     'Npm'
     'Opencode'
+    'Steam'
     'Pnpm'
     'Yarn'
     'DotNet'
@@ -2985,7 +2996,7 @@ function Resolve-ReparoScheduledTime {
 function Get-ReparoScheduledArgumentTokens {
     $tokens = New-Object System.Collections.Generic.List[string]
     foreach ($entry in $script:ReparoBoundParameters.GetEnumerator()) {
-        if ($entry.Key -in @('Time', 'Task')) { continue }
+        if ($entry.Key -in @('Time', 'Task', 'Headless')) { continue }
 
         $value = $entry.Value
         if ($value -is [System.Management.Automation.SwitchParameter]) {
@@ -3282,6 +3293,7 @@ function Test-ReparoOperationalModeRequested {
         'DeleteStale',
         'Tail',
         'Time',
+        'Headless',
         'Update',
         'Winget',
         'WingetDiscover',
@@ -6952,6 +6964,134 @@ function Invoke-ReparoWingetPackageQueue {
     }
 }
 
+# Steam desktop game updates use the signed-in Steam client, never SteamCMD.
+# Steam controls when updates download; this section cannot certify completion.
+function Get-ReparoSteamClientPath {
+    if (-not $script:ReparoIsWindows) { return $null }
+    $candidates = @()
+    foreach ($proc in @(Get-Process -Name steam -ErrorAction SilentlyContinue)) {
+        try { if ($proc.Path) { $candidates += [string]$proc.Path } } catch { }
+    }
+    foreach ($keyPath in @('HKLM:\SOFTWARE\WOW6432Node\Valve\Steam','HKLM:\SOFTWARE\Valve\Steam','HKCU:\SOFTWARE\Valve\Steam')) {
+        try {
+            $key = Get-ItemProperty -Path $keyPath -ErrorAction Stop
+            foreach ($property in @('InstallPath','SteamPath')) {
+                if ($key.$property) { $candidates += (Join-Path ([string]$key.$property) 'steam.exe') }
+            }
+        } catch { }
+    }
+    foreach ($root in @([Environment]::GetEnvironmentVariable('ProgramFiles(x86)'),$env:ProgramFiles)) {
+        if ($root) { $candidates += (Join-Path $root 'Steam\steam.exe') }
+    }
+    foreach ($exe in $candidates) {
+        if (Test-Path -LiteralPath $exe -PathType Leaf) { return $exe }
+    }
+    return $null
+}
+
+function Get-ReparoSteamGameInventory {
+    param([Parameter(Mandatory)][string]$SteamRoot)
+    $libraries = @($SteamRoot)
+    $folderFile = Join-Path (Join-Path $SteamRoot 'steamapps') 'libraryfolders.vdf'
+    if (Test-Path -LiteralPath $folderFile -PathType Leaf) {
+        try {
+            foreach ($line in @(Get-Content -LiteralPath $folderFile -ErrorAction Stop)) {
+                if ($line -match '^\s*"path"\s+"(?<Path>[^"]+)"') {
+                    $library = $matches['Path'].Replace('\\','\')
+                    if ([IO.Path]::IsPathRooted($library)) { $libraries += $library }
+                }
+            }
+        } catch { Write-ReparoLog ("[STEAM] libraryfolders.vdf unreadable: {0}" -f $_.Exception.Message) }
+    }
+    $seen = @{}
+    foreach ($library in $libraries) {
+        $apps = Join-Path $library 'steamapps'
+        if (-not (Test-Path -LiteralPath $apps -PathType Container)) { continue }
+        foreach ($manifest in @(Get-ChildItem -LiteralPath $apps -Filter 'appmanifest_*.acf' -File -ErrorAction SilentlyContinue)) {
+            if ($manifest.Name -notmatch '^appmanifest_(?<Id>[0-9]+)\.acf$') { continue }
+            $id = $matches['Id']
+            if ($seen.ContainsKey($id)) { continue }
+            try {
+                $data = Get-Content -LiteralPath $manifest.FullName -Raw -ErrorAction Stop
+                $name = if ($data -match '(?m)^\s*"name"\s+"(?<Name>[^"]+)"') { $matches['Name'] } else { "App $id" }
+                $flags = [int64]0
+                if ($data -match '(?m)^\s*"StateFlags"\s+"(?<Flags>[0-9]+)"') { $flags = [int64]$matches['Flags'] }
+                $seen[$id] = $true
+                [pscustomobject]@{ AppId=$id; Name=$name; StateFlags=$flags; UpdateFlagged=(($flags -band 2) -ne 0) }
+            } catch { Write-ReparoLog ("[STEAM] manifest unreadable: {0}" -f $manifest.FullName) }
+        }
+    }
+}
+
+function Invoke-ReparoSteamGameUpdates {
+    if (-not (Test-ReparoSectionSelected 'Steam')) { return }
+    if (-not $script:ReparoIsWindows) {
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'Windows only'
+        return
+    }
+    Write-Step 'Steam games (desktop client)'
+    $exe = Get-ReparoSteamClientPath
+    if (-not $exe) {
+        Write-Skip 'Steam desktop client not found.'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'not installed'
+        return
+    }
+    $games = @(Get-ReparoSteamGameInventory -SteamRoot (Split-Path -Parent $exe))
+    $flagged = @($games | Where-Object { $_.UpdateFlagged })
+    Write-Info ("Steam inventory: {0} installed manifests; {1} locally update-required." -f $games.Count,$flagged.Count)
+    Write-ReparoLog ("[STEAM] Inventory={0}; update-required flags={1}; path={2}" -f $games.Count,$flagged.Count,$exe)
+    foreach ($game in $flagged) {
+        Write-ReparoLog ("[STEAM] update-required flag: {0} ({1}) state={2}" -f $game.Name,$game.AppId,$game.StateFlags)
+    }
+    if ($Preview) {
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'preview: no changes'
+        return
+    }
+    if ($games.Count -eq 0) {
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'no installed games discovered'
+        return
+    }
+    # Without one interactive Explorer session, Steam cannot safely authenticate
+    # and may start in the wrong account or headless SSH/SYSTEM session.
+    $sessions = @(Get-Process -Name explorer -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -gt 0 } | Select-Object -ExpandProperty SessionId -Unique)
+    if ($sessions.Count -ne 1) {
+        $reason = if ($sessions.Count -eq 0) { 'no desktop user session' } else { 'multiple desktop sessions; ambiguous owner' }
+        Write-Skip ("Steam update startup skipped: {0}" -f $reason)
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason $reason
+        return
+    }
+    $steamRunning = @(Get-Process -Name steam -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq [int]$sessions[0] })
+    if ($steamRunning.Count -gt 0) {
+        Write-Info 'Steam already running in user session; Steam controls automatic downloads.'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'already running; updates governed by Steam settings, not verified'
+        return
+    }
+    # Steam will execute in a user's session; verify Valve's code-signing identity
+    # before launching any executable discovered through a process/registry path.
+    try {
+        $signature = Get-AuthenticodeSignature -LiteralPath $exe -ErrorAction Stop
+        if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
+            $signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Valve Corp(?:oration)?\.?(,|$)') {
+            Write-Skip 'Steam executable does not have a valid Valve code signature; refusing to launch.'
+            Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'Steam executable signature could not be verified'
+            return
+        }
+    } catch {
+        Write-Skip 'Steam executable signature check failed; refusing to launch.'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'Steam executable signature check failed'
+        return
+    }
+    try {
+        $startedPid = Start-ReparoProcessWithExplorerToken -ApplicationPath $exe -Arguments '-silent'
+        Write-Info ("Steam started in desktop session (PID {0}); it will apply its own update policy." -f $startedPid)
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'desktop startup requested; update/download completion not verified'
+    } catch {
+        Write-Skip ("Steam desktop start unavailable: {0}" -f $_.Exception.Message)
+        Write-ReparoLog ("[STEAM] Start failed: {0}" -f $_.Exception.Message)
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'desktop startup failed; no updates attempted'
+    }
+}
+
 function Invoke-ReparoCommandStep {
     param(
         [string]$Section,
@@ -8482,6 +8622,8 @@ if (Test-ReparoSectionSelected 'WindowsUpdate') {
         }
     }
 }
+
+Invoke-ReparoSteamGameUpdates
 
 if (-not $script:ReparoPendingRebootDetected) {
     $script:ReparoPendingRebootDetected = [bool](Test-ReparoPendingReboot)

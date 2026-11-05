@@ -1,0 +1,40 @@
+name: Steam and Headless safety checks
+on:
+  pull_request:
+    paths:
+      - 'Reparo.ps1'
+      - 'Tests/Test-ReparoSteamHeadless.ps1'
+      - '.github/workflows/test-steam-headless.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Steam integration regression
+        shell: powershell
+        run: .\Tests\Test-ReparoSteamHeadless.ps1
+      - name: Steam client session-safety regression
+        shell: powershell
+        run: |
+          try {
+            .\Tests\Test-ReparoSteamClient.ps1
+            if (-not $?) { throw 'Steam client regression failed' }
+            exit 0
+          } catch {
+            Write-Error $_
+            exit 1
+          }
+      - name: Existing scheduling regression
+        shell: powershell
+        run: |
+          try {
+            .\Tests\Test-ReparoFlexibleScheduling.ps1
+            if (-not $?) { throw 'Scheduling regression failed' }
+            exit 0
+          } catch {
+            Write-Error $_
+            exit 1
+          }
