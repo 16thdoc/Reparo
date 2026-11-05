@@ -264,6 +264,42 @@ failure never changes the installation/maintenance outcome. These are bounded
 best-effort self-reports, not hardware attestation, exactly-once installation or
 proof of Graylog indexing.
 
+### Steam desktop game update startup (Windows -Force)
+
+Windows `-Force` now includes the `Steam` section. You can also run just this section using
+`reparo -Include Steam`. Reparo finds the installed desktop Steam client and inventories
+`appmanifest_*.acf` files in its primary library plus the paths in `libraryfolders.vdf`.
+It logs games whose local manifest state includes the update-required bit; this is **not** a
+server-side version check and does not establish that every game is up to date.
+
+For game content already managed by the regular Steam client, Reparo **does not run SteamCMD**,
+rewrite manifests, alter Steam preferences, launch games, kill Steam, or install another copy
+of a library. If Steam is already running in the single detected desktop session, Reparo
+leaves it alone. Otherwise, with exactly one logged-in desktop session, it requests a
+`steam.exe -silent` startup using Reparo's existing Explorer-token launcher, including
+when Reparo was started over SSH or via a SYSTEM scheduled task. Without a logged-in
+desktop user, or with multiple ambiguous sessions, the section safely skips.
+
+**Limitation:** Steam, not Reparo, owns download scheduling, login, and update completion.
+An already-running client is not forcibly refreshed; a newly started client checks and
+updates games only in accordance with Steam's own automatic-update settings and network
+availability. `-Force` cannot guarantee that updates begin immediately or that all installed
+games are updated. The Reparo summary deliberately reports this section as **Skipped /
+unverified**, never as successfully updated. The user may need to review Steam Downloads,
+especially for games configured to update only on launch. For guaranteed fully unattended
+SteamCMD updates, manage supported *dedicated server* installations separately rather than
+pointing SteamCMD at a live desktop game library.
+
+For a session-independent Reparo maintenance runner, the existing `-Time` mode works:
+
+```powershell
+reparo -Force -Time 30s
+```
+
+That schedules the **Reparo process** independently of SSH. It does not make the Steam desktop
+client itself a fully headless updater. Steam requires a logged-in desktop user. Regression
+coverage: `Tests/Test-ReparoSteamClient.ps1` (fixture files and stubbed Steam launch only).
+
 ### What it does
 
 By default, Reparo runs Windows Update through `PSWindowsUpdate`. Optional modes can also include `winget`, Microsoft Store updates through `winget`, Chocolatey, PowerShell 7 through Microsoft's machine-wide MSI, 7-Zip deployment through winget, developer toolchains such as Scoop, pip, npm, pnpm, Yarn, .NET tools, Rust, Conda, Ruby gems, Composer, and WSL, plus a Chocolatey-to-winget migration pass.
