@@ -4,6 +4,9 @@ on:
     paths:
       - 'Reparo.ps1'
       - 'Tests/Test-ReparoSteamHeadless.ps1'
+      - 'Tests/Test-ReparoSteamClient.ps1'
+      - 'Tests/Test-ReparoFlexibleScheduling.ps1'
+      - 'Tests/Test-ReparoOneShotWorkerBinding.ps1'
       - '.github/workflows/test-steam-headless.yml'
   workflow_dispatch:
 permissions:
@@ -33,6 +36,17 @@ jobs:
           try {
             .\Tests\Test-ReparoFlexibleScheduling.ps1
             if (-not $?) { throw 'Scheduling regression failed' }
+            exit 0
+          } catch {
+            Write-Error $_
+            exit 1
+          }
+      - name: Generated one-shot worker binding regression
+        shell: powershell
+        run: |
+          try {
+            .\Tests\Test-ReparoOneShotWorkerBinding.ps1
+            if (-not $?) { throw 'One-shot worker binding regression failed' }
             exit 0
           } catch {
             Write-Error $_

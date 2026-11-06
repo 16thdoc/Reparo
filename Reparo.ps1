@@ -155,7 +155,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.4.3.0'
+$script:ReparoVersion = '1.4.3.1'
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($Headless) {
     if ($Task -or $PSBoundParameters.ContainsKey('Time')) { throw '-Headless cannot be combined with -Task or -Time.' }
@@ -347,6 +347,7 @@ function Get-ReparoVersionFlavor {
         '1.4.2.0' = [pscustomobject]@{ Quote = 'Fear is the mind-killer.'; Source = 'Dune (1965), by Frank Herbert'; Art = '  [ GOM JABBAR ] ---{ BOX }--- bounded reporting, no hidden commands' }
         '1.4.2.1' = [pscustomobject]@{ Quote = 'I am a leaf on the wind. Watch how I soar.'; Source = 'Serenity (2005), written and directed by Joss Whedon'; Art = '  [ SERENITY ] <===> live pilots spared; updates follow their owning ship' }
         '1.4.3.0' = [pscustomobject]@{ Quote = 'Stay on target.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ GOLD FIVE ] ===[ + ]=== safe boundaries; update telemetry on target' }
+        '1.4.3.1' = [pscustomobject]@{ Quote = 'Your focus determines your reality.'; Source = 'Star Wars: Episode I - The Phantom Menace (1999), written and directed by George Lucas'; Art = '  [ QUI-GON ] ===[ + ]=== detached workers stay focused on the selected sections' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -3225,25 +3226,20 @@ function Invoke-ReparoSchedule {
     $schedule = Resolve-ReparoScheduledTime -Value $Time
     $taskName = 'Reparo-Scheduled-{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGuid().ToString('N').Substring(0, 8))
     $tokens = @(Get-ReparoScheduledArgumentTokens)
-    $tokenLiterals = @($tokens | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ })
-    $argumentList = if ($tokenLiterals.Count -gt 0) { '@(' + ($tokenLiterals -join ', ') + ')' } else { '@()' }
+    $runParameters = @{}
+    foreach ($entry in $script:ReparoBoundParameters.GetEnumerator()) {
+        if ($entry.Key -in @('Time', 'Task', 'Headless')) { continue }
+        $runParameters[$entry.Key] = $entry.Value
+    }
+    $workerInvocation = New-ReparoTaskWorker -RunParameters $runParameters -ScriptPath $PSCommandPath
     $taskNameLiteral = ConvertTo-ReparoPowerShellLiteral -Value $taskName
-    $scriptPathLiteral = ConvertTo-ReparoPowerShellLiteral -Value $PSCommandPath
     $workerScript = @"
-`$ErrorActionPreference = 'Continue'
-`$exitCode = 0
 try {
-    & $scriptPathLiteral $argumentList
-    if (`$null -ne `$LASTEXITCODE) { `$exitCode = [int]`$LASTEXITCODE }
-}
-catch {
-    Write-Error (`$_.Exception.Message)
-    `$exitCode = 1
+    $workerInvocation
 }
 finally {
     try { Unregister-ScheduledTask -TaskName $taskNameLiteral -Confirm:`$false -ErrorAction Stop | Out-Null } catch { Write-Warning ("Unable to remove completed Reparo scheduled task: {0}" -f `$_.Exception.Message) }
 }
-exit `$exitCode
 "@
     $encodedWorker = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($workerScript))
     $powershellPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'

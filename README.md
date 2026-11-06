@@ -145,7 +145,29 @@ completed game updates.
 Regression coverage: `Tests/Test-ReparoSteamHeadless.ps1` (non-mutating
 PowerShell AST validation, Steam inventory fixtures, scheduler flag checks).
 
-## Windows quick start
+## Detached Steam maintenance — 1.4.3.1
+
+Fixes `reparo -Include Steam -Headless` losing its selected sections in the
+scheduled worker. A completed worker log must now include the Steam inventory
+and its explicit outcome; task registration alone does not prove maintenance ran.
+One-shot workers preserve named parameters, arrays, switches and quoted values,
+and remove their scheduled task after completion or failure.
+
+Steam discovery includes the primary library and every configured library in
+`libraryfolders.vdf`, including games on both C: and D: when configured there.
+No per-drive Reparo configuration is needed. Steam retains control of automatic
+updates and downloads; an already-running client is left alone, and update
+completion is not inferred from client startup or local update-required flags.
+
+Steam desktop integration and the one-shot Task Scheduler mode remain Windows-only.
+The native Linux runner shares the 1.4.3.1 release identity and version flavor;
+its maintenance and scheduling behavior is unchanged. Regression coverage includes
+`Tests/Test-ReparoOneShotWorkerBinding.ps1`, which runs generated workers against
+a harmless parameter probe with all Task Scheduler operations stubbed.
+
+Release flavor: "Your focus determines your reality." — Qui-Gon Jinn,
+*Star Wars: Episode I - The Phantom Menace* (1999), written and directed by George
+Lucas ([official quote reference](https://www.starwars.com/news/15-star-wars-quotes-to-use-in-everyday-life)).
 
 ## Windows Update details and graceful skip requests — 1.4.3.0
 
