@@ -5,7 +5,7 @@ $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot)
 $tokens = $null; $parseErrors = $null
 $ast = [Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-foreach ($name in @('Get-ReparoSteamClientPath','Get-ReparoSteamGameInventory','Invoke-ReparoSteamGameUpdates')) {
+foreach ($name in @('Read-ReparoSteamManifestState','Get-ReparoSteamClientPath','Get-ReparoSteamGameInventory','Select-ReparoSteamQueueGames','Invoke-ReparoSteamGameUpdates')) {
     $node = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name },$true)
     if (-not $node) { throw "Missing Steam function: $name" }
     Invoke-Expression $node.Extent.Text
@@ -20,6 +20,7 @@ try {
     foreach ($path in @((Join-Path $root 'steamapps'),(Join-Path $secondary 'steamapps'))) {
         New-Item -ItemType Directory -Path $path -Force | Out-Null
     }
+    New-Item -ItemType Directory -Path (Join-Path $root 'steamapps\common\One'),(Join-Path $secondary 'steamapps\common\Two') -Force|Out-Null
     $escapedSecondary = $secondary.Replace('\','\\')
     $folders = @"
 "libraryfolders"
@@ -36,6 +37,7 @@ try {
 "AppState"
 {
     "name" "Two"
+    "installdir" "Two"
     "StateFlags" "6"
 }
 '@
@@ -52,6 +54,7 @@ try {
 "AppState"
 {
     "name" "One"
+    "installdir" "One"
     "StateFlags" "4"
 }
 '@
@@ -65,8 +68,14 @@ try {
 
     $script:ReparoIsWindows = $true
     $Preview = $true
+    $SteamAppId = @()
+    $SteamWaitSeconds = 0
     $script:receipts = New-Object System.Collections.Generic.List[object]
     $script:launches = 0
+    $script:queueCalls = 0
+    $script:desktopAvailable = $false
+    $script:publisherValid = $true
+    $script:queueStatus = 'Queued'
     function Test-ReparoSectionSelected { param($Section) $Section -eq 'Steam' }
     function Get-ReparoSteamClientPath { Join-Path $root 'steam.exe' }
     function Get-ReparoSteamGameInventory { param($SteamRoot) $games }
@@ -87,8 +96,17 @@ try {
         $script:launches++
         return 1234
     }
+    function Get-ReparoSteamDesktopContext {
+        [pscustomobject]@{Available=$script:desktopAvailable;Reason='no desktop user session';Sid='S-1-5-21-1';SessionId=4}
+    }
+    function Test-ReparoSteamPublisher { param($Path) $script:publisherValid }
+    function Invoke-ReparoSteamQueue {
+        param($SteamPath,$Games,$Desktop,$WaitSeconds)
+        $script:queueCalls++
+        [pscustomobject]@{Status='Processed';Reason='';Results=@($Games|ForEach-Object {[pscustomobject]@{AppId=$_.AppId;Name=$_.Name;Status=$script:queueStatus;Accepted=$true;Reason='fixture receipt'}})}
+    }
     Invoke-ReparoSteamGameUpdates
-    if ($script:launches -ne 0 -or $script:receipts.Count -ne 1 -or $script:receipts[0].Bucket -ne 'Skipped') {
+    if ($script:launches -ne 0 -or $script:queueCalls -ne 0 -or $script:receipts.Count -ne 1 -or $script:receipts[0].Bucket -ne 'Skipped') {
         throw 'Preview had side effects or claimed an update'
     }
 
@@ -104,7 +122,8 @@ try {
         throw 'Headless/no-desktop guard did not skip safely'
     }
 
-    # One desktop session with no Steam: startup can be requested, not certified.
+    # A running client receives a queue request, without restart or claimed completion.
+    $script:desktopAvailable = $true
     function Get-Process {
         [CmdletBinding()]
         param([string]$Name)
@@ -112,21 +131,29 @@ try {
         return
     }
     Invoke-ReparoSteamGameUpdates
-    if ($script:launches -ne 1 -or $script:receipts[2].Bucket -ne 'Skipped' -or $script:receipts[2].Reason -notmatch 'not verified') {
-        throw 'Desktop startup did not preserve unverified outcome'
+    if ($script:launches -ne 0 -or $script:queueCalls -ne 1 -or $script:receipts[2].Bucket -ne 'Skipped' -or $script:receipts[2].Reason -notmatch 'completion not verified') {
+        throw 'Queue request restarted Steam or falsely claimed completion'
     }
 
-    # A running Steam client should not be restarted, killed, or duplicated.
+    # Only a completed receipt can count as Updated.
+    $script:queueStatus = 'Completed'
     function Get-Process {
         [CmdletBinding()]
         param([string]$Name)
         if ($Name -eq 'explorer' -or $Name -eq 'steam') { return [pscustomobject]@{ SessionId=4 } }
     }
     Invoke-ReparoSteamGameUpdates
-    if ($script:launches -ne 1 -or $script:receipts[3].Reason -notmatch 'already running') {
-        throw 'Steam already-running guard failed'
+    if ($script:launches -ne 0 -or $script:queueCalls -ne 2 -or $script:receipts[3].Bucket -ne 'Updated') {
+        throw 'Verified completed queue receipt was not classified correctly'
     }
-    Write-Host 'Steam inventory, cross-library, preview and desktop-session safety tests passed.' -ForegroundColor Green
+    $SteamAppId = @('999')
+    Invoke-ReparoSteamGameUpdates
+    if ($script:queueCalls -ne 2 -or $script:receipts[4].Reason -notmatch 'not installed') { throw 'Unknown AppID triggered another game or a new installation' }
+    $SteamAppId = @()
+    $script:publisherValid = $false
+    Invoke-ReparoSteamGameUpdates
+    if ($script:queueCalls -ne 2 -or $script:receipts[5].Reason -notmatch 'signature') { throw 'Invalid publisher was not blocked' }
+    Write-Host 'Steam inventory, cross-library, preview, queue dispatch, receipt and desktop-session safety tests passed.' -ForegroundColor Green
 }
 finally {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue

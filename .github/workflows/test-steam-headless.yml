@@ -7,6 +7,7 @@ on:
       - 'Tests/Test-ReparoSteamClient.ps1'
       - 'Tests/Test-ReparoFlexibleScheduling.ps1'
       - 'Tests/Test-ReparoOneShotWorkerBinding.ps1'
+      - 'Tests/Test-ReparoSteamQueue.ps1'
       - '.github/workflows/test-steam-headless.yml'
   workflow_dispatch:
 permissions:
@@ -52,6 +53,24 @@ jobs:
             Write-Error $_
             exit 1
           }
+      - name: Steam desktop queue safety and receipt regression
+        shell: powershell
+        run: |
+          try {
+            .\Tests\Test-ReparoSteamQueue.ps1
+            if (-not $?) { throw 'Steam queue regression failed' }
+            exit 0
+          } catch {
+            Write-Error $_
+            exit 1
+          }
+      - name: Release parity, manifest and offline installer regression
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\Tests\Test-ReparoReleaseParity.ps1
+          .\Tests\Test-ReparoReleaseManifest.ps1
+          .\Tests\Test-ReparoInstallSelfUpdateTask.ps1
   native-installer:
     runs-on: ubuntu-latest
     steps:

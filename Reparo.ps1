@@ -146,6 +146,10 @@ param(
     [switch]$TaskReplace,
     [Alias('I')]
     [string[]]$Include,
+    [ValidatePattern('^[0-9]+(?:,[0-9]+)*$')]
+    [string[]]$SteamAppId,
+    [ValidateRange(0, 180)]
+    [int]$SteamWaitSeconds = 15,
     [switch]$ReportLifecycle,
     [ValidateSet('succeeded','failed','unchanged','preview','blocked','unknown')]
     [string]$ReportingOutcome,
@@ -155,7 +159,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.4.3.1'
+$script:ReparoVersion = '1.4.4.0'
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($Headless) {
     if ($Task -or $PSBoundParameters.ContainsKey('Time')) { throw '-Headless cannot be combined with -Task or -Time.' }
@@ -348,6 +352,7 @@ function Get-ReparoVersionFlavor {
         '1.4.2.1' = [pscustomobject]@{ Quote = 'I am a leaf on the wind. Watch how I soar.'; Source = 'Serenity (2005), written and directed by Joss Whedon'; Art = '  [ SERENITY ] <===> live pilots spared; updates follow their owning ship' }
         '1.4.3.0' = [pscustomobject]@{ Quote = 'Stay on target.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ GOLD FIVE ] ===[ + ]=== safe boundaries; update telemetry on target' }
         '1.4.3.1' = [pscustomobject]@{ Quote = 'Your focus determines your reality.'; Source = 'Star Wars: Episode I - The Phantom Menace (1999), written and directed by George Lucas'; Art = '  [ QUI-GON ] ===[ + ]=== detached workers stay focused on the selected sections' }
+        '1.4.4.0' = [pscustomobject]@{ Quote = 'Chewie, we''re home.'; Source = 'Star Wars: The Force Awakens (2015), written by Lawrence Kasdan, J. J. Abrams and Michael Arndt'; Art = '  [ MILLENNIUM FALCON ] <===> Steam queue requests cleared for arrival' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
         '1.3.0.0' = [pscustomobject]@{ Quote = 'Only in death does duty end.'; Source = 'Warhammer 40,000'; Art = '  MACHINE SPIRIT: release contract engraved in adamantium' }
@@ -429,6 +434,18 @@ if ($Include -and $Include.Count -gt 0) {
             }
         }
     )
+}
+
+if ($SteamAppId -or $PSBoundParameters.ContainsKey('SteamWaitSeconds')) {
+    if (-not ($Force -or $Include -contains 'Steam')) { throw '-SteamAppId and -SteamWaitSeconds require -Include Steam or -Force.' }
+    if ($SteamAppId) {
+        $SteamAppId = @(@($SteamAppId) -split ',' | ForEach-Object {
+            $number = [uint32]0
+            if (-not [uint32]::TryParse($_, [ref]$number) -or $number -eq 0) { throw 'Steam AppIDs must be positive 32-bit integers.' }
+            [string]$number
+        } | Select-Object -Unique)
+        $script:ReparoBoundParameters['SteamAppId'] = $SteamAppId
+    }
 }
 
 function Format-ReparoLogValue {
@@ -514,6 +531,8 @@ function Write-ReparoParameterBlock {
         TailLines                    = $TailLines
         Time                         = $Time
         Headless                     = $Headless
+        SteamAppId                   = $SteamAppId
+        SteamWaitSeconds             = $SteamWaitSeconds
         Include                      = $Include
         RemainingInclude             = $RemainingInclude
         Debug                        = [bool]($PSBoundParameters.ContainsKey('Debug'))
@@ -802,8 +821,10 @@ After install, new PowerShell sessions can usually run:
 Common sections:
   Winget, Winget(msstore), 7Zip, Choco, PowerShell7, WindowsUpdate, WindowsFeatureUpdate,
   Scoop, Apt, Dnf, Pacman, Zypper, Flatpak, Snap, Fwupd, Pip, Pipx, Npm, Opencode, Pnpm, Yarn, DotNet, Rust, CargoBins, Conda, Gem, Composer,
-  Wsl, WslApt, Steam (Windows client auto-update startup; not verified completion).
+  Wsl, WslApt, Steam (Windows desktop update queue; completion requires fresh manifest evidence).
   -Headless: detached one-shot SYSTEM maintenance through Task Scheduler (requires elevation).
+  -SteamAppId <id[,id]>: restrict Steam requests to installed AppIDs.
+  -SteamWaitSeconds <0-180>: bounded wait for manifest-confirmed Steam progress (default 15).
 
 Logs:
   C:\ProgramData\Reparo\Logs
@@ -6961,7 +6982,368 @@ function Invoke-ReparoWingetPackageQueue {
 }
 
 # Steam desktop game updates use the signed-in Steam client, never SteamCMD.
-# Steam controls when updates download; this section cannot certify completion.
+# Steam controls downloads; completed updates require fresh manifest evidence.
+function Read-ReparoSteamManifestState {
+    param([Parameter(Mandatory)][string]$Path)
+    $data = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    $values = @{}
+    foreach ($key in @('name','StateFlags','buildid','LastUpdated','AutoUpdateBehavior','installdir','BytesDownloaded','BytesToDownload')) {
+        $match = [regex]::Match($data, '(?m)^\s*"' + $key + '"\s+"(?<Value>[^"]*)"')
+        $values[$key] = if ($match.Success) { $match.Groups['Value'].Value } else { '' }
+    }
+    $flags = [int64]0; $updated = [int64]0; $downloaded = [int64]0; $downloadSize = [int64]0
+    [void][int64]::TryParse($values.StateFlags, [ref]$flags)
+    [void][int64]::TryParse($values.LastUpdated, [ref]$updated)
+    [void][int64]::TryParse($values.BytesDownloaded, [ref]$downloaded)
+    [void][int64]::TryParse($values.BytesToDownload, [ref]$downloadSize)
+    [pscustomobject]@{ Name=$values.name; StateFlags=$flags; UpdateFlagged=(($flags -band 2) -ne 0); FullyInstalled=(($flags -band 4) -ne 0); BuildId=$values.buildid; LastUpdated=$updated; AutoUpdateBehavior=$values.AutoUpdateBehavior; InstallDir=$values.installdir; BytesDownloaded=$downloaded; BytesToDownload=$downloadSize }
+}
+
+function Test-ReparoSteamPublisher {
+    param([Parameter(Mandatory)][string]$Path)
+    try {
+        $signature = Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop
+        return ($signature.Status -eq 'Valid' -and $signature.SignerCertificate -and $signature.SignerCertificate.Subject -match '(^|,\s*)CN=Valve Corp(?:oration)?\.?(,|$)')
+    } catch { return $false }
+}
+
+function Test-ReparoSteamInputDesktop {
+    if (-not ('ReparoSteamInputDesktop' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class ReparoSteamInputDesktop {
+    [DllImport("user32.dll", SetLastError=true)] static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool GetUserObjectInformation(IntPtr handle, int index, StringBuilder text, int length, out int needed);
+    [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr handle);
+    public static bool IsDefault() {
+        IntPtr handle=OpenInputDesktop(0, false, 1);
+        if (handle==IntPtr.Zero) return false;
+        try { var name=new StringBuilder(256); int needed; return GetUserObjectInformation(handle, 2, name, 512, out needed) && name.ToString()=="Default"; }
+        finally { CloseDesktop(handle); }
+    }
+}
+'@
+    }
+    return [ReparoSteamInputDesktop]::IsDefault()
+}
+
+function Get-ReparoSteamDesktopContext {
+    $sessions = @(Get-Process -Name explorer -ErrorAction SilentlyContinue | Where-Object SessionId -GT 0 | Select-Object -ExpandProperty SessionId -Unique)
+    if ($sessions.Count -ne 1) {
+        return [pscustomobject]@{ Available=$false; Reason=$(if ($sessions.Count) { 'multiple desktop sessions; ambiguous owner' } else { 'no desktop user session' }); SessionId=-1; Sid='' }
+    }
+    try {
+        $explorer = Get-CimInstance Win32_Process -Filter ("Name='explorer.exe' AND SessionId=" + [int]$sessions[0]) -ErrorAction Stop | Select-Object -First 1
+        $owner = Invoke-CimMethod -InputObject $explorer -MethodName GetOwnerSid -ErrorAction Stop
+        if ($owner.ReturnValue -ne 0 -or $owner.Sid -notmatch '^S-1-5-') { throw 'Desktop owner SID unavailable.' }
+        return [pscustomobject]@{ Available=$true; Reason=''; SessionId=[int]$sessions[0]; Sid=[string]$owner.Sid }
+    } catch { return [pscustomobject]@{ Available=$false; Reason='desktop owner could not be verified'; SessionId=-1; Sid='' } }
+}
+
+function Test-ReparoSteamAppRunning {
+    param([Parameter(Mandatory)]$Game)
+    if (-not $Game.InstallDirectory) { return $false }
+    $prefix = $Game.InstallDirectory.TrimEnd('\') + '\'
+    return @((Get-CimInstance Win32_Process -ErrorAction Stop) | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+}
+
+function Initialize-ReparoSteamAutomation {
+    if ('ReparoSteamNative.Client' -as [type]) { return }
+    # Use native UIA8: the Windows PowerShell managed UIA4 tree omits modern Steam controls.
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text;
+
+// Stable native UI Automation ABI from Microsoft's UIAutomationClient.h.
+// The reserved methods preserve vtable positions; they are never invoked.
+namespace ReparoSteamNative {
+    [ComImport,Guid("352ffba8-0973-437c-a61f-f64cafd81df9"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface ICondition { }
+    [ComImport,Guid("b32a92b5-bc25-4078-9c08-d7ee95c48e03"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface ICache { void AddProperty(int id); }
+    [ComImport,Guid("14314595-b4bc-4055-95f2-58f2e42c9855"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IElements { int Length { get; } IElement GetElement(int index); }
+    [ComImport,Guid("fb377fbe-8ea6-46d5-9c73-6499642d3059"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IInvoke { void Invoke(); }
+    [ComImport,Guid("d22108aa-8ac5-49a5-837b-37bbb3d7591e"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IElement {
+        void ReservedSetFocus(); void ReservedRuntimeId(); void ReservedFindFirst(); void ReservedFindAll(); void ReservedFindFirstBuildCache();
+        IElements FindAllBuildCache(int scope,ICondition condition,ICache cache);
+        void ReservedBuildUpdatedCache();
+        [return:MarshalAs(UnmanagedType.Struct)] object GetCurrentPropertyValue(int id);
+        void ReservedCurrentPropertyEx();
+        [return:MarshalAs(UnmanagedType.Struct)] object GetCachedPropertyValue(int id);
+        void ReservedCachedPropertyEx(); void ReservedCurrentPatternAs(); void ReservedCachedPatternAs();
+        [return:MarshalAs(UnmanagedType.IUnknown)] object GetCurrentPattern(int id);
+    }
+    [ComImport,Guid("30cbe57d-d9d0-452a-ab13-7ac5ac4825ee"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IAutomation {
+        void ReservedCompareElements(); void ReservedCompareRuntimeIds(); void ReservedRootElement();
+        IElement ElementFromHandle(IntPtr window);
+        void ReservedElementFromPoint(); void ReservedFocusedElement(); void ReservedRootBuildCache(); void ReservedHandleBuildCache();
+        void ReservedPointBuildCache(); void ReservedFocusedBuildCache(); void ReservedCreateTreeWalker();
+        void ReservedControlWalker(); void ReservedContentWalker(); void ReservedRawWalker();
+        void ReservedRawCondition(); void ReservedControlCondition(); void ReservedContentCondition();
+        ICache CreateCacheRequest();
+        void ReservedTrueCondition(); void ReservedFalseCondition();
+        ICondition CreatePropertyCondition(int id,[MarshalAs(UnmanagedType.Struct)] object value);
+    }
+    public sealed class WindowInfo { public long Handle; public int ProcessId; }
+    public sealed class Node {
+        internal IElement Element;
+        internal Client Owner;
+        public string Name;
+        public bool Enabled;
+        public bool Offscreen;
+        public int Kind;
+        public string Rectangle;
+        internal Node(Client owner,IElement element,bool cached) {
+            Owner=owner; Element=element;
+            Func<int,object> read=id=>cached?element.GetCachedPropertyValue(id):element.GetCurrentPropertyValue(id);
+            Name=Convert.ToString(read(30005),CultureInfo.InvariantCulture);
+            Enabled=Convert.ToBoolean(read(30010),CultureInfo.InvariantCulture);
+            Offscreen=Convert.ToBoolean(read(30022),CultureInfo.InvariantCulture);
+            Kind=Convert.ToInt32(read(30003),CultureInfo.InvariantCulture);
+            var rect=read(30001) as double[];
+            Rectangle=rect==null||rect.Length!=4||rect[2]<=0||rect[3]<=0?"Empty":String.Join(",",Array.ConvertAll(rect,x=>x.ToString("R",CultureInfo.InvariantCulture)));
+        }
+        public Node[] FindNamed(string name) { return Owner.Find(Element,30005,name); }
+        public void Invoke() { ((IInvoke)Element.GetCurrentPattern(10000)).Invoke(); }
+    }
+    public sealed class Client {
+        IAutomation automation;
+        ICache cache;
+        public Client() {
+            automation=(IAutomation)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("e22ad333-b25f-460c-83d0-0581107395c9")));
+            cache=automation.CreateCacheRequest();
+            foreach(int id in new[]{30005,30010,30022,30003,30001})cache.AddProperty(id);
+        }
+        public Node Window(long handle) { return new Node(this,automation.ElementFromHandle(new IntPtr(handle)),false); }
+        public Node[] Buttons(Node window) { return Find(window.Element,30003,50000); }
+        internal Node[] Find(IElement element,int property,object value) {
+            var collection=element.FindAllBuildCache(4,automation.CreatePropertyCondition(property,value),cache);
+            var nodes=new List<Node>();
+            for(int i=0;i<collection.Length;i++) {
+                try { nodes.Add(new Node(this,collection.GetElement(i),true)); }
+                catch(COMException) { }
+            }
+            return nodes.ToArray();
+        }
+        delegate bool EnumProc(IntPtr window,IntPtr data);
+        [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback,IntPtr data);
+        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+        [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr window,StringBuilder title,int count);
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
+        public static WindowInfo[] SteamWindows() {
+            var windows=new List<WindowInfo>();
+            EnumProc callback=(window,data)=>{
+                if(IsWindowVisible(window)) {
+                    var title=new StringBuilder(256); GetWindowText(window,title,title.Capacity);
+                    if(title.ToString()=="Steam") { uint pid;GetWindowThreadProcessId(window,out pid);windows.Add(new WindowInfo{Handle=window.ToInt64(),ProcessId=(int)pid}); }
+                }
+                return true;
+            };
+            EnumWindows(callback,IntPtr.Zero); GC.KeepAlive(callback);
+            return windows.ToArray();
+        }
+    }
+}
+'@
+}
+
+function Get-ReparoSteamAutomationSnapshot {
+    param([Parameter(Mandatory)][string]$SteamPath, [Parameter(Mandatory)][int]$SessionId)
+    Initialize-ReparoSteamAutomation
+    $client = [ReparoSteamNative.Client]::new()
+    $trusted = @()
+    $steamRoot = (Split-Path -Parent $SteamPath).TrimEnd('\') + '\'
+    foreach ($window in [ReparoSteamNative.Client]::SteamWindows()) {
+        try {
+            $process = Get-Process -Id $window.ProcessId -ErrorAction Stop
+            if ($process.SessionId -ne $SessionId -or $process.Name -notin @('steam','steamwebhelper')) { continue }
+            if (-not $process.Path.StartsWith($steamRoot, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            if (-not $script:ReparoSteamTrustedPaths) { $script:ReparoSteamTrustedPaths = @{} }
+            if (-not $script:ReparoSteamTrustedPaths.ContainsKey($process.Path)) { $script:ReparoSteamTrustedPaths[$process.Path] = Test-ReparoSteamPublisher -Path $process.Path }
+            if ($script:ReparoSteamTrustedPaths[$process.Path]) { $trusted += $window }
+        } catch { continue }
+    }
+    if ($trusted.Count -ne 1) { return $null }
+    $root = $client.Window($trusted[0].Handle)
+    $rows = @(foreach ($button in $client.Buttons($root)) {
+        [pscustomobject]@{ Name=$button.Name; Enabled=$button.Enabled; Offscreen=$button.Offscreen; Rectangle=$button.Rectangle; Element=$button }
+    })
+    return [pscustomobject]@{ Window=$root; Rows=$rows }
+}
+
+function Find-ReparoSteamQueueRow {
+    param([Parameter(Mandatory)]$Snapshot, [Parameter(Mandatory)][string]$Name)
+    $pattern = '^' + [regex]::Escape($Name) + '\s+[0-9]+(?:[.,][0-9]+)?\s*(?:B|KB|MB|GB|TB) Scheduled for .+ Download now$'
+    $rows = @($Snapshot.Rows | Where-Object { $_.Enabled -and $_.Name -cmatch $pattern })
+    if (-not $rows.Count) { return $null }
+    # Chromium can expose duplicate accessibility trees. Distinct rows remain ambiguous.
+    $distinct = @($rows | Group-Object Name,Rectangle)
+    if ($distinct.Count -ne 1) { throw 'Steam exposes multiple distinct download rows for this game; refusing an ambiguous request.' }
+    return $rows[0]
+}
+
+function Invoke-ReparoSteamQueueButton {
+    param([Parameter(Mandatory)]$Row)
+    $targets = @($Row.Element.FindNamed('Download now') | Where-Object { $_.Kind -eq 50000 -and $_.Enabled })
+    if ($targets.Count -ne 1) { throw 'Steam download button was unavailable or ambiguous.' }
+    $targets[0].Invoke()
+}
+
+function Get-ReparoSteamRequestOutcome {
+    param([Parameter(Mandatory)]$Before, [Parameter(Mandatory)]$After, [bool]$Accepted)
+    if ($Before.UpdateFlagged -and $After.FullyInstalled -and -not $After.UpdateFlagged -and ($After.BuildId -ne $Before.BuildId -or $After.LastUpdated -gt $Before.LastUpdated)) { return 'Completed' }
+    if ($After.BytesDownloaded -gt $Before.BytesDownloaded) { return 'Downloading' }
+    if ($Accepted) { return 'Queued' }
+    return 'Unconfirmed'
+}
+
+function Invoke-ReparoSteamDesktopQueue {
+    param([Parameter(Mandatory)]$Config)
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $sessionId = (Get-Process -Id $PID).SessionId
+    $result = [ordered]@{ RunId=$Config.RunId; Done=$true; Status='Blocked'; Reason=''; Sid=$identity.User.Value; SessionId=$sessionId; WorkerPID=$PID; Results=@() }
+    if ($identity.User.Value -ne $Config.Sid -or $sessionId -ne $Config.SessionId) { $result.Reason='desktop worker identity or session mismatch'; return [pscustomobject]$result }
+    if (-not (Test-ReparoSteamInputDesktop)) { $result.Reason='desktop locked or unavailable; unlock the desktop'; return [pscustomobject]$result }
+    if (-not (Test-ReparoSteamPublisher -Path $Config.SteamPath)) { $result.Reason='Steam executable signature could not be verified'; return [pscustomobject]$result }
+    $mutex = [Threading.Mutex]::new($false, ('Local\ReparoSteamQueue-' + $Config.Sid))
+    $held = $false
+    try {
+        $held = $mutex.WaitOne(0)
+        if (-not $held) { $result.Reason='another Steam queue request is active'; return [pscustomobject]$result }
+        $script:ReparoSteamTrustedPaths = @{}
+        $snapshot = Get-ReparoSteamAutomationSnapshot -SteamPath $Config.SteamPath -SessionId $sessionId
+        if (-not $snapshot) {
+            # Explorer owns the GUI launch, rather than the maintenance task's process job.
+            $shell = New-Object -ComObject Shell.Application
+            $shell.ShellExecute($Config.SteamPath, '-- "steam://open/downloads"', (Split-Path -Parent $Config.SteamPath), 'open', 1)
+            $deadline = (Get-Date).AddSeconds(20)
+            do { Start-Sleep -Milliseconds 500; $snapshot = Get-ReparoSteamAutomationSnapshot -SteamPath $Config.SteamPath -SessionId $sessionId } while (-not $snapshot -and (Get-Date) -lt $deadline)
+        }
+        if (-not $snapshot) { $result.Reason='Steam desktop window unavailable; sign in to Steam manually'; return [pscustomobject]$result }
+        if (-not @($snapshot.Rows | Where-Object Name -Match ' Scheduled for .+ Download now$').Count) {
+            $navigation = $snapshot.Window.FindNamed('Manage Downloads')
+            $visible = @($navigation | Where-Object { $_.Kind -eq 50000 -and $_.Enabled -and -not $_.Offscreen })
+            if (-not $visible.Count) { $result.Reason='Steam Downloads controls unavailable; sign in or use a supported client UI language'; return [pscustomobject]$result }
+            if (-not (Test-ReparoSteamInputDesktop)) { $result.Reason='desktop became unavailable'; return [pscustomobject]$result }
+            $visible[0].Invoke()
+            Start-Sleep -Milliseconds 250
+        }
+        $queueDeadline = (Get-Date).AddSeconds(180)
+        foreach ($game in $Config.Games) {
+            $item = [pscustomobject]@{ AppId=$game.AppId; Name=$game.Name; Status='Blocked'; Reason=''; Accepted=$false; Before=$null; After=$null }
+            $result.Results += $item
+            if ((Get-Date) -gt $queueDeadline -or ($Config.CancelPath -and (Test-Path -LiteralPath $Config.CancelPath))) { $item.Reason='queue request deadline or cancellation reached'; continue }
+            if (-not (Test-ReparoSteamInputDesktop)) { $item.Reason='desktop locked or unavailable'; continue }
+            try {
+                $item.Before = Read-ReparoSteamManifestState -Path $game.ManifestPath
+                if (-not $item.Before.UpdateFlagged) { $item.Status='Skipped'; $item.Reason='no longer locally update-required'; continue }
+                if ($item.Before.AutoUpdateBehavior -eq '1') { $item.Status='Skipped'; $item.Reason='Steam policy updates this game only on launch'; continue }
+                if (Test-ReparoSteamAppRunning -Game $game) { $item.Status='Skipped'; $item.Reason='game is running; no request made'; continue }
+                $snapshot = Get-ReparoSteamAutomationSnapshot -SteamPath $Config.SteamPath -SessionId $sessionId
+                if (-not $snapshot) { throw 'Steam window unavailable or ambiguous.' }
+                $row = Find-ReparoSteamQueueRow -Snapshot $snapshot -Name $game.Name
+                if (-not $row) { $item.Reason='no matching scheduled download control; game may already be queued or client UI is unsupported'; continue }
+                if (-not (Test-ReparoSteamInputDesktop) -or ($Config.CancelPath -and (Test-Path -LiteralPath $Config.CancelPath))) { $item.Reason='desktop unavailable or cancellation requested before input'; continue }
+                Invoke-ReparoSteamQueueButton -Row $row
+                Start-Sleep -Milliseconds 250
+                $item.After = Read-ReparoSteamManifestState -Path $game.ManifestPath
+                $snapshot = Get-ReparoSteamAutomationSnapshot -SteamPath $Config.SteamPath -SessionId $sessionId
+                $item.Accepted = $snapshot -and -not (Find-ReparoSteamQueueRow -Snapshot $snapshot -Name $game.Name)
+                $item.Status = Get-ReparoSteamRequestOutcome -Before $item.Before -After $item.After -Accepted $item.Accepted
+                $item.Reason = if ($item.Status -eq 'Unconfirmed') { 'Steam did not acknowledge the download request' } else { 'requested through Steam Downloads; persistent update policy unchanged' }
+            } catch { $item.Status='Failed'; $item.Reason=$_.Exception.Message }
+        }
+        $verifyDeadline = (Get-Date).AddSeconds([int]$Config.WaitSeconds)
+        do {
+            foreach ($item in @($result.Results | Where-Object { $_.Before -and $_.Status -in @('Queued','Downloading','Unconfirmed') })) {
+                $game = @($Config.Games | Where-Object AppId -EQ $item.AppId)[0]
+                try { $item.After=Read-ReparoSteamManifestState -Path $game.ManifestPath; $item.Status=Get-ReparoSteamRequestOutcome -Before $item.Before -After $item.After -Accepted $item.Accepted } catch { }
+            }
+            if ((Get-Date) -ge $verifyDeadline -or -not @($result.Results | Where-Object Status -In @('Queued','Downloading','Unconfirmed')).Count) { break }
+            Start-Sleep -Seconds 1
+        } while (-not ($Config.CancelPath -and (Test-Path -LiteralPath $Config.CancelPath)))
+        $result.Status='Processed'
+        return [pscustomobject]$result
+    } finally { if ($held) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
+}
+
+function New-ReparoSteamQueueWorker {
+    $names = @('Read-ReparoSteamManifestState','Test-ReparoSteamPublisher','Test-ReparoSteamInputDesktop','Test-ReparoSteamAppRunning','Initialize-ReparoSteamAutomation','Get-ReparoSteamAutomationSnapshot','Find-ReparoSteamQueueRow','Invoke-ReparoSteamQueueButton','Get-ReparoSteamRequestOutcome','Invoke-ReparoSteamDesktopQueue')
+    $definitions = foreach ($name in $names) { "function $name {`n" + (Get-Command $name -CommandType Function -ErrorAction Stop).Definition + "`n}" }
+    return @'
+param([Parameter(Mandatory)][string]$InputPath,[Parameter(Mandatory)][string]$ResultPath)
+$ErrorActionPreference='Stop'
+'@ + "`n" + ($definitions -join "`n") + "`n" + @'
+$config=Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8|ConvertFrom-Json
+try { $receipt=Invoke-ReparoSteamDesktopQueue -Config $config }
+catch { $receipt=[pscustomobject]@{RunId=$config.RunId;Done=$true;Status='Failed';Reason=$_.Exception.Message;Sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;SessionId=(Get-Process -Id $PID).SessionId;WorkerPID=$PID;Results=@()} }
+$receipt|ConvertTo-Json -Depth 10|Set-Content -LiteralPath $ResultPath -Encoding UTF8
+'@
+}
+
+function Invoke-ReparoSteamQueue {
+    param([Parameter(Mandatory)][string]$SteamPath,[Parameter(Mandatory)][object[]]$Games,[Parameter(Mandatory)]$Desktop,[int]$WaitSeconds=15,[ValidateRange(1,600)][int]$RequestTimeoutSeconds=240)
+    $config = [pscustomobject]@{ RunId=[guid]::NewGuid().ToString('N'); SteamPath=$SteamPath; Games=$Games; Sid=$Desktop.Sid; SessionId=$Desktop.SessionId; WaitSeconds=$WaitSeconds; CancelPath='' }
+    $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($identity.User.Value -eq $Desktop.Sid -and (Get-Process -Id $PID).SessionId -eq $Desktop.SessionId) { return Invoke-ReparoSteamDesktopQueue -Config $config }
+    if (-not (Test-ReparoCurrentProcessElevated)) { return [pscustomobject]@{ Status='Blocked'; Reason='remote Steam queue control requires an elevated parent and a logged-in desktop'; Results=@() } }
+    $runRoot=Join-Path (Join-Path $InstallRoot 'SteamQueue') $config.RunId
+    $receiptRoot=Join-Path $runRoot 'Receipt'
+    New-Item -ItemType Directory -Path $runRoot,$receiptRoot -Force|Out-Null
+    # The desktop user can read the worker, and can write only its receipt directory.
+    foreach ($directory in @($runRoot,$receiptRoot)) {
+        $acl=[Security.AccessControl.DirectorySecurity]::new()
+        $acl.SetAccessRuleProtection($true,$false)
+        foreach ($rule in @(@('S-1-5-18','FullControl'),@('S-1-5-32-544','FullControl'),@($Desktop.Sid,$(if($directory -eq $receiptRoot){'Modify'}else{'ReadAndExecute'})))) {
+            $sid=[Security.Principal.SecurityIdentifier]::new([string]$rule[0])
+            $access=[Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]$rule[1],[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
+            $acl.AddAccessRule($access)
+        }
+        Set-Acl -LiteralPath $directory -AclObject $acl
+    }
+    $workerPath=Join-Path $runRoot 'worker.ps1';$inputPath=Join-Path $runRoot 'input.json';$resultPath=Join-Path $receiptRoot 'result.json'
+    $config.CancelPath=Join-Path $runRoot 'cancel.requested'
+    New-ReparoSteamQueueWorker|Set-Content -LiteralPath $workerPath -Encoding UTF8
+    $config|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $inputPath -Encoding UTF8
+    $taskName='Reparo-SteamQueue-'+$config.RunId
+    $powershell=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $arguments='-NoProfile -NonInteractive -MTA -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -InputPath "{1}" -ResultPath "{2}"' -f $workerPath,$inputPath,$resultPath
+    $action=New-ScheduledTaskAction -Execute $powershell -Argument $arguments
+    $principal=New-ScheduledTaskPrincipal -UserId $Desktop.Sid -LogonType Interactive -RunLevel Limited
+    $settings=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    $done=$false
+    try {
+        Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings $settings -ErrorAction Stop|Out-Null
+        Write-ReparoLog ("[STEAM-QUEUE] DesktopTask={0}; Session={1}; RunId={2}; Receipt={3}" -f $taskName,$Desktop.SessionId,$config.RunId,$resultPath)
+        Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        $deadline=(Get-Date).AddSeconds($RequestTimeoutSeconds+$WaitSeconds)
+        do {
+            if (Test-Path -LiteralPath $resultPath) {
+                try {
+                    $receipt=Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8|ConvertFrom-Json
+                    if ($receipt.Done -and $receipt.RunId -eq $config.RunId -and $receipt.Sid -eq $Desktop.Sid -and $receipt.SessionId -eq $Desktop.SessionId) {
+                        $done=$true
+                        if (@($receipt.Results | Where-Object { $_.AppId -notin @($Games.AppId) }).Count) { return [pscustomobject]@{Status='Failed';Reason='desktop worker returned an unexpected AppID';Results=@()} }
+                        return $receipt
+                    }
+                } catch { }
+            }
+            Start-Sleep -Milliseconds 250
+        } while ((Get-Date) -lt $deadline)
+        Set-Content -LiteralPath $config.CancelPath -Value 'Parent wait expired; do not issue another request.' -Encoding ASCII
+        return [pscustomobject]@{Status='Blocked';Reason='desktop worker timed out; cancellation requested, last in-flight action may still finish; inspect '+$resultPath;Results=@()}
+    } finally { if ($done) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } }
+}
+
 function Get-ReparoSteamClientPath {
     if (-not $script:ReparoIsWindows) { return $null }
     $candidates = @()
@@ -6991,7 +7373,7 @@ function Get-ReparoSteamGameInventory {
     $folderFile = Join-Path (Join-Path $SteamRoot 'steamapps') 'libraryfolders.vdf'
     if (Test-Path -LiteralPath $folderFile -PathType Leaf) {
         try {
-            foreach ($line in @(Get-Content -LiteralPath $folderFile -ErrorAction Stop)) {
+            foreach ($line in @(Get-Content -LiteralPath $folderFile -Encoding UTF8 -ErrorAction Stop)) {
                 if ($line -match '^\s*"path"\s+"(?<Path>[^"]+)"') {
                     $library = $matches['Path'].Replace('\\','\')
                     if ([IO.Path]::IsPathRooted($library)) { $libraries += $library }
@@ -7008,15 +7390,39 @@ function Get-ReparoSteamGameInventory {
             $id = $matches['Id']
             if ($seen.ContainsKey($id)) { continue }
             try {
-                $data = Get-Content -LiteralPath $manifest.FullName -Raw -ErrorAction Stop
-                $name = if ($data -match '(?m)^\s*"name"\s+"(?<Name>[^"]+)"') { $matches['Name'] } else { "App $id" }
-                $flags = [int64]0
-                if ($data -match '(?m)^\s*"StateFlags"\s+"(?<Flags>[0-9]+)"') { $flags = [int64]$matches['Flags'] }
+                $state = Read-ReparoSteamManifestState -Path $manifest.FullName
+                $name = if ($state.Name) { $state.Name } else { "App $id" }
+                $installDirectory = ''
+                $common = [IO.Path]::GetFullPath((Join-Path $apps 'common')).TrimEnd('\') + '\'
+                if ($state.InstallDir -and -not [IO.Path]::IsPathRooted($state.InstallDir)) {
+                    $candidate = [IO.Path]::GetFullPath((Join-Path $common $state.InstallDir))
+                    if ($candidate.StartsWith($common, [StringComparison]::OrdinalIgnoreCase)) { $installDirectory = $candidate }
+                }
                 $seen[$id] = $true
-                [pscustomobject]@{ AppId=$id; Name=$name; StateFlags=$flags; UpdateFlagged=(($flags -band 2) -ne 0) }
+                [pscustomobject]@{ AppId=$id; Name=$name; StateFlags=$state.StateFlags; UpdateFlagged=$state.UpdateFlagged; FullyInstalled=$state.FullyInstalled; BuildId=$state.BuildId; LastUpdated=$state.LastUpdated; AutoUpdateBehavior=$state.AutoUpdateBehavior; BytesDownloaded=$state.BytesDownloaded; BytesToDownload=$state.BytesToDownload; ManifestPath=$manifest.FullName; LibraryPath=$library; InstallDirectory=$installDirectory }
             } catch { Write-ReparoLog ("[STEAM] manifest unreadable: {0}" -f $manifest.FullName) }
         }
     }
+}
+
+function Select-ReparoSteamQueueGames {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Games, [string[]]$AppIds)
+    $eligible = @(); $skipped = @()
+    foreach ($game in $Games) {
+        if ($AppIds -and $game.AppId -notin $AppIds) { continue }
+        if (-not $game.UpdateFlagged) {
+            if ($AppIds) { $skipped += [pscustomobject]@{AppId=$game.AppId;Name=$game.Name;Reason='no locally update-required flag; remote version not checked'} }
+            continue
+        }
+        $reason = ''
+        if (-not $game.FullyInstalled -or -not $game.InstallDirectory -or -not (Test-Path -LiteralPath $game.InstallDirectory -PathType Container)) { $reason='installed game directory could not be verified; no new installation requested' }
+        elseif ($game.AutoUpdateBehavior -eq '1') { $reason='Steam policy updates this game only on launch' }
+        elseif (@($Games | Where-Object { $_.Name -eq $game.Name -and $_.AppId -ne $game.AppId }).Count) { $reason='duplicate Steam game names; UI cannot safely disambiguate AppIDs' }
+        if ($reason) { $skipped += [pscustomobject]@{AppId=$game.AppId;Name=$game.Name;Reason=$reason} } else { $eligible += $game }
+    }
+    $installedIds = @($Games | ForEach-Object { $_.AppId })
+    foreach ($id in $AppIds) { if ($id -notin $installedIds) { $skipped += [pscustomobject]@{AppId=$id;Name="App $id";Reason='AppID is not installed; no new installation requested'} } }
+    return [pscustomobject]@{Eligible=$eligible;Skipped=$skipped}
 }
 
 function Invoke-ReparoSteamGameUpdates {
@@ -7025,7 +7431,7 @@ function Invoke-ReparoSteamGameUpdates {
         Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'Windows only'
         return
     }
-    Write-Step 'Steam games (desktop client)'
+    Write-Step 'Steam game updates (desktop client)'
     $exe = Get-ReparoSteamClientPath
     if (-not $exe) {
         Write-Skip 'Steam desktop client not found.'
@@ -7047,44 +7453,28 @@ function Invoke-ReparoSteamGameUpdates {
         Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'no installed games discovered'
         return
     }
-    # Without one interactive Explorer session, Steam cannot safely authenticate
-    # and may start in the wrong account or headless SSH/SYSTEM session.
-    $sessions = @(Get-Process -Name explorer -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -gt 0 } | Select-Object -ExpandProperty SessionId -Unique)
-    if ($sessions.Count -ne 1) {
-        $reason = if ($sessions.Count -eq 0) { 'no desktop user session' } else { 'multiple desktop sessions; ambiguous owner' }
-        Write-Skip ("Steam update startup skipped: {0}" -f $reason)
-        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason $reason
+    $selection = Select-ReparoSteamQueueGames -Games $games -AppIds $SteamAppId
+    foreach ($item in $selection.Skipped) { Add-ReparoSummaryRecord -Bucket Skipped -Software ($item.Name + ' (Steam ' + $item.AppId + ')') -Method 'Steam client' -Reason $item.Reason }
+    if (-not $selection.Eligible.Count) {
+        if (-not $selection.Skipped.Count) { Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'no locally update-required games; remote versions not checked' }
         return
     }
-    $steamRunning = @(Get-Process -Name steam -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq [int]$sessions[0] })
-    if ($steamRunning.Count -gt 0) {
-        Write-Info 'Steam already running in user session; Steam controls automatic downloads.'
-        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'already running; updates governed by Steam settings, not verified'
+    $desktop = Get-ReparoSteamDesktopContext
+    if (-not $desktop.Available) { Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason $desktop.Reason; return }
+    if (-not (Test-ReparoSteamPublisher -Path $exe)) { Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'Steam executable signature could not be verified'; return }
+    try { $receipt = Invoke-ReparoSteamQueue -SteamPath $exe -Games @($selection.Eligible) -Desktop $desktop -WaitSeconds $SteamWaitSeconds }
+    catch { Add-ReparoSummaryRecord -Bucket Failed -Software 'Steam games' -Method 'Steam client' -Reason ('queue worker failed: ' + $_.Exception.Message); return }
+    if ($receipt.Status -ne 'Processed') {
+        $bucket = if ($receipt.Status -eq 'Failed') { 'Failed' } else { 'Skipped' }
+        Add-ReparoSummaryRecord -Bucket $bucket -Software 'Steam games' -Method 'Steam client' -Reason $receipt.Reason
         return
     }
-    # Steam will execute in a user's session; verify Valve's code-signing identity
-    # before launching any executable discovered through a process/registry path.
-    try {
-        $signature = Get-AuthenticodeSignature -LiteralPath $exe -ErrorAction Stop
-        if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
-            $signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Valve Corp(?:oration)?\.?(,|$)') {
-            Write-Skip 'Steam executable does not have a valid Valve code signature; refusing to launch.'
-            Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'Steam executable signature could not be verified'
-            return
-        }
-    } catch {
-        Write-Skip 'Steam executable signature check failed; refusing to launch.'
-        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'Steam executable signature check failed'
-        return
-    }
-    try {
-        $startedPid = Start-ReparoProcessWithExplorerToken -ApplicationPath $exe -Arguments '-silent'
-        Write-Info ("Steam started in desktop session (PID {0}); it will apply its own update policy." -f $startedPid)
-        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'desktop startup requested; update/download completion not verified'
-    } catch {
-        Write-Skip ("Steam desktop start unavailable: {0}" -f $_.Exception.Message)
-        Write-ReparoLog ("[STEAM] Start failed: {0}" -f $_.Exception.Message)
-        Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'desktop startup failed; no updates attempted'
+    foreach ($item in $receipt.Results) {
+        Write-Info ("Steam {0}: {1} ({2})" -f $item.Status,$item.Name,$item.AppId)
+        Write-ReparoLog ("[STEAM-QUEUE] AppId={0}; Status={1}; Accepted={2}; Reason={3}" -f $item.AppId,$item.Status,$item.Accepted,$item.Reason)
+        $bucket = if ($item.Status -eq 'Completed') { 'Updated' } elseif ($item.Status -in @('Failed','Unconfirmed')) { 'Failed' } else { 'Skipped' }
+        $reason = if ($item.Status -in @('Queued','Downloading')) { $item.Status.ToLowerInvariant() + '; download completion not verified; inspect Steam Downloads' } elseif ($item.Status -eq 'Completed') { 'Steam manifest confirms the update completed' } else { $item.Reason }
+        Add-ReparoSummaryRecord -Bucket $bucket -Software ($item.Name + ' (Steam ' + $item.AppId + ')') -Method 'Steam client' -Reason $reason
     }
 }
 

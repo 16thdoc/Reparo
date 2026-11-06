@@ -63,6 +63,7 @@ function Unregister-ScheduledTask {
     $script:ReparoIsWindows=$true
     $cases=@(
         @{Name='SteamHeadless';Bound=@{Include=@('Steam');Headless=[Management.Automation.SwitchParameter]::new($true);Time='5s'};Fail=$false},
+        @{Name='SteamSelectors';Bound=@{Include=@('Steam');SteamAppId=@('720620','3400000');SteamWaitSeconds=60;Headless=[Management.Automation.SwitchParameter]::new($true);Time='5s'};Fail=$false},
         @{Name='ArraysAndSwitches';Bound=@{Include=@('Steam','WindowsUpdate');Force=[Management.Automation.SwitchParameter]::new($true);AllowReboot=[Management.Automation.SwitchParameter]::new($false);Time='5s'};Fail=$false},
         @{Name='QuotedLiteral';Bound=@{Include=@('Steam');LogRoot="C:\O'Brien; Write-Error injected";Time='5s'};Fail=$false},
         @{Name='FailureAndCleanup';Bound=@{Include=@('Steam');Headless=[Management.Automation.SwitchParameter]::new($true);Time='5s'};Fail=$true}
@@ -90,6 +91,8 @@ function Unregister-ScheduledTask {
         foreach ($control in @('Headless','Time','Task','RemainingInclude')) { if ($control -in $receivedKeys) { throw "$($case.Name): scheduling control $control leaked" } }
         if ($case.Bound.ContainsKey('Force') -and -not $received.Force) { throw 'True switch was lost' }
         if ($case.Bound.ContainsKey('AllowReboot') -and ('AllowReboot' -notin $receivedKeys -or $received.AllowReboot)) { throw 'Explicit false switch was lost' }
+        if ($case.Bound.ContainsKey('SteamAppId') -and (@($received.SteamAppId) -join '|') -ne (@($case.Bound.SteamAppId) -join '|')) { throw 'Steam AppID selector was lost' }
+        if ($case.Bound.ContainsKey('SteamWaitSeconds') -and $received.SteamWaitSeconds -ne $case.Bound.SteamWaitSeconds) { throw 'Steam observation bound was lost' }
         if ($case.Bound.ContainsKey('LogRoot') -and $received.LogRoot -ne $case.Bound.LogRoot) { throw 'Quoted literal changed' }
         if (-not (Test-Path -LiteralPath $env:REPARO_BINDING_CLEANUP)) { throw "$($case.Name): worker cleanup did not run" }
         Write-Host "$($case.Name): named parameters, exit status, and cleanup passed."

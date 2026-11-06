@@ -9,10 +9,10 @@ umask 077
 # Interactive Esc cancellation is Windows-only: this POSIX runner does not own
 # a portable cooperative-cancel API for native package managers. No fake skip,
 # keyboard polling, or wrapper kill is substituted for installer completion.
-REPARO_LINUX_VERSION='1.4.3.1'
-REPARO_VERSION_QUOTE='Your focus determines your reality.'
-REPARO_VERSION_SOURCE='Star Wars: Episode I - The Phantom Menace (1999), written and directed by George Lucas'
-REPARO_VERSION_ART='  [ QUI-GON ] ===[ + ]=== detached workers stay focused on the selected sections'
+REPARO_LINUX_VERSION='1.4.4.0'
+REPARO_VERSION_QUOTE="Chewie, we're home."
+REPARO_VERSION_SOURCE='Star Wars: The Force Awakens (2015), written by Lawrence Kasdan, J. J. Abrams and Michael Arndt'
+REPARO_VERSION_ART='  [ MILLENNIUM FALCON ] <===> Steam queue requests cleared for arrival'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-}"
 REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
 LATEST=0

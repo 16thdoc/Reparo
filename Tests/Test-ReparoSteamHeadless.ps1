@@ -15,7 +15,7 @@ if ($source -notmatch '(?m)^Invoke-ReparoSteamGameUpdates$') { throw 'Steam upda
 if ($source -notmatch '\$script:ReparoBoundParameters\[''Time''\] = \$Time') { throw '-Headless is not scheduling a one-shot task.' }
 if ($source -notmatch "if \(\`$entry.Key -in @\('Time', 'Task', 'Headless'\)\)") { throw 'Scheduled worker leaks Headless flag.' }
 if ($source -match 'steamcmd.*app_update|app_update.*steamcmd') { throw 'Unsafe SteamCMD in-place desktop updates detected.' }
-$functions=@('Get-ReparoSteamGameInventory','Get-ReparoScheduledArgumentTokens')
+$functions=@('Read-ReparoSteamManifestState','Get-ReparoSteamGameInventory','Get-ReparoScheduledArgumentTokens')
 foreach ($fn in $functions) {
     $node=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fn},$true)
     if (-not $node) { throw "Missing function $fn" }

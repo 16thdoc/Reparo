@@ -101,49 +101,73 @@ is operator-trusted bootstrap code; an installed native runner verifies the down
 bootstrap first. Windows Install remains offline and Windows Latest/N remains
 unpinned; native N retains its historical New meaning, with Latest spelled out.
 
-## Steam desktop games and SSH-detached maintenance (experimental)
+## Steam desktop update queue and SSH-detached maintenance - 1.4.4.0
 
-Windows `-Force` includes `Steam`; `-Include Steam` runs the section on its own.
-Reparo discovers the installed Steam desktop executable and the app manifests
-under Steam libraries (including extra libraries from `libraryfolders.vdf`).
-Local appmanifest state flags are inventory hints, not proof that an update is
-available, downloading, or complete.
-
-**SteamCMD is NOT used for games installed by the desktop client.** SteamCMD
-is designed for dedicated game server deployment and some supported depots.
-It does not universally update the Steam desktop library. Reparo will not
-modify Steam settings, force the client download queue, verify remote depot
-builds, or claim games updated when it merely requested Steam startup.
-
-With exactly one interactive Explorer desktop session, Reparo leaves an
-already-running Steam process alone. If Steam is closed, it validates
-the Steam executable's Valve Authenticode signature and starts Steam in the
-logged-in desktop user's session. With no desktop session or an ambiguous
-user, it skips safely. Steam account authentication and update/download
-policies still apply. No games are launched.
-
-`-Headless` reuses Reparo's existing one-shot Task Scheduler mechanism.
-From elevated PowerShell it registers a SYSTEM maintenance task for ~5
-seconds later and immediately returns to SSH. The job continues without
-the SSH session and writes standard Reparo logs and Windows event records.
-It requires an explicit maintenance selector; it rejects `-Time`, `-Task`,
-`-Preview`, and administrative modes. User-scoped installers may behave
-differently under SYSTEM.
+Windows `-Include Steam` inventories installed apps in the primary Steam library
+and every configured `libraryfolders.vdf` location, including C: and D:. It requests
+pending updates through the signed desktop client's **Downloads > Download now**
+controls. An already-running client is reused. A closed client can be opened in the
+verified desktop user's session; account sign-in remains a manual step.
 
 ```powershell
-reparo -Force -Headless
+reparo -Include Steam -Preview
 reparo -Include Steam -Headless
+reparo -Include Steam -SteamAppId 720620 -SteamWaitSeconds 60 -Headless
 reparo -Status
 reparo -Tail
 ```
 
-Important: a successful `-Headless` return proves task registration, NOT
-successful completion of the scheduled worker. Inspect the later log and
-Reparo Application event records. Steam startup is never reported as
-completed game updates.
+`-SteamAppId` limits requests to installed AppIDs (comma-separated IDs are accepted).
+Without it, all locally update-required, eligible installed apps are considered.
+Unknown AppIDs cannot trigger a new installation. `-SteamWaitSeconds` bounds the
+post-request observation window to 0-180 seconds (default 15); queued downloads
+continue in Steam after Reparo finishes. Both options require `-Include Steam` or
+Windows `-Force`. Preview reads inventory without opening Steam, creating a queue
+worker, or requesting downloads. Windows `-Force` also includes Steam.
 
-Regression coverage: `Tests/Test-ReparoSteamHeadless.ps1` (non-mutating
-PowerShell AST validation, Steam inventory fixtures, scheduler flag checks).
+Queue control requires exactly one logged-in Explorer desktop session, an unlocked
+desktop, and a signed Steam client exposing the supported English Downloads controls.
+The Windows PowerShell worker uses native UI Automation 8, including offscreen rows.
+Locked, ambiguous, signed-out or unsupported client states are reported as blocked
+or skipped. Reparo never automates account authentication or the Windows lock screen.
+It skips running games, missing installation directories, duplicate game names, and
+games configured to update only on launch. Steam still owns downloads, disk checks,
+network behavior and persistent automatic-update preferences.
+
+Each request produces a `[STEAM-QUEUE]` record and a receipt under
+`C:\ProgramData\Reparo\SteamQueue`. **Queued**, **Downloading**, **Completed**,
+**Unconfirmed**, **Blocked** and **Failed** are distinct outcomes. The summary counts
+an app as updated only after its update-required flag clears and its build or
+last-updated timestamp advances. Client startup, a successful button invocation,
+and scheduling-command exit code do not prove download completion. Local manifests
+are evidence about this run, not a remote check that every installed game is current.
+
+`-Headless` registers a one-shot SYSTEM maintenance task for about five seconds
+later and returns to SSH. The Steam section bridges to a separate, limited-privilege
+interactive-user task and validates its identity and receipt. Both tasks remove
+themselves after a completed run; logs and receipts remain available. A timed-out
+desktop worker receives a cancellation marker before any later request, and its
+diagnostic task/receipt location is retained. Reparo does not terminate Steam or
+games to enforce a deadline. Inspect the completed worker log and Reparo Application
+events after disconnecting SSH. Headless requires an explicit maintenance selector
+and rejects `-Time`, `-Task`, `-Preview` and administrative modes.
+
+Reparo reads Steam manifests and invokes desktop download controls. It does not
+rewrite manifests or preferences, launch games, install duplicate copies, or use
+SteamCMD against desktop libraries. No per-drive Reparo configuration is needed.
+
+Steam desktop control and Windows Task Scheduler are intentional Windows-only
+features. The native Linux runner keeps its existing maintenance behavior and shares
+the 1.4.4.0 release identity and flavor. Tests cover this platform boundary, selector
+binding, UTF-8 inventory, exact title matching, protected running games, lock/session
+checks, limited-user task receipts, and evidence-based completion. Relevant suites:
+`Test-ReparoSteamHeadless`, `Test-ReparoSteamClient`, `Test-ReparoSteamQueue`,
+`Test-ReparoOneShotWorkerBinding`, and `Test-ReparoFlexibleScheduling` under `Tests`.
+
+Release flavor: "Chewie, we're home." - Han Solo, *Star Wars: The Force Awakens*
+(2015), written by Lawrence Kasdan, J. J. Abrams and Michael Arndt
+([official scene reference](https://www.starwars.com/news/from-a-certain-point-of-view-what-is-the-best-scene-in-star-wars-the-force-awakens),
+[film credits](https://www.starwars.com/films/star-wars-episode-vii-the-force-awakens)).
 
 ## Detached Steam maintenance — 1.4.3.1
 
@@ -155,7 +179,7 @@ and remove their scheduled task after completion or failure.
 
 Steam discovery includes the primary library and every configured library in
 `libraryfolders.vdf`, including games on both C: and D: when configured there.
-No per-drive Reparo configuration is needed. Steam retains control of automatic
+No per-drive Reparo configuration is needed. In 1.4.3.1, Steam retained control of automatic
 updates and downloads; an already-running client is left alone, and update
 completion is not inferred from client startup or local update-required flags.
 
@@ -330,41 +354,12 @@ failure never changes the installation/maintenance outcome. These are bounded
 best-effort self-reports, not hardware attestation, exactly-once installation or
 proof of Graylog indexing.
 
-### Steam desktop game update startup (Windows -Force)
+### Steam desktop game updates (Windows)
 
-Windows `-Force` now includes the `Steam` section. You can also run just this section using
-`reparo -Include Steam`. Reparo finds the installed desktop Steam client and inventories
-`appmanifest_*.acf` files in its primary library plus the paths in `libraryfolders.vdf`.
-It logs games whose local manifest state includes the update-required bit; this is **not** a
-server-side version check and does not establish that every game is up to date.
-
-For game content already managed by the regular Steam client, Reparo **does not run SteamCMD**,
-rewrite manifests, alter Steam preferences, launch games, kill Steam, or install another copy
-of a library. If Steam is already running in the single detected desktop session, Reparo
-leaves it alone. Otherwise, with exactly one logged-in desktop session, it requests a
-`steam.exe -silent` startup using Reparo's existing Explorer-token launcher, including
-when Reparo was started over SSH or via a SYSTEM scheduled task. Without a logged-in
-desktop user, or with multiple ambiguous sessions, the section safely skips.
-
-**Limitation:** Steam, not Reparo, owns download scheduling, login, and update completion.
-An already-running client is not forcibly refreshed; a newly started client checks and
-updates games only in accordance with Steam's own automatic-update settings and network
-availability. `-Force` cannot guarantee that updates begin immediately or that all installed
-games are updated. The Reparo summary deliberately reports this section as **Skipped /
-unverified**, never as successfully updated. The user may need to review Steam Downloads,
-especially for games configured to update only on launch. For guaranteed fully unattended
-SteamCMD updates, manage supported *dedicated server* installations separately rather than
-pointing SteamCMD at a live desktop game library.
-
-For a session-independent Reparo maintenance runner, the existing `-Time` mode works:
-
-```powershell
-reparo -Force -Time 30s
-```
-
-That schedules the **Reparo process** independently of SSH. It does not make the Steam desktop
-client itself a fully headless updater. Steam requires a logged-in desktop user. Regression
-coverage: `Tests/Test-ReparoSteamClient.ps1` (fixture files and stubbed Steam launch only).
+Use `reparo -Include Steam` for Steam-only maintenance. Version 1.4.4.0 can request
+pending installed-game updates and observe their progress through the desktop client.
+See [Steam desktop update queue and SSH-detached maintenance](#steam-desktop-update-queue-and-ssh-detached-maintenance---1440)
+for selectors, desktop requirements, result semantics and safe unattended execution.
 
 ### What it does
 
