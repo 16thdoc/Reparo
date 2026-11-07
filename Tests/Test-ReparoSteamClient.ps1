@@ -152,7 +152,7 @@ try {
     $SteamAppId = @()
     $script:publisherValid = $false
     Invoke-ReparoSteamGameUpdates
-    if ($script:queueCalls -ne 2 -or $script:receipts[5].Reason -notmatch 'signature') { throw 'Invalid publisher was not blocked' }
+    if ($script:queueCalls -ne 2 -or $script:receipts[5].Reason -notmatch 'signature' -or $script:receipts[5].Bucket -ne 'Failed') { throw 'Invalid publisher was not blocked' }
     Write-Host 'Steam inventory, cross-library, preview, queue dispatch, receipt and desktop-session safety tests passed.' -ForegroundColor Green
 }
 finally {

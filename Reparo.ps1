@@ -159,7 +159,19 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:ReparoVersion = '1.4.4.0'
+function Initialize-ReparoHostModulePath {
+    # A .cmd hop bypasses PowerShell 7's direct-child compatibility environment.
+    # Resolve this host's core modules first, preserving all other module paths.
+    if ($PSVersionTable.PSEdition -ne 'Desktop') { return }
+    $hostModules = [IO.Path]::Combine($PSHOME, 'Modules')
+    $otherPaths = @(foreach ($entry in ($env:PSModulePath -split [IO.Path]::PathSeparator)) {
+        if ($entry -and $entry.TrimEnd('\') -ne $hostModules.TrimEnd('\')) { $entry }
+    })
+    $env:PSModulePath = (@($hostModules) + $otherPaths) -join [IO.Path]::PathSeparator
+}
+Initialize-ReparoHostModulePath
+
+$script:ReparoVersion = '1.4.4.1'
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($Headless) {
     if ($Task -or $PSBoundParameters.ContainsKey('Time')) { throw '-Headless cannot be combined with -Task or -Time.' }
@@ -352,6 +364,7 @@ function Get-ReparoVersionFlavor {
         '1.4.2.1' = [pscustomobject]@{ Quote = 'I am a leaf on the wind. Watch how I soar.'; Source = 'Serenity (2005), written and directed by Joss Whedon'; Art = '  [ SERENITY ] <===> live pilots spared; updates follow their owning ship' }
         '1.4.3.0' = [pscustomobject]@{ Quote = 'Stay on target.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ GOLD FIVE ] ===[ + ]=== safe boundaries; update telemetry on target' }
         '1.4.3.1' = [pscustomobject]@{ Quote = 'Your focus determines your reality.'; Source = 'Star Wars: Episode I - The Phantom Menace (1999), written and directed by George Lucas'; Art = '  [ QUI-GON ] ===[ + ]=== detached workers stay focused on the selected sections' }
+        '1.4.4.1' = [pscustomobject]@{ Quote = 'Never tell me the odds!'; Source = 'Star Wars: The Empire Strikes Back (1980), Han Solo'; Art = '  [ FALCON ] ===> * . * core modules navigate their own asteroid field' }
         '1.4.4.0' = [pscustomobject]@{ Quote = 'Chewie, we''re home.'; Source = 'Star Wars: The Force Awakens (2015), written by Lawrence Kasdan, J. J. Abrams and Michael Arndt'; Art = '  [ MILLENNIUM FALCON ] <===> Steam queue requests cleared for arrival' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
         '1.2.8.0' = [pscustomobject]@{ Quote = 'Not great, not terrible.'; Source = 'Chernobyl'; Art = '  BOOTSTRAP: recovery ladder bolted to the bulkhead' }
@@ -7004,7 +7017,10 @@ function Test-ReparoSteamPublisher {
     try {
         $signature = Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop
         return ($signature.Status -eq 'Valid' -and $signature.SignerCertificate -and $signature.SignerCertificate.Subject -match '(^|,\s*)CN=Valve Corp(?:oration)?\.?(,|$)')
-    } catch { return $false }
+    } catch {
+        if (Get-Command Write-ReparoLog -CommandType Function -ErrorAction SilentlyContinue) { Write-ReparoLog ('[STEAM-SIGNATURE] Verification error: ' + $_.Exception.Message) }
+        return $false
+    }
 }
 
 function Test-ReparoSteamInputDesktop {
@@ -7461,7 +7477,7 @@ function Invoke-ReparoSteamGameUpdates {
     }
     $desktop = Get-ReparoSteamDesktopContext
     if (-not $desktop.Available) { Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason $desktop.Reason; return }
-    if (-not (Test-ReparoSteamPublisher -Path $exe)) { Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason 'Steam executable signature could not be verified'; return }
+    if (-not (Test-ReparoSteamPublisher -Path $exe)) { Add-ReparoSummaryRecord -Bucket Failed -Software 'Steam games' -Method 'Steam client' -Reason 'Steam executable signature could not be verified'; return }
     try { $receipt = Invoke-ReparoSteamQueue -SteamPath $exe -Games @($selection.Eligible) -Desktop $desktop -WaitSeconds $SteamWaitSeconds }
     catch { Add-ReparoSummaryRecord -Bucket Failed -Software 'Steam games' -Method 'Steam client' -Reason ('queue worker failed: ' + $_.Exception.Message); return }
     if ($receipt.Status -ne 'Processed') {

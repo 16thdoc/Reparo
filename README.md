@@ -101,6 +101,22 @@ is operator-trusted bootstrap code; an installed native runner verifies the down
 bootstrap first. Windows Install remains offline and Windows Latest/N remains
 unpinned; native N retains its historical New meaning, with Latest spelled out.
 
+## Windows command-shim compatibility - 1.4.4.1
+
+Fixes `reparo -Include Steam` launched from PowerShell 7 through `reparo.cmd`.
+Windows PowerShell could inherit PowerShell 7's module paths, fail to load its
+security module, and incorrectly report an unverifiable Steam executable. Reparo
+now places the executing Windows PowerShell host's own core modules first while
+preserving other module paths. The change is process-local; no profile or persisted
+environment is rewritten. Authenticode and Valve publisher checks remain required.
+A failed Steam signature check now counts as Failed rather than a successful skip,
+and verification exceptions are logged. Native Linux needs no Windows module-path
+repair and shares the release identity/flavor; its maintenance behavior is unchanged.
+
+Release flavor: "Never tell me the odds!" - Han Solo, *Star Wars: The Empire Strikes
+Back* (1980), with Falcon/asteroid art
+([official reference](https://www.starwars.com/video/never-tell-me-the-odds)).
+
 ## Steam desktop update queue and SSH-detached maintenance - 1.4.4.0
 
 Windows `-Include Steam` inventories installed apps in the primary Steam library
