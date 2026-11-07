@@ -171,7 +171,7 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.3'
+$script:ReparoVersion = '1.4.4.4'
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($Headless) {
     if ($Task -or $PSBoundParameters.ContainsKey('Time')) { throw '-Headless cannot be combined with -Task or -Time.' }
@@ -364,6 +364,7 @@ function Get-ReparoVersionFlavor {
         '1.4.2.1' = [pscustomobject]@{ Quote = 'I am a leaf on the wind. Watch how I soar.'; Source = 'Serenity (2005), written and directed by Joss Whedon'; Art = '  [ SERENITY ] <===> live pilots spared; updates follow their owning ship' }
         '1.4.3.0' = [pscustomobject]@{ Quote = 'Stay on target.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ GOLD FIVE ] ===[ + ]=== safe boundaries; update telemetry on target' }
         '1.4.3.1' = [pscustomobject]@{ Quote = 'Your focus determines your reality.'; Source = 'Star Wars: Episode I - The Phantom Menace (1999), written and directed by George Lucas'; Art = '  [ QUI-GON ] ===[ + ]=== detached workers stay focused on the selected sections' }
+        '1.4.4.4' = [pscustomobject]@{ Quote = 'Your eyes can deceive you. Don''t trust them.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ TRAINING REMOTE ] --(o)--  |==== Jedi saber; verify the result' }
         '1.4.4.3' = [pscustomobject]@{ Quote = 'Punch it!'; Source = 'Star Wars: The Empire Strikes Back (1980), Han Solo to Chewbacca'; Art = '  [ FALCON ] <===> queued for departure; downloads stay in flight' }
         '1.4.4.2' = [pscustomobject]@{ Quote = 'Laugh it up, fuzzball.'; Source = 'Star Wars: The Empire Strikes Back (1980), Han Solo to Chewbacca'; Art = '  [ CHEWBACCA ]  /\__ /\  Steam downloads keep moving' }
         '1.4.4.1' = [pscustomobject]@{ Quote = 'Never tell me the odds!'; Source = 'Star Wars: The Empire Strikes Back (1980), Han Solo'; Art = '  [ FALCON ] ===> * . * core modules navigate their own asteroid field' }
@@ -8722,11 +8723,29 @@ function New-ReparoOpencodeUpdateCommand {
     $template = @'
 $ErrorActionPreference = 'Stop'
 $lockedPackages = __LOCKED_PACKAGES__
+function Invoke-ReparoOpencodeNative {
+    param([string]$FilePath, [string[]]$Arguments)
+    # Windows PowerShell converts redirected native stderr to ErrorRecord objects.
+    # npm warnings must remain visible without terminating before LASTEXITCODE.
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $PSNativeCommandUseErrorActionPreference = $false
+        $global:LASTEXITCODE = 1
+        & $FilePath @Arguments 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host ([string]$_) }
+            else { $_ }
+        }
+        $nativeExit = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previousPreference }
+    $global:LASTEXITCODE = $nativeExit
+}
 function Add-ReparoNpmPrefixToPathForOpencode {
     $npm = Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $npm) { return }
 
-    $prefixOutput = @(& $npm.Source config get prefix 2>$null)
+    $prefixOutput = @(Invoke-ReparoOpencodeNative -FilePath $npm.Source -Arguments @('config', 'get', 'prefix'))
     $prefix = $prefixOutput | Select-Object -First 1
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($prefix)) { throw 'Cannot determine the npm global prefix.' }
 
@@ -8782,7 +8801,7 @@ if ($opencode) {
     Write-Host "Active opencode before update: $($opencode.Source)"
 }
 else {
-    $prefixOutput = @(& $npm.Source config get prefix 2>$null)
+    $prefixOutput = @(Invoke-ReparoOpencodeNative -FilePath $npm.Source -Arguments @('config', 'get', 'prefix'))
     $prefix = $prefixOutput | Select-Object -First 1
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($prefix)) { throw 'Cannot determine the npm global prefix.' }
     $prefix = $prefix.Trim()
@@ -8802,23 +8821,23 @@ if ($package -eq 'opencode-ai') {
     $legacyVersion = [string]$legacyManifest.version
     if ($legacyVersion -notmatch '^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$') { throw 'Cannot read the installed OpenCode V1 version for rollback.' }
     Write-Host "Migrating opencode-ai $legacyVersion to @opencode/cli in owning npm prefix: $prefix"
-    & $npm.Source uninstall --global --prefix $prefix opencode-ai
+    Invoke-ReparoOpencodeNative -FilePath $npm.Source -Arguments @('uninstall', '--global', '--prefix', $prefix, 'opencode-ai')
     $migrationExit = $LASTEXITCODE
     if ($migrationExit -eq 0) {
-        & $npm.Source install --global --prefix $prefix '@opencode/cli@latest'
+        Invoke-ReparoOpencodeNative -FilePath $npm.Source -Arguments @('install', '--global', '--prefix', $prefix, '@opencode/cli@latest', '--allow-scripts=@opencode/cli', '--ignore-scripts=false')
         $migrationExit = $LASTEXITCODE
     }
     if ($migrationExit -ne 0) {
         Write-Host '[ROLLBACK] OpenCode V2 migration failed; attempting to restore the original V1 package version.'
-        & $npm.Source uninstall --global --prefix $prefix '@opencode/cli'
-        & $npm.Source install --global --prefix $prefix "opencode-ai@$legacyVersion"
+        Invoke-ReparoOpencodeNative -FilePath $npm.Source -Arguments @('uninstall', '--global', '--prefix', $prefix, '@opencode/cli')
+        Invoke-ReparoOpencodeNative -FilePath $npm.Source -Arguments @('install', '--global', '--prefix', $prefix, "opencode-ai@$legacyVersion", '--allow-scripts=opencode-ai', '--ignore-scripts=false')
         if ($LASTEXITCODE -ne 0) { throw "OpenCode V2 migration failed (exit $migrationExit); V1 rollback also failed (exit $LASTEXITCODE). Repair this npm prefix manually." }
         throw "OpenCode V2 migration failed with exit code $migrationExit; restored opencode-ai $legacyVersion."
     }
 }
 else {
     Write-Host "Updating $package in owning npm prefix: $prefix"
-    & $npm.Source install --global --prefix $prefix "$package@latest"
+    Invoke-ReparoOpencodeNative -FilePath $npm.Source -Arguments @('install', '--global', '--prefix', $prefix, "$package@latest", "--allow-scripts=$package", '--ignore-scripts=false')
     if ($LASTEXITCODE -ne 0) { throw "npm install for $package failed with exit code $LASTEXITCODE" }
 }
 if (-not (Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1)) {
@@ -8826,9 +8845,9 @@ if (-not (Get-Command opencode -CommandType Application -ErrorAction SilentlyCon
 }
 $opencode = Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $opencode) { throw 'opencode is unavailable after npm installation.' }
-$versionOutput = @(& $opencode.Source --version 2>$null)
+$versionOutput = @(Invoke-ReparoOpencodeNative -FilePath $opencode.Source -Arguments @('--version'))
 $afterVersion = $versionOutput | Select-Object -First 1
-if ($LASTEXITCODE -ne 0) { throw 'opencode --version failed after npm installation.' }
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($afterVersion)) { throw 'opencode --version failed after npm installation.' }
 Write-Host "Active opencode after update: $($opencode.Source) $afterVersion"
 
 exit 0

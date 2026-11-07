@@ -19,6 +19,7 @@ case "$1" in
     config) printf '%s\n' "$OC_FIXTURE/different prefix" ;;
     *)
         printf '%s\n' "$@" >>"$OC_FIXTURE/calls"
+        printf '%s\n' "npm warn fixture harmless warning" >&2
         if [ "$1" = install ] && [ "$5" = @opencode/cli@latest ]; then exit "${OC_NPM_STATUS:-0}"; fi
         if [ "$1" = install ] && [ "$5" = opencode-ai@1.19.0 ]; then exit "${OC_ROLLBACK_STATUS:-0}"; fi
         exit 0 ;;
@@ -27,6 +28,11 @@ EOF
 cat >"$fixture/tools/pgrep" <<'EOF'
 #!/usr/bin/env sh
 exit "${OC_PROCESS_STATUS:-1}"
+EOF
+# Only the legacy manifest lookup uses node in this fully mocked fixture.
+cat >"$fixture/tools/node" <<'EOF'
+#!/usr/bin/env sh
+printf '%s\n' '1.19.0'
 EOF
 chmod +x "$fixture/tools/"*
 export PATH="$fixture/owning prefix/bin:$fixture/tools:$PATH" XDG_STATE_HOME="$fixture/state" NO_COLOR=1
@@ -49,8 +55,9 @@ for package in opencode-ai @opencode/cli; do
     if [ "$package" = opencode-ai ]; then
         printf '%s\n' uninstall --global --prefix "$fixture/owning prefix" opencode-ai >>"$fixture/expected"
     fi
-    printf '%s\n' install --global --prefix "$fixture/owning prefix" @opencode/cli@latest >>"$fixture/expected"
+    printf '%s\n' install --global --prefix "$fixture/owning prefix" @opencode/cli@latest --allow-scripts=@opencode/cli --ignore-scripts=false >>"$fixture/expected"
     cmp "$fixture/expected" "$fixture/calls"
+    grep -q 'opencode v2.0.29' "$fixture/output"
 done
 # V1 migration failure restores the exact old version; rollback failure stays a failure.
 ln -sfn '../lib/node_modules/opencode-ai/bin/opencode' "$fixture/owning prefix/bin/opencode"
@@ -58,6 +65,7 @@ rm "$fixture/owning prefix/lib/node_modules/@opencode/cli/package.json"
 for rollback_status in 0 19; do
     rm -f "$fixture/calls"
     OC_NPM_STATUS=17 OC_ROLLBACK_STATUS=$rollback_status sh "$repo/linux/reparo-linux" --include Opencode >"$fixture/output" 2>&1 || true
+    grep -q '^--allow-scripts=opencode-ai$' "$fixture/calls"
     grep -q '^opencode-ai@1.19.0$' "$fixture/calls"
     grep -q '\[FAIL\] Opencode exited 17' "$fixture/output"
     if [ "$rollback_status" -eq 0 ]; then grep -q 'Restored opencode-ai 1.19.0' "$fixture/output"
@@ -88,6 +96,9 @@ grep -q 'not a standard npm global installation' "$fixture/output"
 ln -sf "../lib/node_modules/@opencode/cli/bin/opencode" "$fixture/owning prefix/bin/opencode"
 OC_NPM_STATUS=17 sh "$repo/linux/reparo-linux" --include Opencode >"$fixture/output" || true
 grep -q '\[FAIL\] Opencode exited 17' "$fixture/output"
+printf '%s\n' '#!/usr/bin/env sh' 'exit 23' >"$fixture/owning prefix/lib/node_modules/@opencode/cli/bin/opencode"
+sh "$repo/linux/reparo-linux" --include Opencode >"$fixture/output" 2>&1 || true
+grep -q '\[FAIL\] Opencode exited 23' "$fixture/output"
 rm "$fixture/calls"
 sh "$repo/linux/reparo-linux" --include Npm >"$fixture/output"
 printf '%s\n' update -g -- @example/other other >"$fixture/expected"

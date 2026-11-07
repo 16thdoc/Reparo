@@ -9,10 +9,10 @@ umask 077
 # Interactive Esc cancellation is Windows-only: this POSIX runner does not own
 # a portable cooperative-cancel API for native package managers. No fake skip,
 # keyboard polling, or wrapper kill is substituted for installer completion.
-REPARO_LINUX_VERSION='1.4.4.3'
-REPARO_VERSION_QUOTE='Punch it!'
-REPARO_VERSION_SOURCE='Star Wars: The Empire Strikes Back (1980), Han Solo to Chewbacca'
-REPARO_VERSION_ART='  [ FALCON ] <===> queued for departure; downloads stay in flight'
+REPARO_LINUX_VERSION='1.4.4.4'
+REPARO_VERSION_QUOTE="Your eyes can deceive you. Don't trust them."
+REPARO_VERSION_SOURCE='Star Wars (1977), written and directed by George Lucas'
+REPARO_VERSION_ART='  [ TRAINING REMOTE ] --(o)--  |==== Jedi saber; verify the result'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-}"
 REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
 LATEST=0
@@ -737,13 +737,14 @@ npm=$1; prefix=$2; old_version=$3
 "$npm" uninstall --global --prefix "$prefix" opencode-ai
 status=$?
 if [ "$status" -eq 0 ]; then
-    "$npm" install --global --prefix "$prefix" @opencode/cli@latest
+    "$npm" install --global --prefix "$prefix" @opencode/cli@latest --allow-scripts=@opencode/cli --ignore-scripts=false
     status=$?
+    if [ "$status" -eq 0 ]; then "$prefix/bin/opencode" --version; status=$?; fi
 fi
 if [ "$status" -ne 0 ]; then
     printf "%s\n" "[ROLLBACK] OpenCode V2 migration failed; attempting to restore opencode-ai $old_version"
     "$npm" uninstall --global --prefix "$prefix" @opencode/cli
-    if "$npm" install --global --prefix "$prefix" "opencode-ai@$old_version"; then
+    if "$npm" install --global --prefix "$prefix" "opencode-ai@$old_version" --allow-scripts=opencode-ai --ignore-scripts=false; then
         printf "%s\n" "[ROLLBACK] Restored opencode-ai $old_version"
     else
         printf "%s\n" "[FAIL] V1 rollback also failed; repair this npm prefix manually" >&2
@@ -762,12 +763,15 @@ exit "$status"
     # Do not invoke `opencode upgrade`: it prompts before modifying an npm-owned
     # executable, and its npm method follows npm's configured prefix rather than the
     # prefix that owns the active OpenCode command. Update that owning prefix directly.
+    opencode_update_script='
+"$1" install --global --prefix "$2" "$3@latest" "--allow-scripts=$3" --ignore-scripts=false && "$2/bin/opencode" --version
+'
     case "$opencode_prefix" in
         /usr|/usr/*|/opt|/opt/*)
-            run_privileged Opencode "npm install --global $opencode_package@latest (owning prefix)" "$npm_executable" install --global --prefix "$opencode_prefix" "$opencode_package@latest" || true
+            run_privileged Opencode "npm install --global $opencode_package@latest (owning prefix)" sh -c "$opencode_update_script" reparo "$npm_executable" "$opencode_prefix" "$opencode_package" || true
             ;;
         *)
-            run_command Opencode "npm install --global $opencode_package@latest (owning prefix)" "$npm_executable" install --global --prefix "$opencode_prefix" "$opencode_package@latest" || true
+            run_command Opencode "npm install --global $opencode_package@latest (owning prefix)" sh -c "$opencode_update_script" reparo "$npm_executable" "$opencode_prefix" "$opencode_package" || true
             ;;
     esac
 }

@@ -1,3 +1,4 @@
+param([string]$WorkerHost = 'powershell.exe')
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -10,7 +11,7 @@ $root = Join-Path $env:TEMP ('reparo-opencode-' + [guid]::NewGuid())
 $oldFixture = $env:REPARO_OC_FIXTURE
 try {
     New-Item -ItemType Directory -Path $root | Out-Null
-    foreach ($case in 'v2','v1','coexist-v1','coexist-v2','migration-failed','rollback-failed','running','locked','missing','standalone','failed','npm-missing') {
+    foreach ($case in 'v2','v1','coexist-v1','coexist-v2','migration-failed','rollback-failed','running','locked','missing','standalone','failed','npm-missing','native-warning','native-failed','broken-version') {
         $fixture = Join-Path $root $case
         $prefix = Join-Path $fixture 'owning prefix'
         New-Item -ItemType Directory -Path $prefix -Force | Out-Null
@@ -24,10 +25,13 @@ try {
         $package = if ($case -in 'v1','coexist-v1','migration-failed','rollback-failed') { 'opencode-ai' } else { '@opencode/cli' }
         $shim = "@echo off`r`nrem node_modules\$($package.Replace('/','\'))\bin\opencode.exe`r`necho opencode v2.0.29"
         if ($case -eq 'standalone') { $shim = '@echo off' }
+        if ($case -eq 'broken-version') { $shim = "@echo off`r`nrem node_modules\@opencode\cli\bin\opencode.exe`r`nexit /b 23" }
         if ($case -ne 'missing') { Set-Content (Join-Path $prefix 'opencode.cmd') $shim }
         $npm = @'
 if ($args[0] -eq 'config') { Add-Content (Join-Path $env:REPARO_OC_FIXTURE 'configs') 'config'; Join-Path $env:REPARO_OC_FIXTURE 'different prefix'; $global:LASTEXITCODE = 0; return }
 ($args | ConvertTo-Json -Compress) | Add-Content (Join-Path $env:REPARO_OC_FIXTURE 'calls')
+if ((Split-Path $env:REPARO_OC_FIXTURE -Leaf) -eq 'native-failed') { [Console]::Error.WriteLine('npm warn fixture before failure'); exit 17 }
+if ((Split-Path $env:REPARO_OC_FIXTURE -Leaf) -eq 'native-warning') { [Console]::Error.WriteLine('npm warn fixture harmless warning'); exit 0 }
 if ((Split-Path $env:REPARO_OC_FIXTURE -Leaf) -eq 'failed') { $global:LASTEXITCODE = 17; return }
 if ((Split-Path $env:REPARO_OC_FIXTURE -Leaf) -in 'migration-failed','rollback-failed' -and $args[0] -eq 'install' -and $args[4] -eq '@opencode/cli@latest') { $global:LASTEXITCODE = 17; return }
 if ((Split-Path $env:REPARO_OC_FIXTURE -Leaf) -eq 'rollback-failed' -and $args[0] -eq 'install') { $global:LASTEXITCODE = 19; return }
@@ -38,10 +42,13 @@ if ((Split-Path $env:REPARO_OC_FIXTURE -Leaf) -eq 'missing') {
 $global:LASTEXITCODE = 0
 '@
         Set-Content (Join-Path $fixture 'npm.ps1') $npm
+        Set-Content (Join-Path $fixture 'npm.cmd') '@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0npm.ps1" %*'.Replace('`r`n', "`r`n")
         $harness = @'
+$PSNativeCommandUseErrorActionPreference = $true
 function Get-Command {
     param($Name, $CommandType, $ErrorAction)
     $f = $env:REPARO_OC_FIXTURE
+    if ($Name -eq 'npm' -and (Split-Path $f -Leaf) -in 'native-warning','native-failed') { [pscustomobject]@{ Source = (Join-Path $f 'npm.cmd') }; return }
     if ($Name -eq 'npm' -and (Split-Path $f -Leaf) -ne 'npm-missing') { [pscustomobject]@{ Source = (Join-Path $f 'npm.ps1') }; return }
     if ($Name -eq 'opencode') {
         $p = Join-Path $f 'owning prefix/opencode.cmd'
@@ -56,19 +63,26 @@ function Get-Process {
         $locks = if ($case -eq 'locked') { @('@opencode/cli') } else { @() }
         $worker = Join-Path $fixture 'worker.ps1'
         Set-Content $worker ($harness + "`r`n" + (New-ReparoOpencodeUpdateCommand -LockedPackages $locks))
-        $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $worker 2>&1 | Out-String
-        $code = $LASTEXITCODE
+        try {
+            $ErrorActionPreference = 'Continue'
+            $output = & $WorkerHost -NoProfile -ExecutionPolicy Bypass -File $worker 2>&1 | Out-String
+            $code = $LASTEXITCODE
+        } finally { $ErrorActionPreference = 'Stop' }
         $callsPath = Join-Path $fixture 'calls'
         if ($case -ne 'missing' -and (Test-Path (Join-Path $fixture 'configs'))) { throw 'Configured npm prefix must not shadow the active OpenCode command.' }
         $skipped = $case -in 'running','locked','standalone','npm-missing','coexist-v1'
         if ($skipped) {
             if ($code -ne 0 -or $output -notmatch '\[SKIP\] Opencode:' -or (Test-Path $callsPath)) { throw "$case did not safely skip: $output" }
         }
-        elseif ($case -eq 'failed') {
+        elseif ($case -eq 'broken-version') {
+            if ($code -eq 0 -or $output -notmatch 'opencode --version failed') { throw "Broken binary was reported as success: $output" }
+        }
+        elseif ($case -in 'failed','native-failed') {
             if ($code -eq 0 -or $output -notmatch 'exit code 17') { throw "npm failure was swallowed: $output" }
         }
         elseif ($case -in 'migration-failed','rollback-failed') {
             $calls = @(Get-Content $callsPath)
+            if ($calls[3] -notmatch '--allow-scripts=opencode-ai' -or $calls[3] -notmatch '--ignore-scripts=false') { throw 'Rollback must allow only the legacy package setup script.' }
             if ($code -eq 0 -or $calls.Count -ne 4 -or $calls[3] -notmatch 'opencode-ai@1.19.0') { throw "Migration rollback not attempted: $output" }
             if ($case -eq 'migration-failed' -and $output -notmatch 'restored opencode-ai 1.19.0') { throw "Successful rollback not reported: $output" }
             if ($case -eq 'rollback-failed' -and $output -notmatch 'rollback also failed') { throw "Rollback failure not reported: $output" }
@@ -77,8 +91,9 @@ function Get-Process {
             if ($code -ne 0) { throw "$case failed: $output" }
             $calls = @(Get-Content $callsPath)
             if ($case -eq 'v1' -and ($calls.Count -ne 2 -or $calls[0] -notmatch 'uninstall.*opencode-ai')) { throw 'V1 must be removed before installing V2.' }
-            $call = @($calls[-1] | ConvertFrom-Json)
-            if ($call.Count -ne 5 -or $call[0] -ne 'install' -or $call[2] -ne '--prefix' -or $call[4] -ne '@opencode/cli@latest') { throw "Wrong update arguments for ${case}: $call" }
+            $call = $calls[-1] | ConvertFrom-Json
+            if ($case -eq 'native-warning' -and $output -notmatch 'npm warn fixture harmless warning') { throw 'Native stderr warning was lost.' }
+            if ($call.Count -ne 7 -or $call[0] -ne 'install' -or $call[2] -ne '--prefix' -or $call[4] -ne '@opencode/cli@latest' -or $call[5] -ne '--allow-scripts=@opencode/cli' -or $call[6] -ne '--ignore-scripts=false') { throw "Wrong update arguments for ${case}: $(Get-Content $callsPath -Raw)" }
             $expectedPrefix = if ($case -eq 'missing') { Join-Path $fixture 'different prefix' } else { $prefix }
             if ($call[3] -ne $expectedPrefix) { throw "Wrong owning prefix for ${case}: $call" }
         }

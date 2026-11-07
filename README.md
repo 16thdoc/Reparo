@@ -307,6 +307,21 @@ it uses a disposable prefix and never starts a service. See the official
 [V2 installation](https://opencode.ai/v2/docs/) and
 [migration guide](https://opencode.ai/v2/docs/migrate-v1).
 
+### OpenCode npm script permissions
+
+The dedicated OpenCode updater grants install-time script permission only to
+`@opencode/cli` (or `opencode-ai` during a V1 rollback), with scripts enabled for
+that command. It does not change the user's npm configuration or allow all
+dependency scripts. npm warnings stay in the log; nonzero npm exits and a failed
+`opencode --version` still fail the section. Windows PowerShell stderr handling
+is isolated to native calls; native Linux uses the same scoped permissions and
+verifies the executable after installation.
+
+Release 1.4.4.4 version flavor: Obi-Wan Kenobi's training-remote lesson from
+*Star Wars* (1977), written and directed by George Lucas;
+[quote reference](https://www.starwars.com/news/15-star-wars-quotes-to-use-in-everyday-life).
+
+
 ## Optional authenticated reporting — 1.4.2.0
 
 **Off by default.** Ordinary public installs require no Node/client bundle and send
