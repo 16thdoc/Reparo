@@ -5,7 +5,7 @@ $repo=Split-Path -Parent $PSScriptRoot
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'Reparo.ps1'),[ref]$tokens,[ref]$errors)
 if($errors.Count){throw ($errors|Out-String)}
-$names=@('Read-ReparoSteamManifestState','Test-ReparoSteamPublisher','Test-ReparoSteamInputDesktop','Get-ReparoSteamDesktopContext','Test-ReparoSteamAppRunning','Initialize-ReparoSteamAutomation','Get-ReparoSteamAutomationSnapshot','Find-ReparoSteamQueueRow','Invoke-ReparoSteamQueueButton','Get-ReparoSteamRequestOutcome','Invoke-ReparoSteamDesktopQueue','New-ReparoSteamQueueWorker','Invoke-ReparoSteamQueue','Select-ReparoSteamQueueGames')
+$names=@('Read-ReparoSteamManifestState','Test-ReparoSteamInputDesktop','Get-ReparoSteamDesktopContext','Test-ReparoSteamAppRunning','Initialize-ReparoSteamAutomation','Get-ReparoSteamAutomationSnapshot','Find-ReparoSteamQueueRow','Invoke-ReparoSteamQueueButton','Get-ReparoSteamRequestOutcome','Invoke-ReparoSteamDesktopQueue','New-ReparoSteamQueueWorker','Invoke-ReparoSteamQueue','Select-ReparoSteamQueueGames')
 foreach($name in $names){
     $node=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
     if(-not $node){throw "Missing queue function $name"}
@@ -72,6 +72,7 @@ try{
     $workerTokens=$null;$workerErrors=$null
     $null=[Management.Automation.Language.Parser]::ParseInput($worker,[ref]$workerTokens,[ref]$workerErrors)
     Assert-Queue ($workerErrors.Count -eq 0) 'Embedded desktop worker does not parse'
+    Assert-Queue ($worker -notmatch 'Get-AuthenticodeSignature|SignerCertificate|SteamPublisher') 'Steam worker still requires certificate verification'
     Assert-Queue ($worker -notmatch 'Start-Process.+Reparo.ps1|Restart-Computer|Stop-Process|SendKeys|SendInput') 'Desktop worker includes an unsafe or unrelated operation'
     # Compile the shipped interop and activate native UIA8 without invoking any control.
     Initialize-ReparoSteamAutomation
@@ -79,9 +80,8 @@ try{
     Assert-Queue ($null -ne $nativeClient) 'Native UI Automation 8 could not initialize'
 
     # Exercise the real orchestration with substituted UI boundaries and fixture files.
-    $script:desktopOpen=$true;$script:publisherValid=$true;$script:running=$false;$script:requests=0;$script:completeRequest=$true
+    $script:desktopOpen=$true;$script:running=$false;$script:requests=0;$script:completeRequest=$true
     function Test-ReparoSteamInputDesktop {return $script:desktopOpen}
-    function Test-ReparoSteamPublisher {param($Path) return $script:publisherValid}
     function Test-ReparoSteamAppRunning {param($Game) return $script:running}
     function Get-ReparoSteamAutomationSnapshot {
         param($SteamPath,$SessionId)
@@ -101,9 +101,7 @@ try{
     Assert-Queue ((Invoke-ReparoSteamDesktopQueue -Config $config).Reason -match 'mismatch') 'Wrong desktop session was not blocked'
     $config.SessionId=$session;$script:desktopOpen=$false
     Assert-Queue ((Invoke-ReparoSteamDesktopQueue -Config $config).Reason -match 'locked') 'Locked desktop was not blocked'
-    $script:desktopOpen=$true;$script:publisherValid=$false
-    Assert-Queue ((Invoke-ReparoSteamDesktopQueue -Config $config).Reason -match 'signature') 'Invalid Steam publisher was not blocked'
-    $script:publisherValid=$true;$script:running=$true
+    $script:desktopOpen=$true;$script:running=$true
     $receipt=Invoke-ReparoSteamDesktopQueue -Config $config
     Assert-Queue ($receipt.Results[0].Status -eq 'Skipped' -and $script:requests -eq 0) 'Running game was not protected'
     $script:running=$false

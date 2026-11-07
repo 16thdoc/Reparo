@@ -171,7 +171,7 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.1'
+$script:ReparoVersion = '1.4.4.2'
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($Headless) {
     if ($Task -or $PSBoundParameters.ContainsKey('Time')) { throw '-Headless cannot be combined with -Task or -Time.' }
@@ -364,6 +364,7 @@ function Get-ReparoVersionFlavor {
         '1.4.2.1' = [pscustomobject]@{ Quote = 'I am a leaf on the wind. Watch how I soar.'; Source = 'Serenity (2005), written and directed by Joss Whedon'; Art = '  [ SERENITY ] <===> live pilots spared; updates follow their owning ship' }
         '1.4.3.0' = [pscustomobject]@{ Quote = 'Stay on target.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ GOLD FIVE ] ===[ + ]=== safe boundaries; update telemetry on target' }
         '1.4.3.1' = [pscustomobject]@{ Quote = 'Your focus determines your reality.'; Source = 'Star Wars: Episode I - The Phantom Menace (1999), written and directed by George Lucas'; Art = '  [ QUI-GON ] ===[ + ]=== detached workers stay focused on the selected sections' }
+        '1.4.4.2' = [pscustomobject]@{ Quote = 'Laugh it up, fuzzball.'; Source = 'Star Wars: The Empire Strikes Back (1980), Han Solo to Chewbacca'; Art = '  [ CHEWBACCA ]  /\__ /\  Steam downloads keep moving' }
         '1.4.4.1' = [pscustomobject]@{ Quote = 'Never tell me the odds!'; Source = 'Star Wars: The Empire Strikes Back (1980), Han Solo'; Art = '  [ FALCON ] ===> * . * core modules navigate their own asteroid field' }
         '1.4.4.0' = [pscustomobject]@{ Quote = 'Chewie, we''re home.'; Source = 'Star Wars: The Force Awakens (2015), written by Lawrence Kasdan, J. J. Abrams and Michael Arndt'; Art = '  [ MILLENNIUM FALCON ] <===> Steam queue requests cleared for arrival' }
         '1.2.7.0' = [pscustomobject]@{ Quote = 'The future is not set. There is no fate but what we make.'; Source = 'Terminator 2: Judgment Day'; Art = '  CLOCKWORK: persistent maintenance daemon caged and fed' }
@@ -7012,17 +7013,6 @@ function Read-ReparoSteamManifestState {
     [pscustomobject]@{ Name=$values.name; StateFlags=$flags; UpdateFlagged=(($flags -band 2) -ne 0); FullyInstalled=(($flags -band 4) -ne 0); BuildId=$values.buildid; LastUpdated=$updated; AutoUpdateBehavior=$values.AutoUpdateBehavior; InstallDir=$values.installdir; BytesDownloaded=$downloaded; BytesToDownload=$downloadSize }
 }
 
-function Test-ReparoSteamPublisher {
-    param([Parameter(Mandatory)][string]$Path)
-    try {
-        $signature = Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop
-        return ($signature.Status -eq 'Valid' -and $signature.SignerCertificate -and $signature.SignerCertificate.Subject -match '(^|,\s*)CN=Valve Corp(?:oration)?\.?(,|$)')
-    } catch {
-        if (Get-Command Write-ReparoLog -CommandType Function -ErrorAction SilentlyContinue) { Write-ReparoLog ('[STEAM-SIGNATURE] Verification error: ' + $_.Exception.Message) }
-        return $false
-    }
-}
-
 function Test-ReparoSteamInputDesktop {
     if (-not ('ReparoSteamInputDesktop' -as [type])) {
         Add-Type -TypeDefinition @'
@@ -7183,9 +7173,7 @@ function Get-ReparoSteamAutomationSnapshot {
             $process = Get-Process -Id $window.ProcessId -ErrorAction Stop
             if ($process.SessionId -ne $SessionId -or $process.Name -notin @('steam','steamwebhelper')) { continue }
             if (-not $process.Path.StartsWith($steamRoot, [StringComparison]::OrdinalIgnoreCase)) { continue }
-            if (-not $script:ReparoSteamTrustedPaths) { $script:ReparoSteamTrustedPaths = @{} }
-            if (-not $script:ReparoSteamTrustedPaths.ContainsKey($process.Path)) { $script:ReparoSteamTrustedPaths[$process.Path] = Test-ReparoSteamPublisher -Path $process.Path }
-            if ($script:ReparoSteamTrustedPaths[$process.Path]) { $trusted += $window }
+            $trusted += $window
         } catch { continue }
     }
     if ($trusted.Count -ne 1) { return $null }
@@ -7229,13 +7217,11 @@ function Invoke-ReparoSteamDesktopQueue {
     $result = [ordered]@{ RunId=$Config.RunId; Done=$true; Status='Blocked'; Reason=''; Sid=$identity.User.Value; SessionId=$sessionId; WorkerPID=$PID; Results=@() }
     if ($identity.User.Value -ne $Config.Sid -or $sessionId -ne $Config.SessionId) { $result.Reason='desktop worker identity or session mismatch'; return [pscustomobject]$result }
     if (-not (Test-ReparoSteamInputDesktop)) { $result.Reason='desktop locked or unavailable; unlock the desktop'; return [pscustomobject]$result }
-    if (-not (Test-ReparoSteamPublisher -Path $Config.SteamPath)) { $result.Reason='Steam executable signature could not be verified'; return [pscustomobject]$result }
     $mutex = [Threading.Mutex]::new($false, ('Local\ReparoSteamQueue-' + $Config.Sid))
     $held = $false
     try {
         $held = $mutex.WaitOne(0)
         if (-not $held) { $result.Reason='another Steam queue request is active'; return [pscustomobject]$result }
-        $script:ReparoSteamTrustedPaths = @{}
         $snapshot = Get-ReparoSteamAutomationSnapshot -SteamPath $Config.SteamPath -SessionId $sessionId
         if (-not $snapshot) {
             # Explorer owns the GUI launch, rather than the maintenance task's process job.
@@ -7293,7 +7279,7 @@ function Invoke-ReparoSteamDesktopQueue {
 }
 
 function New-ReparoSteamQueueWorker {
-    $names = @('Read-ReparoSteamManifestState','Test-ReparoSteamPublisher','Test-ReparoSteamInputDesktop','Test-ReparoSteamAppRunning','Initialize-ReparoSteamAutomation','Get-ReparoSteamAutomationSnapshot','Find-ReparoSteamQueueRow','Invoke-ReparoSteamQueueButton','Get-ReparoSteamRequestOutcome','Invoke-ReparoSteamDesktopQueue')
+    $names = @('Read-ReparoSteamManifestState','Test-ReparoSteamInputDesktop','Test-ReparoSteamAppRunning','Initialize-ReparoSteamAutomation','Get-ReparoSteamAutomationSnapshot','Find-ReparoSteamQueueRow','Invoke-ReparoSteamQueueButton','Get-ReparoSteamRequestOutcome','Invoke-ReparoSteamDesktopQueue')
     $definitions = foreach ($name in $names) { "function $name {`n" + (Get-Command $name -CommandType Function -ErrorAction Stop).Definition + "`n}" }
     return @'
 param([Parameter(Mandatory)][string]$InputPath,[Parameter(Mandatory)][string]$ResultPath)
@@ -7477,7 +7463,6 @@ function Invoke-ReparoSteamGameUpdates {
     }
     $desktop = Get-ReparoSteamDesktopContext
     if (-not $desktop.Available) { Add-ReparoSummaryRecord -Bucket Skipped -Software 'Steam games' -Method 'Steam client' -Reason $desktop.Reason; return }
-    if (-not (Test-ReparoSteamPublisher -Path $exe)) { Add-ReparoSummaryRecord -Bucket Failed -Software 'Steam games' -Method 'Steam client' -Reason 'Steam executable signature could not be verified'; return }
     try { $receipt = Invoke-ReparoSteamQueue -SteamPath $exe -Games @($selection.Eligible) -Desktop $desktop -WaitSeconds $SteamWaitSeconds }
     catch { Add-ReparoSummaryRecord -Bucket Failed -Software 'Steam games' -Method 'Steam client' -Reason ('queue worker failed: ' + $_.Exception.Message); return }
     if ($receipt.Status -ne 'Processed') {

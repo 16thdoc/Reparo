@@ -101,27 +101,27 @@ is operator-trusted bootstrap code; an installed native runner verifies the down
 bootstrap first. Windows Install remains offline and Windows Latest/N remains
 unpinned; native N retains its historical New meaning, with Latest spelled out.
 
-## Windows command-shim compatibility - 1.4.4.1
+## Steam updates without certificate gating - 1.4.4.2
 
-Fixes `reparo -Include Steam` launched from PowerShell 7 through `reparo.cmd`.
-Windows PowerShell could inherit PowerShell 7's module paths, fail to load its
-security module, and incorrectly report an unverifiable Steam executable. Reparo
-now places the executing Windows PowerShell host's own core modules first while
-preserving other module paths. The change is process-local; no profile or persisted
-environment is rewritten. Authenticode and Valve publisher checks remain required.
-A failed Steam signature check now counts as Failed rather than a successful skip,
-and verification exceptions are logged. Native Linux needs no Windows module-path
-repair and shares the release identity/flavor; its maintenance behavior is unchanged.
+Steam updates use the discovered desktop client without an Authenticode or
+publisher-certificate gate. Certificate validation is deferred at the operator's
+request. Library discovery, exact game-title matching, window process/path/session
+checks, unlocked desktop checks, running-game protection and evidence-based update
+receipts remain. No per-machine certificate setup is required.
 
-Release flavor: "Never tell me the odds!" - Han Solo, *Star Wars: The Empire Strikes
-Back* (1980), with Falcon/asteroid art
-([official reference](https://www.starwars.com/video/never-tell-me-the-odds)).
+The Windows PowerShell command-shim module-path fix from 1.4.4.1 remains: this
+host's core modules take precedence without rewriting profiles or saved environment.
+Native Linux shares release identity/flavor; its maintenance behavior is unchanged.
+
+Release flavor: "Laugh it up, fuzzball." - Han Solo to Chewbacca,
+*Star Wars: The Empire Strikes Back* (1980), with Chewbacca art
+([official reference](https://www.starwars.com/news/40-quotes-star-wars-the-empire-strikes-back)).
 
 ## Steam desktop update queue and SSH-detached maintenance - 1.4.4.0
 
 Windows `-Include Steam` inventories installed apps in the primary Steam library
 and every configured `libraryfolders.vdf` location, including C: and D:. It requests
-pending updates through the signed desktop client's **Downloads > Download now**
+pending updates through the discovered desktop client's **Downloads > Download now**
 controls. An already-running client is reused. A closed client can be opened in the
 verified desktop user's session; account sign-in remains a manual step.
 
@@ -142,7 +142,7 @@ Windows `-Force`. Preview reads inventory without opening Steam, creating a queu
 worker, or requesting downloads. Windows `-Force` also includes Steam.
 
 Queue control requires exactly one logged-in Explorer desktop session, an unlocked
-desktop, and a signed Steam client exposing the supported English Downloads controls.
+desktop, and a Steam client exposing the supported English Downloads controls.
 The Windows PowerShell worker uses native UI Automation 8, including offscreen rows.
 Locked, ambiguous, signed-out or unsupported client states are reported as blocked
 or skipped. Reparo never automates account authentication or the Windows lock screen.

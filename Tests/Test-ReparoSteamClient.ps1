@@ -74,7 +74,6 @@ try {
     $script:launches = 0
     $script:queueCalls = 0
     $script:desktopAvailable = $false
-    $script:publisherValid = $true
     $script:queueStatus = 'Queued'
     function Test-ReparoSectionSelected { param($Section) $Section -eq 'Steam' }
     function Get-ReparoSteamClientPath { Join-Path $root 'steam.exe' }
@@ -99,7 +98,6 @@ try {
     function Get-ReparoSteamDesktopContext {
         [pscustomobject]@{Available=$script:desktopAvailable;Reason='no desktop user session';Sid='S-1-5-21-1';SessionId=4}
     }
-    function Test-ReparoSteamPublisher { param($Path) $script:publisherValid }
     function Invoke-ReparoSteamQueue {
         param($SteamPath,$Games,$Desktop,$WaitSeconds)
         $script:queueCalls++
@@ -150,9 +148,6 @@ try {
     Invoke-ReparoSteamGameUpdates
     if ($script:queueCalls -ne 2 -or $script:receipts[4].Reason -notmatch 'not installed') { throw 'Unknown AppID triggered another game or a new installation' }
     $SteamAppId = @()
-    $script:publisherValid = $false
-    Invoke-ReparoSteamGameUpdates
-    if ($script:queueCalls -ne 2 -or $script:receipts[5].Reason -notmatch 'signature' -or $script:receipts[5].Bucket -ne 'Failed') { throw 'Invalid publisher was not blocked' }
     Write-Host 'Steam inventory, cross-library, preview, queue dispatch, receipt and desktop-session safety tests passed.' -ForegroundColor Green
 }
 finally {
