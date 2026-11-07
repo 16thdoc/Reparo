@@ -101,6 +101,26 @@ is operator-trusted bootstrap code; an installed native runner verifies the down
 bootstrap first. Windows Install remains offline and Windows Latest/N remains
 unpinned; native N retains its historical New meaning, with Latest spelled out.
 
+## Steam queue progress reporting - 1.4.4.3
+
+Queued and downloading Steam requests now appear under **Pending updates**, with
+`Result: PENDING` and a separate Pending count. They are not counted as skipped,
+failed, or installed updates. A request whose acknowledgment was not observed is
+also pending/unconfirmed, not a confirmed failure. Reparo revisits delayed Steam
+UI acknowledgments during the bounded wait. Confirmed execution errors still fail;
+only fresh completed-install evidence counts as Updated. Steam continues its queue
+after Reparo exits; pending requests do not instruct the user to update manually.
+
+Local Ninja receipts include pending work. The existing allowlisted reporting
+schema is preserved, with unknown final outcome while Steam work remains pending.
+The final COMPLETE log means Reparo finished observing/dispatching, not that Steam
+finished every download. Native Linux has no desktop-Steam queue; its maintenance
+counts/behavior remain unchanged with matching release identity and flavor.
+
+Release flavor: "Punch it!" - Han Solo to Chewbacca, *Star Wars: The Empire Strikes
+Back* (1980), with Falcon departure art
+([official reference](https://www.starwars.com/news/40-quotes-star-wars-the-empire-strikes-back)).
+
 ## Steam updates without certificate gating - 1.4.4.2
 
 Steam updates use the discovered desktop client without an Authenticode or

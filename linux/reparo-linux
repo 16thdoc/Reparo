@@ -9,10 +9,10 @@ umask 077
 # Interactive Esc cancellation is Windows-only: this POSIX runner does not own
 # a portable cooperative-cancel API for native package managers. No fake skip,
 # keyboard polling, or wrapper kill is substituted for installer completion.
-REPARO_LINUX_VERSION='1.4.4.2'
-REPARO_VERSION_QUOTE='Laugh it up, fuzzball.'
+REPARO_LINUX_VERSION='1.4.4.3'
+REPARO_VERSION_QUOTE='Punch it!'
 REPARO_VERSION_SOURCE='Star Wars: The Empire Strikes Back (1980), Han Solo to Chewbacca'
-REPARO_VERSION_ART='  [ CHEWBACCA ]  /\__ /\  Steam downloads keep moving'
+REPARO_VERSION_ART='  [ FALCON ] <===> queued for departure; downloads stay in flight'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-}"
 REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
 LATEST=0

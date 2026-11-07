@@ -129,7 +129,7 @@ try {
         return
     }
     Invoke-ReparoSteamGameUpdates
-    if ($script:launches -ne 0 -or $script:queueCalls -ne 1 -or $script:receipts[2].Bucket -ne 'Skipped' -or $script:receipts[2].Reason -notmatch 'completion not verified') {
+    if ($script:launches -ne 0 -or $script:queueCalls -ne 1 -or $script:receipts[2].Bucket -ne 'Pending' -or $script:receipts[2].Reason -notmatch 'completion not verified') {
         throw 'Queue request restarted Steam or falsely claimed completion'
     }
 

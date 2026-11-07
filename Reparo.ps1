@@ -171,7 +171,7 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.2'
+$script:ReparoVersion = '1.4.4.3'
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($Headless) {
     if ($Task -or $PSBoundParameters.ContainsKey('Time')) { throw '-Headless cannot be combined with -Task or -Time.' }
@@ -364,6 +364,7 @@ function Get-ReparoVersionFlavor {
         '1.4.2.1' = [pscustomobject]@{ Quote = 'I am a leaf on the wind. Watch how I soar.'; Source = 'Serenity (2005), written and directed by Joss Whedon'; Art = '  [ SERENITY ] <===> live pilots spared; updates follow their owning ship' }
         '1.4.3.0' = [pscustomobject]@{ Quote = 'Stay on target.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ GOLD FIVE ] ===[ + ]=== safe boundaries; update telemetry on target' }
         '1.4.3.1' = [pscustomobject]@{ Quote = 'Your focus determines your reality.'; Source = 'Star Wars: Episode I - The Phantom Menace (1999), written and directed by George Lucas'; Art = '  [ QUI-GON ] ===[ + ]=== detached workers stay focused on the selected sections' }
+        '1.4.4.3' = [pscustomobject]@{ Quote = 'Punch it!'; Source = 'Star Wars: The Empire Strikes Back (1980), Han Solo to Chewbacca'; Art = '  [ FALCON ] <===> queued for departure; downloads stay in flight' }
         '1.4.4.2' = [pscustomobject]@{ Quote = 'Laugh it up, fuzzball.'; Source = 'Star Wars: The Empire Strikes Back (1980), Han Solo to Chewbacca'; Art = '  [ CHEWBACCA ]  /\__ /\  Steam downloads keep moving' }
         '1.4.4.1' = [pscustomobject]@{ Quote = 'Never tell me the odds!'; Source = 'Star Wars: The Empire Strikes Back (1980), Han Solo'; Art = '  [ FALCON ] ===> * . * core modules navigate their own asteroid field' }
         '1.4.4.0' = [pscustomobject]@{ Quote = 'Chewie, we''re home.'; Source = 'Star Wars: The Force Awakens (2015), written by Lawrence Kasdan, J. J. Abrams and Michael Arndt'; Art = '  [ MILLENNIUM FALCON ] <===> Steam queue requests cleared for arrival' }
@@ -4329,13 +4330,14 @@ function Test-ReparoSectionTool {
 $script:ReparoSummary = [ordered]@{
     Updated = New-Object System.Collections.Generic.List[object]
     Skipped = New-Object System.Collections.Generic.List[object]
+    Pending = New-Object System.Collections.Generic.List[object]
     Failed  = New-Object System.Collections.Generic.List[object]
     Notes   = New-Object System.Collections.Generic.List[string]
 }
 
 function Add-ReparoSummaryRecord {
     param(
-        [ValidateSet('Updated', 'Skipped', 'Failed')]
+        [ValidateSet('Updated', 'Skipped', 'Failed', 'Pending')]
         [string]$Bucket,
         [string]$Software,
         [string]$CurrentVersion,
@@ -6300,17 +6302,25 @@ function Write-ReparoSummary {
     $updatedCount = $script:ReparoSummary['Updated'].Count
     $skippedCount = $script:ReparoSummary['Skipped'].Count
     $failedCount = $script:ReparoSummary['Failed'].Count
-    $result = if ($failedCount -gt 0) { 'FAILED' } elseif ($Preview) { 'PREVIEW' } else { 'COMPLETE' }
-    $resultColor = if ($failedCount -gt 0) { 'Red' } elseif ($Preview) { 'Yellow' } else { 'Green' }
+    $pendingCount = if ($script:ReparoSummary.Contains('Pending')) { $script:ReparoSummary['Pending'].Count } else { 0 }
+    $result = if ($failedCount -gt 0) { 'FAILED' } elseif ($Preview) { 'PREVIEW' } elseif ($pendingCount -gt 0) { 'PENDING' } else { 'COMPLETE' }
+    $resultColor = if ($failedCount -gt 0) { 'Red' } elseif ($Preview -or $pendingCount -gt 0) { 'Yellow' } else { 'Green' }
 
     Write-Host ''
     Write-ReparoConsole 'REPARO summary' Magenta
     Write-ReparoLog '[SUMMARY] REPARO summary'
     Write-ReparoConsole ("  Result: {0}" -f $result) $resultColor
-    Write-Host ("  Updated: {0} | Skipped: {1} | Failed: {2}" -f $updatedCount, $skippedCount, $failedCount)
+    $counts = "  Updated: {0} | Skipped: {1} | Failed: {2}" -f $updatedCount, $skippedCount, $failedCount
+    if ($pendingCount -gt 0) { $counts += " | Pending: $pendingCount" }
+    Write-Host $counts
     Write-ReparoLog ("[SUMMARY] Result={0} Updated={1} Skipped={2} Failed={3}" -f $result, $updatedCount, $skippedCount, $failedCount)
 
     Write-ReparoSummaryTable -Title 'Updated software' -Rows $script:ReparoSummary['Updated'].ToArray()
+    if ($pendingCount -gt 0) {
+        Write-ReparoLog ("[SUMMARY] Pending={0}" -f $pendingCount)
+        Write-ReparoSummaryTable -Title 'Pending updates' -Rows $script:ReparoSummary['Pending'].ToArray() -IncludeReason
+        Write-Info 'Steam continues queued/download work after Reparo exits. Check Steam Downloads for unconfirmed requests before retrying.'
+    }
     Write-ReparoNotUpdatedReport
 
     if ($script:ReparoSummary['Notes'].Count -gt 0) {
@@ -6352,6 +6362,8 @@ function Write-ReparoNinjaMaintenanceActivity {
     $updated = @($script:ReparoSummary['Updated'].ToArray())
     $skipped = @($script:ReparoSummary['Skipped'].ToArray())
     $failed = @($script:ReparoSummary['Failed'].ToArray())
+    $pending = @()
+    if ($script:ReparoSummary.Contains('Pending')) { $pending = @($script:ReparoSummary['Pending'].ToArray()) }
 
     Write-ReparoNinjaActivityLine ''
     Write-ReparoNinjaActivityLine 'REPARO MAINTENANCE ACTIVITY'
@@ -6359,11 +6371,13 @@ function Write-ReparoNinjaMaintenanceActivity {
     Write-ReparoNinjaActivityLine ("Version: {0}" -f $script:ReparoVersion)
     Write-ReparoNinjaActivityLine ("Mode: {0}" -f $Mode)
     Write-ReparoNinjaActivityLine ("Updated: {0} | Skipped: {1} | Failed: {2}" -f $updated.Count, $skipped.Count, $failed.Count)
+    if ($pending.Count -gt 0) { Write-ReparoNinjaActivityLine ("Pending updates: {0}; Steam completion not yet verified" -f $pending.Count) }
 
     foreach ($bucket in @(
         [pscustomobject]@{ Name = 'Updated software'; Rows = $updated },
         [pscustomobject]@{ Name = 'Skipped items'; Rows = $skipped },
-        [pscustomobject]@{ Name = 'Failed items'; Rows = $failed }
+        [pscustomobject]@{ Name = 'Failed items'; Rows = $failed },
+        [pscustomobject]@{ Name = 'Pending updates'; Rows = $pending }
     )) {
         if ($bucket.Rows.Count -eq 0) { continue }
         Write-ReparoNinjaActivityLine ("{0}:" -f $bucket.Name)
@@ -6375,7 +6389,7 @@ function Write-ReparoNinjaMaintenanceActivity {
         }
     }
 
-    if ($updated.Count -eq 0 -and $skipped.Count -eq 0 -and $failed.Count -eq 0) {
+    if ($updated.Count -eq 0 -and $skipped.Count -eq 0 -and $failed.Count -eq 0 -and $pending.Count -eq 0) {
         Write-ReparoNinjaActivityLine 'No package changes or failures were reported.'
     }
     Write-ReparoNinjaActivityLine ("Log: {0}" -f $script:ReparoLogPath)
@@ -7261,12 +7275,24 @@ function Invoke-ReparoSteamDesktopQueue {
                 $snapshot = Get-ReparoSteamAutomationSnapshot -SteamPath $Config.SteamPath -SessionId $sessionId
                 $item.Accepted = $snapshot -and -not (Find-ReparoSteamQueueRow -Snapshot $snapshot -Name $game.Name)
                 $item.Status = Get-ReparoSteamRequestOutcome -Before $item.Before -After $item.After -Accepted $item.Accepted
-                $item.Reason = if ($item.Status -eq 'Unconfirmed') { 'Steam did not acknowledge the download request' } else { 'requested through Steam Downloads; persistent update policy unchanged' }
+                $item.Reason = if ($item.Status -eq 'Unconfirmed') { 'request sent; Steam acknowledgment not observed within the wait window' } else { 'requested through Steam Downloads; persistent update policy unchanged' }
             } catch { $item.Status='Failed'; $item.Reason=$_.Exception.Message }
         }
         $verifyDeadline = (Get-Date).AddSeconds([int]$Config.WaitSeconds)
         do {
+            $queueSnapshot = $null
+            if (@($result.Results | Where-Object { $_.Before -and $_.Status -eq 'Unconfirmed' }).Count -and (Test-ReparoSteamInputDesktop)) {
+                try { $queueSnapshot = Get-ReparoSteamAutomationSnapshot -SteamPath $Config.SteamPath -SessionId $sessionId } catch { }
+            }
             foreach ($item in @($result.Results | Where-Object { $_.Before -and $_.Status -in @('Queued','Downloading','Unconfirmed') })) {
+                if ($item.Status -eq 'Unconfirmed' -and $queueSnapshot) {
+                    try {
+                        if (-not (Find-ReparoSteamQueueRow -Snapshot $queueSnapshot -Name $item.Name)) {
+                            $item.Accepted = $true
+                            $item.Reason = 'Steam acknowledged the request after a delayed Downloads refresh'
+                        }
+                    } catch { }
+                }
                 $game = @($Config.Games | Where-Object AppId -EQ $item.AppId)[0]
                 try { $item.After=Read-ReparoSteamManifestState -Path $game.ManifestPath; $item.Status=Get-ReparoSteamRequestOutcome -Before $item.Before -After $item.After -Accepted $item.Accepted } catch { }
             }
@@ -7473,8 +7499,8 @@ function Invoke-ReparoSteamGameUpdates {
     foreach ($item in $receipt.Results) {
         Write-Info ("Steam {0}: {1} ({2})" -f $item.Status,$item.Name,$item.AppId)
         Write-ReparoLog ("[STEAM-QUEUE] AppId={0}; Status={1}; Accepted={2}; Reason={3}" -f $item.AppId,$item.Status,$item.Accepted,$item.Reason)
-        $bucket = if ($item.Status -eq 'Completed') { 'Updated' } elseif ($item.Status -in @('Failed','Unconfirmed')) { 'Failed' } else { 'Skipped' }
-        $reason = if ($item.Status -in @('Queued','Downloading')) { $item.Status.ToLowerInvariant() + '; download completion not verified; inspect Steam Downloads' } elseif ($item.Status -eq 'Completed') { 'Steam manifest confirms the update completed' } else { $item.Reason }
+        $bucket = if ($item.Status -eq 'Completed') { 'Updated' } elseif ($item.Status -in @('Queued','Downloading','Unconfirmed')) { 'Pending' } elseif ($item.Status -eq 'Failed') { 'Failed' } else { 'Skipped' }
+        $reason = if ($item.Status -in @('Queued','Downloading')) { $item.Status.ToLowerInvariant() + '; Steam continues processing; completion not verified' } elseif ($item.Status -eq 'Completed') { 'Steam manifest confirms the update completed' } else { $item.Reason }
         Add-ReparoSummaryRecord -Bucket $bucket -Software ($item.Name + ' (Steam ' + $item.AppId + ')') -Method 'Steam client' -Reason $reason
     }
 }
@@ -9073,6 +9099,7 @@ Status: $script:ReparoFinalStatus
 Updated: $($script:ReparoSummary['Updated'].Count)
 Skipped: $($script:ReparoSummary['Skipped'].Count)
 Failed: $($script:ReparoSummary['Failed'].Count)
+Pending: $($script:ReparoSummary['Pending'].Count)
 FailedSummary: $failedSummary
 Log: $script:ReparoLogPath
 "@
@@ -9095,7 +9122,7 @@ if ($Tail) {
 }
 
 Invoke-ReparoReporting -EventType maintenance_summary -Data @{
-    outcome = $(if ($script:ReparoFinalStatus -eq 'FAILED') { 'failed' } elseif ($Preview) { 'preview' } elseif ($script:ReparoSummary['Updated'].Count -gt 0) { 'succeeded' } else { 'unchanged' })
+    outcome = $(if ($script:ReparoFinalStatus -eq 'FAILED') { 'failed' } elseif ($Preview) { 'preview' } elseif ($script:ReparoSummary['Pending'].Count -gt 0) { 'unknown' } elseif ($script:ReparoSummary['Updated'].Count -gt 0) { 'succeeded' } else { 'unchanged' })
     updated = $script:ReparoSummary['Updated'].Count; skipped = $script:ReparoSummary['Skipped'].Count; failed = $script:ReparoSummary['Failed'].Count; duration_ms = $null
 }
 Invoke-ReparoForcedReboot

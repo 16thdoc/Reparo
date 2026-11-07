@@ -80,12 +80,13 @@ try{
     Assert-Queue ($null -ne $nativeClient) 'Native UI Automation 8 could not initialize'
 
     # Exercise the real orchestration with substituted UI boundaries and fixture files.
-    $script:desktopOpen=$true;$script:running=$false;$script:requests=0;$script:completeRequest=$true
+    $script:desktopOpen=$true;$script:running=$false;$script:requests=0;$script:completeRequest=$true;$script:delayAck=$false;$script:snapshots=0
     function Test-ReparoSteamInputDesktop {return $script:desktopOpen}
     function Test-ReparoSteamAppRunning {param($Game) return $script:running}
     function Get-ReparoSteamAutomationSnapshot {
         param($SteamPath,$SessionId)
-        [pscustomobject]@{Window=$null;Rows=$(if($script:requests -eq 0 -or -not $script:completeRequest){@($row)}else{@()})}
+        $script:snapshots++
+        [pscustomobject]@{Window=$null;Rows=$(if($script:requests -gt 0 -and ($script:completeRequest -or ($script:delayAck -and $script:snapshots -ge 4))){@()}else{@($row)})}
     }
     function Invoke-ReparoSteamQueueButton {
         param($Row)
@@ -110,6 +111,10 @@ try{
     Reset-Manifest;$script:requests=0;$script:completeRequest=$false
     $receipt=Invoke-ReparoSteamDesktopQueue -Config $config
     Assert-Queue ($receipt.Results[0].Status -eq 'Unconfirmed') 'Unacknowledged UI invocation falsely passed'
+    Reset-Manifest;$script:requests=0;$script:snapshots=0;$script:delayAck=$true
+    $receipt=Invoke-ReparoSteamDesktopQueue -Config $config
+    Assert-Queue ($receipt.Results[0].Status -eq 'Queued' -and $receipt.Results[0].Accepted -and $script:requests -eq 1) 'Delayed Steam acknowledgment was missed or a duplicate request was sent'
+    $script:delayAck=$false
     Reset-Manifest;$script:requests=0
     Set-Content -LiteralPath $config.CancelPath -Value 'cancel'
     $receipt=Invoke-ReparoSteamDesktopQueue -Config $config
