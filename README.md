@@ -1064,7 +1064,25 @@ knife fight.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Reparo.ps1 -Include WslApt -WslAptTimeoutSeconds 1800
 ```
 
-Set `-WslAptTimeoutSeconds 0` to disable that timeout, or use `-IgnoreTimeouts` to disable all configured command-step timeouts.
+`-Include WslApt` selects every eligible user distro; `-Include WslApt:Ubuntu`
+selects only Ubuntu. Docker Desktop, Rancher Desktop and Podman internal distros
+are excluded before launch. Preview performs no WSL enumeration or distro launch.
+
+The WSL engine update no longer runs a blanket `wsl --shutdown`. Apt maintenance
+preserves distros that were already running. For a distro started solely for
+maintenance, Reparo checks process identities against its initial baseline before
+terminating it. New processes, missing state or an uncertain stop produce an
+explicit cleanup warning and leave the distro running for review. This is a
+conservative check, not an exclusive lock against concurrent WSL clients; avoid
+starting new work in a maintenance-owned distro during the pass.
+
+WSL apt deadlines request a safe boundary and wait for an active package operation
+to finish; they do not kill Linux installers or promise a hard completion deadline.
+Esc follows the same policy, and remaining distros are not started after a skip
+request. Set `-WslAptTimeoutSeconds 0` to disable the deadline, or use
+`-IgnoreTimeouts` to disable configured command-step deadlines. Native Linux runs
+apt directly and has no Windows WSL distro lifecycle; its existing package-manager
+behavior is unchanged, and both runners retain matching release identity.
 
 ## Chocolatey to winget migration
 

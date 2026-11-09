@@ -171,7 +171,7 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.6'
+$script:ReparoVersion = '1.4.4.7'
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($Headless) {
     if ($Task -or $PSBoundParameters.ContainsKey('Time')) { throw '-Headless cannot be combined with -Task or -Time.' }
@@ -364,6 +364,7 @@ function Get-ReparoVersionFlavor {
         '1.4.2.1' = [pscustomobject]@{ Quote = 'I am a leaf on the wind. Watch how I soar.'; Source = 'Serenity (2005), written and directed by Joss Whedon'; Art = '  [ SERENITY ] <===> live pilots spared; updates follow their owning ship' }
         '1.4.3.0' = [pscustomobject]@{ Quote = 'Stay on target.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ GOLD FIVE ] ===[ + ]=== safe boundaries; update telemetry on target' }
         '1.4.3.1' = [pscustomobject]@{ Quote = 'Your focus determines your reality.'; Source = 'Star Wars: Episode I - The Phantom Menace (1999), written and directed by George Lucas'; Art = '  [ QUI-GON ] ===[ + ]=== detached workers stay focused on the selected sections' }
+        '1.4.4.7' = [pscustomobject]@{ Quote = 'Fly, you fools!'; Source = 'The Fellowship of the Ring (2001), Gandalf; directed by Peter Jackson'; Art = '  /\  GANDALF -- cross the bridge; leave no distro behind' }
         '1.4.4.6' = [pscustomobject]@{ Quote = 'Do not be too eager to deal out death in judgement.'; Source = 'The Fellowship of the Ring (2001), Gandalf; directed by Peter Jackson'; Art = '  /\  GANDALF -- staff raised; preview holds the gate' }
         '1.4.4.5' = [pscustomobject]@{ Quote = 'You must unlearn what you have learned.'; Source = 'Star Wars: The Empire Strikes Back (1980), Yoda; directed by Irvin Kershner'; Art = '  <(-_-)>  YODA -- raise the X-wing, retain the error' }
         '1.4.4.4' = [pscustomobject]@{ Quote = 'Your eyes can deceive you. Don''t trust them.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ TRAINING REMOTE ] --(o)--  |==== Jedi saber; verify the result' }
@@ -3678,6 +3679,180 @@ function Invoke-ReparoWindowsFeatureUpdate {
     Add-ReparoSummaryNote 'Open Settings > Windows Update, review compatibility and any offered Download & install action, and choose restart timing manually. Reparo has not verified feature-update staging.'
 }
 
+
+function Invoke-ReparoWslControl {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+    if ($Arguments.Count -ge 3 -and $Arguments[-2] -eq '-c' -and $Arguments[-3] -eq 'sh') {
+        $Arguments[-1] = ConvertTo-ReparoWslShellCommand -Script $Arguments[-1]
+    }
+    $literalArguments = @($Arguments | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ' '
+    $command = '$lines = @(& wsl.exe ' + $literalArguments + ' 2>&1); $code = $LASTEXITCODE; $lines | ForEach-Object { ([string]$_) -replace "`0", "" }; exit $code'
+    Invoke-ReparoTimedCommand -ShellPath (Resolve-ReparoShell) -Command $command -Section 'WslControl' -TimeoutSeconds 30
+}
+
+function ConvertTo-ReparoWslShellCommand {
+    param([Parameter(Mandatory)][string]$Script)
+    # Windows PowerShell 5.1's legacy native quoting drops embedded double quotes.
+    # Send an ASCII-only command; decode the exact POSIX script inside the distro.
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($Script -replace "`r", '')))
+    "printf %s $encoded | base64 -d | sh"
+}
+
+function Get-ReparoWslNames {
+    param([switch]$Running)
+    $arguments = @('--list', '--quiet')
+    if ($Running) { $arguments += '--running' }
+    $result = Invoke-ReparoWslControl -Arguments $arguments
+    if ($result.ExitCode -ne 0 -or $result.TimedOut) { throw 'Cannot establish WSL distro state; no distro will be started or stopped.' }
+    foreach ($line in $result.Output) {
+        $name = (([string]$line) -replace "`0", '').Trim()
+        if (-not $name) { continue }
+        # Quiet enumeration should contain only distro names, never help/error output.
+        if ($name -match '^(?i:Copyright|Usage:|Arguments:|Options:|Examples:|\[|--)' -or $name -match '[\x00-\x1f]') {
+            throw 'Unexpected WSL enumeration output; refusing distro operations.'
+        }
+        $name
+    }
+}
+
+function Get-ReparoWslProcessSnapshotScript {
+    # PID + kernel start time prevents PID reuse from hiding a new workload.
+    @'
+snapshot() {
+    for f in /proc/[0-9]*/stat; do
+        [ -r "$f" ] || continue
+        stat=$(cat "$f" 2>/dev/null) || continue
+        pid=${stat%% *}; rest=${stat##*) }
+        start=$(printf '%s\n' "$rest" | awk '{print $20}')
+        printf '%s:%s\n' "$pid" "$start"
+    done
+}
+'@
+}
+
+function Complete-ReparoWslDistro {
+    param([string]$Distro, [string]$Baseline)
+    # Never launch a distro merely to clean it up, or terminate an existing workload.
+    if (@(Get-ReparoWslNames -Running) -notcontains $Distro) {
+        Write-ReparoLog "[WSL-CLEANUP] ${Distro}: already stopped."
+        return
+    }
+    $probe = (Get-ReparoWslProcessSnapshotScript) + "`n" + @'
+baseline=BASELINE
+[ -f "$baseline" ] || exit 4
+ancestors=" $$ "
+p=$$
+while [ "$p" -gt 1 ]; do
+    stat=$(cat "/proc/$p/stat" 2>/dev/null) || exit 4
+    rest=${stat##*) }; p=$(printf '%s\n' "$rest" | awk '{print $2}')
+    ancestors="$ancestors$p "
+done
+# Collect without command substitution: its temporary subshell would be a new process.
+current="$baseline.current"
+snapshot > "$current"
+busy=0
+while IFS= read -r identity; do
+    pid=${identity%%:*}
+    case "$ancestors" in *" $pid "*) continue ;; esac
+    # Snapshot's own transient cat/awk processes have already exited.
+    [ -d "/proc/$pid" ] || continue
+    grep -qxF "$identity" "$baseline" || busy=1
+done < "$current"
+rm -f "$baseline" "$current"
+[ "$busy" -eq 0 ] || exit 3
+exit 0
+'@
+    $probe = $probe.Replace('BASELINE', ("'" + $Baseline + "'"))
+    $check = Invoke-ReparoWslControl -Arguments @('--distribution', $Distro, '--exec', 'sh', '-c', $probe)
+    if ($check.ExitCode -ne 0 -or $check.TimedOut) {
+        $reason = if ($check.ExitCode -eq 3) { 'new processes appeared during maintenance' } else { 'safe cleanup could not be established' }
+        Write-ReparoLog "[WSL-CLEANUP-DEFERRED] ${Distro}: $reason; left running."
+        Add-ReparoSummaryNote "WSL ${Distro} left running: $reason. Review the workload before stopping it."
+        return
+    }
+    $stop = Invoke-ReparoWslControl -Arguments @('--terminate', $Distro)
+    if ($stop.ExitCode -ne 0 -or $stop.TimedOut -or @(Get-ReparoWslNames -Running) -contains $Distro) {
+        throw "WSL ${Distro} termination was not confirmed; review its state."
+    }
+    Write-ReparoLog "[WSL-CLEANUP] ${Distro}: stopped maintenance-started distro; no new workload detected."
+}
+
+function Invoke-ReparoWslApt {
+    if ($Preview) {
+        Write-ReparoLog '[DRY-RUN] WslApt: would maintain selected user distros and preserve running workloads; no WSL commands executed.'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'WslApt' -Version '-' -Method 'wsl/apt' -Reason 'preview only'
+        return
+    }
+    if (-not (Test-Cmd 'wsl')) {
+        Add-ReparoSummaryRecord -Bucket Skipped -Software 'WslApt' -Version '-' -Method 'wsl/apt' -Reason 'wsl not found'
+        return
+    }
+    try {
+        $initialRunning = @(Get-ReparoWslNames -Running)
+        $distros = @(Get-ReparoWslNames)
+        if (-not $distros.Count) {
+            Add-ReparoSummaryRecord -Bucket Skipped -Software 'WslApt' -Version '-' -Method 'wsl/apt' -Reason 'no installed distros'
+        }
+        foreach ($distro in $distros) {
+            $section = "WslApt:$distro"
+            if (-not (Test-ReparoSectionSelected $section)) { continue }
+            if ($distro -match '^(?i:docker-desktop|rancher-desktop|podman-machine)(?:$|[-_])') {
+                Add-ReparoSummaryRecord -Bucket Skipped -Software $section -Version '-' -Method 'wsl/apt' -Reason 'internal container distro; never launched for apt'
+                continue
+            }
+            # Recheck immediately before launch; another client may have started it.
+            $wasRunning = ($initialRunning -contains $distro -or @(Get-ReparoWslNames -Running) -contains $distro)
+            $baseline = '/tmp/reparo-' + [guid]::NewGuid().ToString('N') + '.processes'
+            $linux = (Get-ReparoWslProcessSnapshotScript) + "`n"
+            if (-not $wasRunning) { $linux += "umask 077; snapshot > '$baseline' || exit 22`n" }
+            $linux += @'
+command -v apt >/dev/null 2>&1 || exit 20
+if [ "$(id -u)" -eq 0 ]; then
+    DEBIAN_FRONTEND=noninteractive apt update && DEBIAN_FRONTEND=noninteractive apt -y upgrade && DEBIAN_FRONTEND=noninteractive apt -y autoremove
+else
+    command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1 || exit 21
+    sudo -n env DEBIAN_FRONTEND=noninteractive apt update && sudo -n env DEBIAN_FRONTEND=noninteractive apt -y upgrade && sudo -n env DEBIAN_FRONTEND=noninteractive apt -y autoremove
+fi
+'@
+            $distroLiteral = ConvertTo-ReparoPowerShellLiteral -Value $distro
+            $linuxLiteral = ConvertTo-ReparoPowerShellLiteral -Value (ConvertTo-ReparoWslShellCommand -Script $linux)
+            $command = "Stop-ReparoAtSafeBoundary 'before WSL maintenance'; & wsl.exe --distribution $distroLiteral --exec sh -c $linuxLiteral; exit `$LASTEXITCODE"
+            $result = $null
+            try {
+                Write-Step $section
+                $result = Invoke-ReparoTimedCommand -ShellPath (Resolve-ReparoShell) -Command $command -Section $section -TimeoutSeconds $WslAptTimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
+                $bucket = 'Failed'; $reason = "exit code $($result.ExitCode)"
+                switch ($result.ExitCode) {
+                    0 { $bucket = 'Updated'; $reason = 'apt update, upgrade and autoremove completed' }
+                    20 { $bucket = 'Skipped'; $reason = 'apt not present' }
+                    21 { $bucket = 'Skipped'; $reason = 'sudo requires password or is unavailable' }
+                    130 {
+                        if (@($result.Output | Where-Object { $_ -match '^REPARO-STEP-SKIPPED safe boundary:' }).Count) {
+                            $bucket = 'Skipped'; $reason = 'safe boundary before WSL maintenance'
+                        }
+                    }
+                }
+                Add-ReparoSummaryRecord -Bucket $bucket -Software $section -Version '-' -Method 'wsl/apt' -Reason $reason
+            }
+            finally {
+                if (-not $wasRunning) {
+                    try { Complete-ReparoWslDistro -Distro $distro -Baseline $baseline }
+                    catch {
+                        Write-ReparoLog "[WSL-CLEANUP-DEFERRED] ${distro}: $($_.Exception.Message)"
+                        Add-ReparoSummaryNote "WSL ${distro}: cleanup unconfirmed; inspect state before stopping it."
+                    }
+                }
+                else { Write-ReparoLog "[WSL-CLEANUP] ${distro}: preserved previously running workload." }
+            }
+            if ($result -and $result.SkipRequested) { break }
+        }
+    }
+    catch {
+        Write-ReparoLog "[ERROR] WslApt: $($_.Exception.Message)"
+        Add-ReparoSummaryRecord -Bucket Failed -Software 'WslApt' -Version '-' -Method 'wsl/apt' -Reason $_.Exception.Message
+    }
+}
+
 function Get-ReparoInteractiveUserName {
     try {
         $explorers = @(Get-CimInstance Win32_Process -Filter "Name = 'explorer.exe'" -ErrorAction SilentlyContinue)
@@ -3712,7 +3887,11 @@ function Test-ReparoSectionSelected($Section) {
 
     Write-ReparoDebug ("Test-ReparoSectionSelected({0}) Force={1} Update={2} WindowsUpdate={3} WindowsFeatureUpdate={4} MigrateChocoToWinget={5} FinalizeChocolateyRemoval={6} Include={7}" -f $Section, $Force, $Update, $WindowsUpdate, $WindowsFeatureUpdate, $MigrateChocoToWinget, $FinalizeChocolateyRemoval, $includeText)
     if ($Include -and $Include.Count -gt 0) {
-        return ($Include -contains $Section)
+        if ($Include -contains $Section) { return $true }
+        # Only WSL apt has dynamically named per-distro child sections.
+        if ($Section -like 'WslApt:*') { return ($Include -contains 'WslApt') }
+        if ($Section -eq 'WslApt') { return (@($Include | Where-Object { $_ -like 'WslApt:*' }).Count -gt 0) }
+        return $false
     }
     if ($Section -eq 'WindowsFeatureUpdate' -and -not $WindowsFeatureUpdate) { return $false }
     if ($Force) { return $true }
@@ -6645,14 +6824,14 @@ function Invoke-ReparoTimedCommand {
         }
 
         if ($timeoutEnabled -and $stopwatch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
-            if ($skipRequested -or $Section -eq 'WindowsUpdate') {
+            if ($skipRequested -or $Section -eq 'WindowsUpdate' -or $Section -like 'WslApt:*') {
                 if (-not $timeoutDeferred) {
                     if (-not $skipRequested) {
                         try {
-                            Set-Content -LiteralPath $skipRequestPath -Value 'Windows Update deadline reached; safe boundary requested' -Encoding UTF8 -ErrorAction Stop
+                            Set-Content -LiteralPath $skipRequestPath -Value 'Maintenance deadline reached; safe boundary requested' -Encoding UTF8 -ErrorAction Stop
                             $skipRequested = $true
                         }
-                        catch { Write-ReparoLog '[WARN] Could not deliver Windows Update safe-boundary request; still waiting without killing servicing.' }
+                        catch { Write-ReparoLog '[WARN] Could not deliver safe-boundary request; still waiting without killing servicing.' }
                     }
                     $timeoutDeferred = $true
                     Write-ReparoLog ("[SAFE-WAIT] {0} deadline reached; not killing an installer or abandoning Windows servicing. Waiting for completion/safe boundary." -f $Section)
@@ -8937,106 +9116,8 @@ Invoke-ReparoCommandStep -Section 'CargoBins' -PresenceCmd 'cargo-install-update
 Invoke-ReparoCommandStep -Section 'Conda' -PresenceCmd 'conda' -Command 'conda update -n base conda -y; conda update --all -y'
 Invoke-ReparoCommandStep -Section 'Gem' -PresenceCmd 'gem' -Command 'gem update --system; gem update'
 Invoke-ReparoCommandStep -Section 'Composer' -PresenceCmd 'composer' -Command 'composer self-update; composer global update'
-Invoke-ReparoCommandStep -Section 'Wsl' -PresenceCmd 'wsl' -Command 'wsl --update; wsl --shutdown'
-
-if ($WslApt -and (Test-ReparoSectionSelected 'WslApt')) {
-    if (Test-Cmd 'wsl') {
-        try {
-            $previousErrorActionPreference = $ErrorActionPreference
-            $ErrorActionPreference = 'Continue'
-            $rawDistros = @(& wsl -l -q 2>&1)
-            $wslListExit = $LASTEXITCODE
-            foreach ($line in $rawDistros) {
-                $text = (([string]$line) -replace "`0", '').Trim()
-                if (-not [string]::IsNullOrWhiteSpace($text)) {
-                    Write-ReparoLog ("[CHECK] wsl -l -q: {0}" -f $text)
-                }
-            }
-
-            if ($wslListExit -ne 0) {
-                Write-Skip "WSL distro enumeration failed with exit code $wslListExit; skipping WSL apt"
-                Write-ReparoLog "[SKIP] WSL distro enumeration failed with exit code $wslListExit; skipping WSL apt"
-                Add-ReparoSummaryRecord -Bucket Skipped -Software 'WslApt' -Version '-' -Method 'wsl/apt' -Reason "wsl -l -q exit code $wslListExit"
-                $rawDistros = @()
-            }
-
-            $distros = @(
-                foreach ($raw in $rawDistros) {
-                    $name = ([string]$raw) -replace "`0", ''
-                    $name = $name.Trim()
-                    $looksLikeWslHelp = (
-                        $name -match '(?i)^(Copyright|Usage:|Arguments:|Options:|Examples:)' -or
-                        $name -match '(?i)(Windows Subsystem for Linux|wsl\.exe|--install|--help|--list|--status)' -or
-                        $name -match '\s{2,}' -or
-                        $name -match '^\s*-\s*$'
-                    )
-
-                    if (-not [string]::IsNullOrWhiteSpace($name) -and -not $looksLikeWslHelp) {
-                        $name
-                    }
-                }
-            ) | Select-Object -Unique
-
-            if ($distros.Count -eq 0) {
-                Write-Skip 'No usable WSL distros found; skipping WSL apt'
-                Write-ReparoLog '[SKIP] No usable WSL distros found; skipping WSL apt'
-                Add-ReparoSummaryRecord -Bucket Skipped -Software 'WslApt' -Version '-' -Method 'wsl/apt' -Reason 'no usable WSL distros found'
-            }
-
-            foreach ($distro in $distros) {
-                $testOutput = @(& wsl -d "$distro" -- bash -lc 'command -v apt >/dev/null 2>&1' 2>&1)
-                $testExit = $LASTEXITCODE
-
-                foreach ($line in $testOutput) {
-                    if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
-                        Write-ReparoLog ([string]$line)
-                    }
-                }
-
-                if ($testExit -eq 0) {
-                    $sudoCheckOutput = @(& wsl -d "$distro" -- bash -lc 'if [ "$(id -u)" -eq 0 ]; then exit 0; fi; command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1' 2>&1)
-                    $sudoCheckExit = $LASTEXITCODE
-
-                    foreach ($line in $sudoCheckOutput) {
-                        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
-                            Write-ReparoLog ([string]$line)
-                        }
-                    }
-
-                    if ($sudoCheckExit -ne 0) {
-                        Write-Skip "sudo in $distro requires a password or is unavailable; skipping WSL apt"
-                        Write-ReparoLog "[SKIP] sudo in $distro requires a password or is unavailable; skipping WSL apt"
-                        Add-ReparoSummaryRecord -Bucket Skipped -Software ("WslApt:{0}" -f $distro) -Version '-' -Method 'wsl/apt' -Reason 'sudo requires password or is unavailable'
-                        continue
-                    }
-
-                    $aptCommand = 'if [ "$(id -u)" -eq 0 ]; then DEBIAN_FRONTEND=noninteractive apt update && DEBIAN_FRONTEND=noninteractive apt -y upgrade && DEBIAN_FRONTEND=noninteractive apt -y autoremove; else sudo -n env DEBIAN_FRONTEND=noninteractive apt update && sudo -n env DEBIAN_FRONTEND=noninteractive apt -y upgrade && sudo -n env DEBIAN_FRONTEND=noninteractive apt -y autoremove; fi'
-                    $distroLiteral = ConvertTo-ReparoPowerShellLiteral -Value $distro
-                    $aptCommandLiteral = ConvertTo-ReparoPowerShellLiteral -Value $aptCommand
-                    Invoke-ReparoCommandStep -Section ("WslApt:{0}" -f $distro) -PresenceCmd '' -Command ("wsl -d {0} -- bash -lc {1}" -f $distroLiteral, $aptCommandLiteral) -TimeoutSeconds $WslAptTimeoutSeconds
-                }
-                else {
-                    Write-Skip "apt not present in $distro; skipping"
-                    Write-ReparoLog "[SKIP] apt not present in $distro; skipping"
-                    Add-ReparoSummaryRecord -Bucket Skipped -Software ("WslApt:{0}" -f $distro) -Version '-' -Method 'wsl/apt' -Reason 'apt not present'
-                }
-            }
-        }
-        catch {
-            Write-Fail "WSL distro enumeration failed: $($_.Exception.Message)"
-            Write-ReparoLog "[ERROR] WSL distro enumeration failed: $($_.Exception.Message)"
-            Add-ReparoSummaryRecord -Bucket Failed -Software 'WslApt' -Version '-' -Method 'wsl/apt' -Reason $_.Exception.Message
-        }
-        finally {
-            $ErrorActionPreference = $previousErrorActionPreference
-        }
-    }
-    else {
-        Write-Skip 'wsl not found; skipping WSL apt'
-        Write-ReparoLog '[SKIP] wsl not found; skipping WSL apt'
-        Add-ReparoSummaryRecord -Bucket Skipped -Software 'WslApt' -Version '-' -Method 'wsl/apt' -Reason 'wsl not found'
-    }
-}
+Invoke-ReparoCommandStep -Section 'Wsl' -PresenceCmd 'wsl' -Command 'wsl --update'
+if (Test-ReparoSectionSelected 'WslApt') { Invoke-ReparoWslApt }
 
 Invoke-ReparoWindowsFeatureUpdate
 

@@ -20,7 +20,7 @@ function Write-ReparoEventLog {param($EventId,$EntryType,$Message)}
 function Stop-ReparoProcessTree {param($ProcessId) throw 'A graceful skip must never kill a worker.'}
 try {
     New-Item -ItemType Directory $LogRoot | Out-Null
-    foreach($case in 'supported','unsupported','deadline','delivery-failed'){
+    foreach($case in 'supported','unsupported','deadline','wsl-deadline','delivery-failed'){
         $script:ReparoLogBaseName=$case
         $script:logLines=@()
         $script:started=Join-Path $LogRoot ($case+'.started')
@@ -36,12 +36,12 @@ try {
                 Microsoft.PowerShell.Management\Set-Content -LiteralPath $LiteralPath -Value $Value -Encoding $Encoding
             }
         }
-        $section=if($case -eq 'deadline'){'WindowsUpdate'}else{$case}
-        if($case -eq 'deadline'){function Read-ReparoSkipKey {return $false}}
-        $timeout=if($case -eq 'deadline'){1}else{0}
+        $section=if($case -eq 'deadline'){'WindowsUpdate'}elseif($case -eq 'wsl-deadline'){'WslApt:fixture'}else{$case}
+        if($case -in 'deadline','wsl-deadline'){function Read-ReparoSkipKey {return $false}}
+        $timeout=if($case -in 'deadline','wsl-deadline'){1}else{0}
         $result=Invoke-ReparoTimedCommand -ShellPath (Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe') -Command $command -Section $section -TimeoutSeconds $timeout
         if(-not(Test-Path $done)){throw 'Advanced without completing the indivisible operation.'}
-        if($case -in 'supported','deadline'){
+        if($case -in 'supported','deadline','wsl-deadline'){
             if($result.ExitCode -ne 130 -or @($result.Output | Where-Object {$_ -match '^REPARO-STEP-SKIPPED'}).Count -ne 1){throw 'No acknowledged safe-boundary cancellation.'}
         }else{
             if($result.ExitCode -ne 0 -or @($result.Output | Where-Object {$_ -match '^REPARO-STEP-SKIPPED'}).Count){throw 'Unsupported/unavailable cancellation was mislabeled as skipped.'}
