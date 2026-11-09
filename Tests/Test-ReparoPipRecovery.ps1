@@ -78,3 +78,4 @@ function pip {
     if(-not $resolved.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($resolved) -notlike 'reparo-pip-fixture-*'){throw 'Unsafe pip fixture cleanup.'}
     Remove-Item -LiteralPath $resolved -Recurse -Force -ErrorAction SilentlyContinue
 }
+$global:LASTEXITCODE=0

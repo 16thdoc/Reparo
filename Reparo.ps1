@@ -171,7 +171,7 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.5'
+$script:ReparoVersion = '1.4.4.6'
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($Headless) {
     if ($Task -or $PSBoundParameters.ContainsKey('Time')) { throw '-Headless cannot be combined with -Task or -Time.' }
@@ -364,6 +364,7 @@ function Get-ReparoVersionFlavor {
         '1.4.2.1' = [pscustomobject]@{ Quote = 'I am a leaf on the wind. Watch how I soar.'; Source = 'Serenity (2005), written and directed by Joss Whedon'; Art = '  [ SERENITY ] <===> live pilots spared; updates follow their owning ship' }
         '1.4.3.0' = [pscustomobject]@{ Quote = 'Stay on target.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ GOLD FIVE ] ===[ + ]=== safe boundaries; update telemetry on target' }
         '1.4.3.1' = [pscustomobject]@{ Quote = 'Your focus determines your reality.'; Source = 'Star Wars: Episode I - The Phantom Menace (1999), written and directed by George Lucas'; Art = '  [ QUI-GON ] ===[ + ]=== detached workers stay focused on the selected sections' }
+        '1.4.4.6' = [pscustomobject]@{ Quote = 'Do not be too eager to deal out death in judgement.'; Source = 'The Fellowship of the Ring (2001), Gandalf; directed by Peter Jackson'; Art = '  /\  GANDALF -- staff raised; preview holds the gate' }
         '1.4.4.5' = [pscustomobject]@{ Quote = 'You must unlearn what you have learned.'; Source = 'Star Wars: The Empire Strikes Back (1980), Yoda; directed by Irvin Kershner'; Art = '  <(-_-)>  YODA -- raise the X-wing, retain the error' }
         '1.4.4.4' = [pscustomobject]@{ Quote = 'Your eyes can deceive you. Don''t trust them.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ TRAINING REMOTE ] --(o)--  |==== Jedi saber; verify the result' }
         '1.4.4.3' = [pscustomobject]@{ Quote = 'Punch it!'; Source = 'Star Wars: The Empire Strikes Back (1980), Han Solo to Chewbacca'; Art = '  [ FALCON ] <===> queued for departure; downloads stay in flight' }
@@ -974,7 +975,6 @@ elseif ($SevenZip) {
     $Include = @('7Zip')
 }
 elseif ($Force -and -not $Task -and -not ($WindowsFeatureUpdate -or ($Include -contains 'WindowsFeatureUpdate'))) {
-    $Preview = $false
     if ($script:ReparoIsWindows) {
         $WindowsUpdate = $true
         $WslApt = $true

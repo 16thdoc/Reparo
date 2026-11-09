@@ -101,7 +101,12 @@ is operator-trusted bootstrap code; an installed native runner verifies the down
 bootstrap first. Windows Install remains offline and Windows Latest/N remains
 unpinned; native N retains its historical New meaning, with Latest spelled out.
 
-## Unattended run repairs - 1.4.4.5
+## Unattended run repairs - 1.4.4.6
+
+`-Force -Preview` preserves Preview and reports the full maintenance selection
+without launching its update workers. Force selects the sections; it no longer
+overrides the explicit dry-run request. Native Linux's `--force --preview` has
+the same outcome.
 
 Windows workers retain terminating exceptions (including HRESULT, error identity
 and location), direct stderr and startup/parse failures in the final log. A failed
@@ -135,8 +140,8 @@ Native Linux retains its existing pipx/virtual-environment boundary; Windows
 Update and Steam desktop automation are Windows-only. Native command diagnostics
 already retain stdout/stderr and exit status.
 
-Release flavor: Yoda's lesson in *The Empire Strikes Back* (1980), directed by
-Irvin Kershner; [quote reference](https://www.starwars.com/news/8-great-life-teachings-from-yoda).
+Release flavor: Gandalf's counsel in *The Fellowship of the Ring* (2001),
+directed by Peter Jackson.
 
 ## Steam queue progress reporting - 1.4.4.3
 

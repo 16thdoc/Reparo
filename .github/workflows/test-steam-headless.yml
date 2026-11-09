@@ -13,6 +13,8 @@ on:
       - 'Tests/Test-ReparoWorkerErrors.ps1'
       - 'Tests/Test-ReparoPSWindowsUpdateBootstrap.ps1'
       - 'Tests/Test-ReparoPipRecovery.ps1'
+      - 'Tests/Test-ReparoForcePreview.ps1'
+      - 'Tests/test-reparo-linux-output.sh'
       - '.github/workflows/test-steam-headless.yml'
   workflow_dispatch:
 permissions:
@@ -85,6 +87,7 @@ jobs:
           .\Tests\Test-ReparoWindowsUpdateDetails.ps1
           .\Tests\Test-ReparoDiagnosticArtifacts.ps1
           .\Tests\Test-ReparoPipRecovery.ps1
+          .\Tests\Test-ReparoForcePreview.ps1
       - name: Windows command shim inherited module-path regression
         shell: pwsh
         run: .\Tests\Test-ReparoHostModulePath.ps1
@@ -101,6 +104,7 @@ jobs:
           sh -n deploy/install-reparo-linux.sh
           sh linux/reparo-linux --version
           sh Tests/test-reparo-linux-installer.sh
+          sh Tests/test-reparo-linux-output.sh
       - name: Pinned HTTPS install and self-update with isolated state and mocked cron
         shell: bash
         run: |
