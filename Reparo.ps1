@@ -171,7 +171,7 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.4'
+$script:ReparoVersion = '1.4.4.5'
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($Headless) {
     if ($Task -or $PSBoundParameters.ContainsKey('Time')) { throw '-Headless cannot be combined with -Task or -Time.' }
@@ -364,6 +364,7 @@ function Get-ReparoVersionFlavor {
         '1.4.2.1' = [pscustomobject]@{ Quote = 'I am a leaf on the wind. Watch how I soar.'; Source = 'Serenity (2005), written and directed by Joss Whedon'; Art = '  [ SERENITY ] <===> live pilots spared; updates follow their owning ship' }
         '1.4.3.0' = [pscustomobject]@{ Quote = 'Stay on target.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ GOLD FIVE ] ===[ + ]=== safe boundaries; update telemetry on target' }
         '1.4.3.1' = [pscustomobject]@{ Quote = 'Your focus determines your reality.'; Source = 'Star Wars: Episode I - The Phantom Menace (1999), written and directed by George Lucas'; Art = '  [ QUI-GON ] ===[ + ]=== detached workers stay focused on the selected sections' }
+        '1.4.4.5' = [pscustomobject]@{ Quote = 'You must unlearn what you have learned.'; Source = 'Star Wars: The Empire Strikes Back (1980), Yoda; directed by Irvin Kershner'; Art = '  <(-_-)>  YODA -- raise the X-wing, retain the error' }
         '1.4.4.4' = [pscustomobject]@{ Quote = 'Your eyes can deceive you. Don''t trust them.'; Source = 'Star Wars (1977), written and directed by George Lucas'; Art = '  [ TRAINING REMOTE ] --(o)--  |==== Jedi saber; verify the result' }
         '1.4.4.3' = [pscustomobject]@{ Quote = 'Punch it!'; Source = 'Star Wars: The Empire Strikes Back (1980), Han Solo to Chewbacca'; Art = '  [ FALCON ] <===> queued for departure; downloads stay in flight' }
         '1.4.4.2' = [pscustomobject]@{ Quote = 'Laugh it up, fuzzball.'; Source = 'Star Wars: The Empire Strikes Back (1980), Han Solo to Chewbacca'; Art = '  [ CHEWBACCA ]  /\__ /\  Steam downloads keep moving' }
@@ -597,7 +598,8 @@ function Ensure-ReparoNuGetProvider {
         # before querying the provider so an already-installed NuGet provider
         # does not get misreported as unavailable.
         Import-ReparoBootstrapModule -Name 'PackageManagement'
-        $provider = Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue
+        # Named discovery can prompt to bootstrap a missing provider in SYSTEM.
+        $provider = Get-PackageProvider -ListAvailable -ErrorAction SilentlyContinue | Where-Object Name -EQ NuGet | Sort-Object Version -Descending | Select-Object -First 1
         if ($provider -and $provider.Version -and ([Version]$provider.Version -ge $minimumVersion)) {
             Write-ReparoDebug ("NuGet provider already available: {0}" -f $provider.Version)
 
@@ -621,10 +623,6 @@ PID: $PID
 MinimumVersion: $minimumVersion
 Log: $script:ReparoLogPath
 "@
-
-        if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
-            Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
-        }
 
         Install-PackageProvider -Name NuGet -MinimumVersion $minimumVersion -Force -ForceBootstrap -Scope AllUsers -Confirm:$false -ErrorAction Stop | Out-Null
         Import-PackageProvider -Name NuGet -MinimumVersion $minimumVersion -Force -ErrorAction Stop | Out-Null
@@ -3745,16 +3743,15 @@ Repository: PSGallery
 Scope: AllUsers
 Log: $script:ReparoLogPath
 "@
-        if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
-            Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
-        }
-
         if (-not (Ensure-ReparoNuGetProvider)) {
             Write-ReparoLog '[WARN] NuGet provider unavailable; skipping PSWindowsUpdate bootstrap.'
             return $false
         }
 
         Import-ReparoBootstrapModule -Name 'PowerShellGet'
+        if (Get-Command Set-PSRepository -ErrorAction SilentlyContinue) {
+            Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
+        }
         Install-Module -Name 'PSWindowsUpdate' -Force -AllowClobber -Scope AllUsers -Repository 'PSGallery' -ErrorAction Stop | Out-Null
         Import-Module PSWindowsUpdate -Force -ErrorAction Stop
 
@@ -6571,10 +6568,15 @@ function Invoke-ReparoTimedCommand {
         '    exit 0'
         '}'
         'catch {'
-        '    $message = ($_ | Out-String).Trim()'
-        '    if (-not [string]::IsNullOrWhiteSpace($message)) {'
-        '        Write-ReparoChildOutput -Value $message'
+        '    $failure = $_'
+        '    $exception = $failure.Exception'
+        '    while ($null -ne $exception) {'
+        '        Write-ReparoChildOutput -Value ("[WORKER-ERROR] {0}: {1} (HRESULT 0x{2:X8})" -f $exception.GetType().FullName, $exception.Message, $exception.HResult)'
+        '        $exception = $exception.InnerException'
         '    }'
+        '    Write-ReparoChildOutput -Value ("[WORKER-ERROR-ID] {0}" -f $failure.FullyQualifiedErrorId)'
+        '    Write-ReparoChildOutput -Value $failure.InvocationInfo.PositionMessage'
+        '    Write-ReparoChildOutput -Value $failure.ScriptStackTrace'
         '    exit 1'
         '}'
     )
@@ -6594,13 +6596,16 @@ function Invoke-ReparoTimedCommand {
     $psi.FileName = $ShellPath
     $psi.Arguments = $arguments
     $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $false
-    $psi.RedirectStandardError = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $psi
     $null = $process.Start()
+    # Drain both pipes asynchronously, including errors before the generated try/catch.
+    $standardOutput = $process.StandardOutput.ReadToEndAsync()
+    $standardError = $process.StandardError.ReadToEndAsync()
     Write-ReparoDebug ("Started PID {0} for section {1}" -f $process.Id, $Section)
 
     $timedOut = $false
@@ -6662,6 +6667,17 @@ function Invoke-ReparoTimedCommand {
     }
 
     $process.WaitForExit()
+    foreach ($stream in @(
+        @{ Name='STDOUT'; Text=$standardOutput.GetAwaiter().GetResult() },
+        @{ Name='STDERR'; Text=$standardError.GetAwaiter().GetResult() }
+    )) {
+        foreach ($line in ($stream.Text -split '\r?\n')) {
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                $capturedLine = if ($stream.Name -eq 'STDERR') { "[CHILD-STDERR] $line" } else { $line }
+                Add-Content -LiteralPath $commandOutputPath -Value $capturedLine -Encoding UTF8
+            }
+        }
+    }
     Sync-ReparoCommandOutputLog -Path $commandOutputPath -LineCount ([ref]$loggedLineCount) -Output $output -Section $Section
     $stopwatch.Stop()
     Remove-Item -LiteralPath $skipRequestPath -Force -ErrorAction SilentlyContinue
@@ -7238,12 +7254,17 @@ function Invoke-ReparoSteamDesktopQueue {
         $held = $mutex.WaitOne(0)
         if (-not $held) { $result.Reason='another Steam queue request is active'; return [pscustomobject]$result }
         $snapshot = Get-ReparoSteamAutomationSnapshot -SteamPath $Config.SteamPath -SessionId $sessionId
-        if (-not $snapshot) {
+        if (-not $snapshot -or -not @($snapshot.Rows | Where-Object Name -Match ' Scheduled for .+ Download now$').Count) {
             # Explorer owns the GUI launch, rather than the maintenance task's process job.
+            if (-not (Test-ReparoSteamInputDesktop) -or ($Config.CancelPath -and (Test-Path -LiteralPath $Config.CancelPath))) { $result.Reason='desktop unavailable or cancellation requested before navigation'; return [pscustomobject]$result }
             $shell = New-Object -ComObject Shell.Application
             $shell.ShellExecute($Config.SteamPath, '-- "steam://open/downloads"', (Split-Path -Parent $Config.SteamPath), 'open', 1)
             $deadline = (Get-Date).AddSeconds(20)
-            do { Start-Sleep -Milliseconds 500; $snapshot = Get-ReparoSteamAutomationSnapshot -SteamPath $Config.SteamPath -SessionId $sessionId } while (-not $snapshot -and (Get-Date) -lt $deadline)
+            do {
+                Start-Sleep -Milliseconds 500
+                if (-not (Test-ReparoSteamInputDesktop) -or ($Config.CancelPath -and (Test-Path -LiteralPath $Config.CancelPath))) { $result.Reason='desktop unavailable or cancellation requested during navigation'; return [pscustomobject]$result }
+                $snapshot = Get-ReparoSteamAutomationSnapshot -SteamPath $Config.SteamPath -SessionId $sessionId
+            } while ((-not $snapshot -or -not @($snapshot.Rows | Where-Object Name -Match ' Scheduled for .+ Download now$').Count) -and (Get-Date) -lt $deadline)
         }
         if (-not $snapshot) { $result.Reason='Steam desktop window unavailable; sign in to Steam manually'; return [pscustomobject]$result }
         if (-not @($snapshot.Rows | Where-Object Name -Match ' Scheduled for .+ Download now$').Count) {
@@ -7805,7 +7826,13 @@ function Invoke-ReparoCommandStep {
 
             Write-Fail "$Section failed with exit code $exitCode"
             Write-ReparoLog ("[ERROR] {0} failed with exit code {1}" -f $Section, $exitCode)
-            Add-ReparoSummaryRecord -Bucket Failed -Software $Section -Version '-' -Method $Section -Reason "exit code $exitCode"
+            $failureReason = "exit code $exitCode"
+            $workerError = @($output | Where-Object { $_ -match '^\[WORKER-ERROR\]' } | Select-Object -Last 1)
+            if ($workerError.Count) { $failureReason += '; ' + ($workerError[0] -replace '^\[WORKER-ERROR\] ', '') }
+            if ($Section -eq 'WindowsUpdate' -and ($output -join "`n") -match '(?i)0x80070005|E_ACCESSDENIED') {
+                $failureReason += '; Windows Update denied this caller. From SSH/WinRM, rerun locally with reparo -Include WindowsUpdate -Headless; inspect the detached worker log for completion.'
+            }
+            Add-ReparoSummaryRecord -Bucket Failed -Software $Section -Version '-' -Method $Section -Reason $failureReason
             return
         }
 
@@ -8455,6 +8482,9 @@ if (-not `$pythonCommand) {
 function Invoke-ReparoPipCommand {
     param([Parameter(Mandatory)][string[]]`$Arguments)
 
+    # Avoid resolving unrelated restricted PATH mounts for an advisory warning.
+    # Use the explicit flag: pip's negative environment-option boolean is inverted.
+    if (`$Arguments[0] -eq 'install') { `$Arguments += '--no-warn-script-location' }
     if (`$pythonCommand) {
         `$output = @(& `$pythonCommand -m pip @Arguments 2>&1)
         `$exitCode = `$LASTEXITCODE
@@ -8512,13 +8542,8 @@ if (-not [string]::IsNullOrWhiteSpace(`$outdated)) {
             if ([string]`$pkg.name -ieq 'pip') {
                 continue
             }
-            if (`$pythonCommand) {
-                & `$pythonCommand -m pip install --upgrade `$pkg.name
-            }
-            else {
-                & `$pipName install --upgrade `$pkg.name
-            }
-            if (`$LASTEXITCODE -ne 0) {
+            `$packageUpdate = Invoke-ReparoPipCommand -Arguments @('install', '--upgrade', `$pkg.name)
+            if (`$packageUpdate.ExitCode -ne 0) {
                 throw "Failed upgrading pip package: `$(`$pkg.name)"
             }
         }

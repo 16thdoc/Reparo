@@ -81,11 +81,13 @@ try{
 
     # Exercise the real orchestration with substituted UI boundaries and fixture files.
     $script:desktopOpen=$true;$script:running=$false;$script:requests=0;$script:completeRequest=$true;$script:delayAck=$false;$script:snapshots=0
+    $script:needsNavigation=$false;$script:navigated=$false
     function Test-ReparoSteamInputDesktop {return $script:desktopOpen}
     function Test-ReparoSteamAppRunning {param($Game) return $script:running}
     function Get-ReparoSteamAutomationSnapshot {
         param($SteamPath,$SessionId)
         $script:snapshots++
+        if($script:needsNavigation -and -not $script:navigated){return [pscustomobject]@{Window=$null;Rows=@()}}
         [pscustomobject]@{Window=$null;Rows=$(if($script:requests -gt 0 -and ($script:completeRequest -or ($script:delayAck -and $script:snapshots -ge 4))){@()}else{@($row)})}
     }
     function Invoke-ReparoSteamQueueButton {
@@ -115,6 +117,17 @@ try{
     $receipt=Invoke-ReparoSteamDesktopQueue -Config $config
     Assert-Queue ($receipt.Results[0].Status -eq 'Queued' -and $receipt.Results[0].Accepted -and $script:requests -eq 1) 'Delayed Steam acknowledgment was missed or a duplicate request was sent'
     $script:delayAck=$false
+    Reset-Manifest;$script:requests=0;$script:completeRequest=$true;$script:needsNavigation=$true
+    $shell= [pscustomobject]@{}
+    $shell | Add-Member ScriptMethod ShellExecute {param($Path,$Arguments,$Directory,$Operation,$Show)
+        if($Arguments -ne '-- "steam://open/downloads"'){throw 'Unexpected Steam navigation target.'}
+        $script:navigated=$true
+    }
+    function New-Object {param($ComObject) if($ComObject -ne 'Shell.Application'){throw 'Unexpected COM activation.'}; return $shell}
+    try {
+        $receipt=Invoke-ReparoSteamDesktopQueue -Config $config
+        Assert-Queue ($script:navigated -and $receipt.Results[0].Status -eq 'Completed' -and $script:requests -eq 1) 'Existing Steam window without Downloads controls was not navigated safely.'
+    } finally {Remove-Item Function:\New-Object; $script:needsNavigation=$false}
     Reset-Manifest;$script:requests=0
     Set-Content -LiteralPath $config.CancelPath -Value 'cancel'
     $receipt=Invoke-ReparoSteamDesktopQueue -Config $config

@@ -101,6 +101,43 @@ is operator-trusted bootstrap code; an installed native runner verifies the down
 bootstrap first. Windows Install remains offline and Windows Latest/N remains
 unpinned; native N retains its historical New meaning, with Latest spelled out.
 
+## Unattended run repairs - 1.4.4.5
+
+Windows workers retain terminating exceptions (including HRESULT, error identity
+and location), direct stderr and startup/parse failures in the final log. A failed
+section's summary includes its captured exception. stderr alone never changes a
+successful exit into a failure.
+
+Windows Update's download/install APIs can reject SSH/WinRM callers with
+`0x80070005`, even when the shell is elevated. Use the existing local worker:
+
+```powershell
+reparo -Include WindowsUpdate -Headless
+reparo -Status
+reparo -Tail
+```
+
+Check the worker's completed log: the scheduling command only confirms
+registration. The SYSTEM worker bootstraps NuGet before consulting PSGallery,
+without prompting in a noninteractive session. No reboot is requested unless
+explicitly selected. See Microsoft's [WUA remote-call restrictions](https://learn.microsoft.com/en-us/windows/win32/wua_sdk/using-wua-from-a-remote-computer).
+
+Steam opens its Downloads page when an existing window has no scheduled-download
+controls, then waits up to 20 seconds for the controls. Desktop identity,
+cancellation and running-game checks remain enforced. This fixes minimized or
+non-Downloads windows without changing game update policy.
+
+The Windows pip worker disables pip's advisory about script locations using
+`--no-warn-script-location` on each install call. This avoids a pip PATH-warning
+failure when an unrelated PATH entry is a restricted mount; installation errors
+still fail normally. PATH, pip configuration and installation scope are preserved.
+Native Linux retains its existing pipx/virtual-environment boundary; Windows
+Update and Steam desktop automation are Windows-only. Native command diagnostics
+already retain stdout/stderr and exit status.
+
+Release flavor: Yoda's lesson in *The Empire Strikes Back* (1980), directed by
+Irvin Kershner; [quote reference](https://www.starwars.com/news/8-great-life-teachings-from-yoda).
+
 ## Steam queue progress reporting - 1.4.4.3
 
 Queued and downloading Steam requests now appear under **Pending updates**, with

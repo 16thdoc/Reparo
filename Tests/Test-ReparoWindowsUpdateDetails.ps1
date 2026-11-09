@@ -52,8 +52,12 @@ function Get-WindowsUpdate {
         $command = New-ReparoWindowsUpdateCommand -AutoReboot:($case -eq 'auto-reboot')
         $worker = Join-Path $fixture 'worker.ps1'
         Set-Content $worker ($harness + "`r`n" + $command)
-        $text = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $worker 2>&1 | Out-String
-        $code = $LASTEXITCODE
+        $savedErrorAction=$ErrorActionPreference
+        try {
+            $ErrorActionPreference='Continue'
+            $text = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $worker 2>&1 | Out-String
+            $code = $LASTEXITCODE
+        } finally {$ErrorActionPreference=$savedErrorAction}
         $lines = @(Get-Content (Join-Path $fixture 'output'))
         $calls = @(Get-Content (Join-Path $fixture 'calls'))
         $expected = if($case -in 'skip-after-scan','skip-after-download','partial-skip'){130}elseif($case -in 'download-failed','install-failed','mixed-install-results','unknown-result','invalid-identity','scan-error'){1}else{0}

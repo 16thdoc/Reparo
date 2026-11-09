@@ -10,6 +10,9 @@ on:
       - 'Tests/Test-ReparoSteamQueue.ps1'
       - 'Tests/Test-ReparoHostModulePath.ps1'
       - 'Tests/Test-ReparoSteamPendingSummary.ps1'
+      - 'Tests/Test-ReparoWorkerErrors.ps1'
+      - 'Tests/Test-ReparoPSWindowsUpdateBootstrap.ps1'
+      - 'Tests/Test-ReparoPipRecovery.ps1'
       - '.github/workflows/test-steam-headless.yml'
   workflow_dispatch:
 permissions:
@@ -73,6 +76,15 @@ jobs:
           .\Tests\Test-ReparoReleaseParity.ps1
           .\Tests\Test-ReparoReleaseManifest.ps1
           .\Tests\Test-ReparoInstallSelfUpdateTask.ps1
+      - name: Worker diagnostics, Windows Update bootstrap and pip regression
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\Tests\Test-ReparoWorkerErrors.ps1
+          .\Tests\Test-ReparoPSWindowsUpdateBootstrap.ps1
+          .\Tests\Test-ReparoWindowsUpdateDetails.ps1
+          .\Tests\Test-ReparoDiagnosticArtifacts.ps1
+          .\Tests\Test-ReparoPipRecovery.ps1
       - name: Windows command shim inherited module-path regression
         shell: pwsh
         run: .\Tests\Test-ReparoHostModulePath.ps1
