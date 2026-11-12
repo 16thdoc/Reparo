@@ -2830,7 +2830,7 @@ function Get-ReparoRepairLines {
     if ($attentionText.Length -gt 140) { $attentionText = $attentionText.Substring(0,137) + '...' }
     $human = @(
         "REPARO - $state"
-        ('  Changes confirmed : {0} | Successful commands/receipts: {1}; package deltas may be unknown' -f $c.confirmed_changes, $c.command_success)
+        ('  Changes confirmed : {0} | Commands: {1} | Package receipts: {2}; deltas may be unknown' -f $c.confirmed_changes, $c.command_success, $c.legacy_success_receipts)
         ('  Review records    : {0} failed | {1} blocked | {2} pending/unknown' -f $c.failed, $c.blocked, $c.pending_unknown)
         ('  Attention         : {0}' -f $attentionText)
         ('  Evidence gaps     : {0} | Coverage exceptions: {1}' -f $c.evidence_gaps, $c.coverage)
@@ -2848,7 +2848,8 @@ function Get-ReparoRepairLines {
     if ($View.attention.Count -eq 0) { $brief += 'No repair actions identified in this run; coverage exceptions: ' + $c.coverage }
     $overflow = [Math]::Max(0, $View.attention.Count - $MaximumGroups)
     if ($overflow) { $brief += "+$overflow groups in complete repair file" }
-    $brief += "Evidence/repair: $reference | as-of $($View.as_of)"
+    $asOf = if ($View.as_of -is [datetime]) { $View.as_of.ToUniversalTime().ToString('o') } else { [string]$View.as_of }
+    $brief += "Evidence/repair: $reference | as-of $asOf"
     return @{ Human = $human; Brief = $brief }
 }
 

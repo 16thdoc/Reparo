@@ -40,6 +40,8 @@ try {
     $view=Get-ReparoRepairView $ledger
     Assert ($view.counts.legacy_success_receipts -eq 11) 'Earlier successes were lost.'
     Assert ($view.counts.confirmed_changes -eq 0) 'Advertised target versions became confirmed changes.'
+    $successLines=Get-ReparoRepairLines -View $view -RepairPath 'fictional-repair.json'
+    Assert (($successLines.Human -join '') -match 'Commands: 0 \| Package receipts: 11') 'Human summary hid successful package receipts or conflated them with commands.'
     Add-ReparoSummaryRecord -Bucket Updated -Software package-1 -CurrentVersion '1' -Version '2' -Method winget -Reason updated
     Assert ((Get-ReparoRepairView $ledger).counts.legacy_success_receipts -eq 11) 'Replay double counted a package.'
     Assert ($script:ReparoSummary.Updated.Count -eq 11) 'Legacy rows double counted replay.'

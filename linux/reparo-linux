@@ -641,7 +641,7 @@ except Exception as e: health='degraded';publication_errors.append(str(e))
 if health!='complete':
     records['capture-health']={'id':'capture-health','backend':'evidence','package':'capture','scope':'run','phase':'publication','outcome':'unknown','reason':'Evidence publication degraded; retained streams/receipts require review. Cause unknown.','cause':'unknown','code':None,'delta':{'effect':'unknown','old':None,'new':None},'capture_health':health,'evidence':[],'next_action':'Inspect retained local evidence; do not rerun maintenance to repair reporting.'}
 attention=[v for v in records.values() if v['outcome'] in ('failed','blocked','pending','unknown','staged','warning') or v['capture_health']!='complete']
-counts={'confirmed_changes':sum(v['delta']['effect']=='version-change' for v in records.values()),'command_success':sum(v['outcome']=='command-success' for v in records.values()),'failed':sum(v['outcome']=='failed' for v in records.values()),'blocked':sum(v['outcome']=='blocked' for v in records.values()),'pending_unknown':sum(v['outcome'] in ('pending','unknown','staged') for v in records.values()),'evidence_gaps':sum(v['capture_health']!='complete' for v in records.values())+(health!='complete'),'coverage':sum(v['outcome']=='coverage' for v in records.values())}
+counts={'confirmed_changes':sum(v['delta']['effect']=='version-change' for v in records.values()),'command_success':sum(v['outcome']=='command-success' for v in records.values()),'legacy_success_receipts':0,'failed':sum(v['outcome']=='failed' for v in records.values()),'blocked':sum(v['outcome']=='blocked' for v in records.values()),'pending_unknown':sum(v['outcome'] in ('pending','unknown','staged') for v in records.values()),'evidence_gaps':sum(v['capture_health']!='complete' for v in records.values())+(health!='complete'),'coverage':sum(v['outcome']=='coverage' for v in records.values())}
 try: source_hash=hashlib.sha256(pathlib.Path(source).read_bytes()).hexdigest().upper()
 except OSError: source_hash=None
 reboot_after='required' if pathlib.Path('/run/reboot-required').exists() else 'not-observed'
@@ -665,7 +665,7 @@ except OSError as e:
 ref=str(target) if target else 'unavailable; publication failed'
 state='NEEDS ATTENTION' if attention or counts['evidence_gaps'] else 'SETTLED'
 print(f'REPARO - {state}')
-print(f"  Changes confirmed : {counts['confirmed_changes']} | Successful commands/receipts: {counts['command_success']}; package deltas may be unknown")
+print(f"  Changes confirmed : {counts['confirmed_changes']} | Commands: {counts['command_success']} | Package receipts: {counts['legacy_success_receipts']}; deltas may be unknown")
 print(f"  Needs review      : {counts['failed']} failed | {counts['blocked']} blocked | {counts['pending_unknown']} pending/unknown")
 print(f"  Evidence gaps     : {counts['evidence_gaps']} | Coverage exceptions: {counts['coverage']}")
 print(f'  Restart/activation: OS {reboot}; installer unknown; app unknown; service restart unknown')
