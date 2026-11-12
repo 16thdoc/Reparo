@@ -1,11 +1,11 @@
-# Reparo Steam desktop integration regression test (no real Steam launch).
+﻿# Reparo Steam desktop integration regression test (no real Steam launch).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $source = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'Reparo.ps1') -Raw
 $tokens = $null; $parseErrors = $null
 $ast = [Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-foreach ($name in @('Read-ReparoSteamManifestState','Get-ReparoSteamClientPath','Get-ReparoSteamGameInventory','Select-ReparoSteamQueueGames','Invoke-ReparoSteamGameUpdates')) {
+foreach ($name in @('Read-ReparoStableText','Read-ReparoSteamManifestState','Get-ReparoSteamClientPath','Get-ReparoSteamGameInventory','Select-ReparoSteamQueueGames','Invoke-ReparoSteamGameUpdates')) {
     $node = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name },$true)
     if (-not $node) { throw "Missing Steam function: $name" }
     Invoke-Expression $node.Extent.Text

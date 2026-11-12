@@ -1,11 +1,11 @@
-# No real Steam actions or Task Scheduler changes. The only written manifests are fixtures.
+﻿# No real Steam actions or Task Scheduler changes. The only written manifests are fixtures.
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent $PSScriptRoot
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'Reparo.ps1'),[ref]$tokens,[ref]$errors)
 if($errors.Count){throw ($errors|Out-String)}
-$names=@('Read-ReparoSteamManifestState','Test-ReparoSteamInputDesktop','Get-ReparoSteamDesktopContext','Test-ReparoSteamAppRunning','Initialize-ReparoSteamAutomation','Get-ReparoSteamAutomationSnapshot','Find-ReparoSteamQueueRow','Invoke-ReparoSteamQueueButton','Get-ReparoSteamRequestOutcome','Invoke-ReparoSteamDesktopQueue','New-ReparoSteamQueueWorker','Invoke-ReparoSteamQueue','Select-ReparoSteamQueueGames')
+$names=@('Read-ReparoStableText','Read-ReparoSteamManifestState','Test-ReparoSteamInputDesktop','Get-ReparoSteamDesktopContext','Test-ReparoSteamAppRunning','Initialize-ReparoSteamAutomation','Get-ReparoSteamAutomationSnapshot','Find-ReparoSteamQueueRow','Invoke-ReparoSteamQueueButton','Get-ReparoSteamRequestOutcome','Invoke-ReparoSteamDesktopQueue','New-ReparoSteamQueueWorker','Invoke-ReparoSteamQueue','Select-ReparoSteamQueueGames')
 foreach($name in $names){
     $node=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
     if(-not $node){throw "Missing queue function $name"}

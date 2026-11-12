@@ -1,8 +1,8 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'Reparo.ps1'), [ref]$null, [ref]$null)
-foreach ($name in 'Test-ReparoSectionSelected','Invoke-ReparoWslApt','Complete-ReparoWslDistro','Get-ReparoWslProcessSnapshotScript','ConvertTo-ReparoPowerShellLiteral','ConvertTo-ReparoWslShellCommand') {
+foreach ($name in 'Test-ReparoSectionSelected','Get-ReparoAptDeltaScript','Invoke-ReparoWslApt','Complete-ReparoWslDistro','Get-ReparoWslProcessSnapshotScript','ConvertTo-ReparoPowerShellLiteral','ConvertTo-ReparoWslShellCommand') {
     $node = $ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name}, $true)
     if (-not $node) { throw "Missing function $name" }
     Invoke-Expression $node.Extent.Text
@@ -88,8 +88,8 @@ foreach ($case in 'success','skip-apt','skip-sudo','failed','cancelled','busy-af
     } else {
         Assert ($script:terminated.Count -eq 1) "$case did not clean up the maintenance-started distro."
     }
-    if ($case -eq 'success') { Assert (@($script:records | Where-Object Bucket -eq 'Updated').Count -eq 2) 'Successful distro results missing.' }
-    if ($case -in 'skip-apt','skip-sudo') { Assert (@($script:records | Where-Object Bucket -eq 'Updated').Count -eq 0) 'Skipped apt was reported as updated.' }
+    if ($case -eq 'success') { Assert (@($script:records | Where-Object { $_.Bucket -eq 'Skipped' -and $_.Reason -match 'apt commands succeeded' }).Count -eq 2) 'Successful distro results missing.' }
+    if ($case -in 'skip-apt','skip-sudo') { Assert (@($script:records | Where-Object { $_.Bucket -eq 'Skipped' -and $_.Reason -match 'apt commands succeeded' }).Count -eq 0) 'Skipped apt was reported as updated.' }
     if ($case -eq 'failed') { Assert (@($script:records | Where-Object Bucket -eq 'Failed').Count -eq 2) 'Distro failures were hidden.' }
     if ($case -eq 'specific-distro') { Assert ($script:commands.Count -eq 1 -and $script:commands[0] -match 'kali-linux') 'Per-distro selection did not stay scoped.' }
 }

@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -40,10 +40,13 @@ foreach ($required in @(
     }
 }
 
-$finalizeThenPublish = 'Finalize-ReparoLogFile -Status \$script:ReparoFinalStatus\r?\n\s*Write-ReparoNinjaMaintenanceActivity -Mode \$mode -Status \$script:ReparoFinalStatus'
-if ($source -notmatch $finalizeThenPublish) {
-    throw 'The Ninja maintenance activity must report the finalized log path.'
-}
+# The repair summary may render between finalization and publication. Verify
+# ordering of real top-level calls, rather than their textual adjacency.
+$orderAst=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$null,[ref]$null)
+$topCalls=@($orderAst.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.PipelineAst]}|ForEach-Object {$_.PipelineElements}|Where-Object {$_ -is [Management.Automation.Language.CommandAst]})
+$finalize=@($topCalls|Where-Object {$_.GetCommandName() -eq 'Finalize-ReparoLogFile'})[-1]
+$publish=@($topCalls|Where-Object {$_.GetCommandName() -eq 'Write-ReparoNinjaMaintenanceActivity'})[-1]
+if($finalize.Extent.StartOffset -ge $publish.Extent.StartOffset){throw 'Ninja publication precedes terminal log finalization.'}
 
 $tokens = $null
 $parseErrors = $null

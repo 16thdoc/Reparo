@@ -1,10 +1,10 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $tokens=$null; $errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'Reparo.ps1'),[ref]$tokens,[ref]$errors)
 if($errors.Count){throw ($errors | Out-String)}
-foreach($name in 'Test-ReparoInteractiveSkip','Read-ReparoSkipKey','ConvertTo-ReparoSafeFileName','ConvertTo-ReparoPowerShellLiteral','Test-ReparoIgnorableCommandOutputLine','Sync-ReparoCommandOutputLog','Invoke-ReparoTimedCommand','Get-ReparoNotUpdatedAction'){
+foreach($name in 'Test-ReparoInteractiveSkip','Read-ReparoSkipKey','ConvertTo-ReparoSafeFileName','ConvertTo-ReparoPowerShellLiteral','Test-ReparoIgnorableCommandOutputLine','Sync-ReparoCommandOutputLog','ConvertFrom-ReparoCapturedBytes','Invoke-ReparoTimedCommand','Get-ReparoNotUpdatedAction'){
     $node=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
     if(-not $node){throw "Missing function $name"}
     Invoke-Expression $node.Extent.Text
@@ -40,7 +40,8 @@ try {
         if($case -in 'deadline','wsl-deadline'){function Read-ReparoSkipKey {return $false}}
         $timeout=if($case -in 'deadline','wsl-deadline'){1}else{0}
         $result=Invoke-ReparoTimedCommand -ShellPath (Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe') -Command $command -Section $section -TimeoutSeconds $timeout
-        if(-not(Test-Path $done)){throw 'Advanced without completing the indivisible operation.'}
+        $earlyDeadline=($case -in 'deadline','wsl-deadline' -and -not(Test-Path $script:started) -and @($result.Output|Where-Object {$_ -match '^REPARO-STEP-SKIPPED safe boundary: before starting'}).Count -eq 1)
+        if(-not(Test-Path $done) -and -not $earlyDeadline){throw 'Advanced without completing the indivisible operation.'}
         if($case -in 'supported','deadline','wsl-deadline'){
             if($result.ExitCode -ne 130 -or @($result.Output | Where-Object {$_ -match '^REPARO-STEP-SKIPPED'}).Count -ne 1){throw 'No acknowledged safe-boundary cancellation.'}
         }else{

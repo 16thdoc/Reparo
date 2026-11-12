@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $tokens = $null; $errors = $null
@@ -12,7 +12,7 @@ $root = Join-Path $env:TEMP ('reparo-wu-details-' + [guid]::NewGuid())
 $oldFixture = $env:REPARO_WU_FIXTURE
 try {
     New-Item -ItemType Directory $root | Out-Null
-    foreach ($case in 'empty','success','download-failed','install-failed','mixed-install-results','unknown-result','invalid-identity','scan-error','skip-after-scan','skip-after-download','partial-skip','auto-reboot') {
+    foreach ($case in 'empty','success','batched-array','batched-properties','accepted-download','installed-errors','download-failed','install-failed','mixed-install-results','unknown-result','invalid-identity','scan-error','skip-after-scan','skip-after-download','partial-skip','auto-reboot') {
         $fixture = Join-Path $root $case
         New-Item -ItemType Directory $fixture | Out-Null
         $env:REPARO_WU_FIXTURE = $fixture
@@ -39,7 +39,14 @@ function Get-WindowsUpdate {
     Write-Verbose "backend phase: $phase"
     if($case -eq 'scan-error'){throw 'synthetic scan failure'}
     if($case -eq 'empty'){return}
-    $result = if($Install){if($case -eq 'install-failed'){'Failed'}elseif($case -eq 'unknown-result'){'Accepted'}else{'Installed'}}elseif($Download){if($case -eq 'download-failed'){'Failed'}else{'Downloaded'}}else{''}
+    if($case -in 'batched-array','batched-properties' -and $phase -eq 'scan'){
+        $batch=@(1..3|ForEach-Object{[pscustomobject]@{Title="Fixture update $_";KB="KB123456$_";Size='10MB';Result='';HResult=0;Identity=[pscustomobject]@{UpdateID=("11111111-1111-1111-1111-11111111111$_")}}})
+        if($case -eq 'batched-array'){Write-Output -NoEnumerate $batch}
+        else{[pscustomobject]@{Title=@($batch.Title);KB=@($batch.KB);Size=@($batch.Size);Result=@($batch.Result);HResult=@($batch.HResult);Identity=@($batch.Identity)}}
+        return
+    }
+
+    $result = if($Install){if($case -eq 'installed-errors'){'InstalledWithErrors'}elseif($case -eq 'install-failed'){'Failed'}elseif($case -eq 'unknown-result'){'Accepted'}else{'Installed'}}elseif($Download){if($case -eq 'accepted-download'){'Accepted'}elseif($case -eq 'download-failed'){'Failed'}else{'Downloaded'}}else{''}
     if($Install){$script:installs++}
     if($case -eq 'mixed-install-results' -and $Install){[pscustomobject]@{Title='Fixture security update (KB1234567)';KB='KB1234567';Size='10MB';Result='Failed';HResult=-1}}
     $identity = if($case -eq 'invalid-identity'){'------------------------------------'}else{'11111111-1111-1111-1111-111111111111'}
@@ -60,7 +67,7 @@ function Get-WindowsUpdate {
         } finally {$ErrorActionPreference=$savedErrorAction}
         $lines = @(Get-Content (Join-Path $fixture 'output'))
         $calls = @(Get-Content (Join-Path $fixture 'calls'))
-        $expected = if($case -in 'skip-after-scan','skip-after-download','partial-skip'){130}elseif($case -in 'download-failed','install-failed','mixed-install-results','unknown-result','invalid-identity','scan-error'){1}else{0}
+        $expected = if($case -in 'skip-after-scan','skip-after-download','partial-skip'){130}elseif($case -in 'download-failed','installed-errors','install-failed','mixed-install-results','unknown-result','invalid-identity','scan-error'){1}else{0}
         if($code -ne $expected){throw "$case exit $code expected ${expected}: $text"}
         if($case -in 'skip-after-scan','empty','invalid-identity' -and $calls.Count -ne 1){throw 'Cancellation/empty/invalid-identity scan started later work.'}
         if($case -in 'skip-after-download','download-failed' -and @($calls | Where-Object {$_ -match '^install'}).Count){throw 'Install started after canceled/failed download.'}
@@ -69,10 +76,16 @@ function Get-WindowsUpdate {
         if($case -eq 'auto-reboot' -and $calls[-1] -notmatch 'ignore=False auto=True'){throw 'Explicit AutoReboot was lost.'}
         if($case -eq 'success' -and $calls[-1] -notmatch 'ignore=True auto=False'){throw 'Default reboot suppression was lost.'}
         if(($lines -join "`n") -match 'System.__ComObject'){throw 'COM objects were stringified.'}
+        if($case -in 'batched-array','batched-properties'){
+            if(($lines -join "`n") -notmatch 'Applicable updates: 3' -or @($lines | Where-Object {$_ -match '^\[WU-FOUND\]'}).Count -ne 3 -or ($lines -join "`n") -match 'System.Object\[\]'){throw 'Batched logical updates collapsed into one record.'}
+        }
+        if($case -eq 'accepted-download' -and @($calls|Where-Object {$_ -match '^install'}).Count){throw 'Install started without a terminal download receipt.'}
+
         $script:receipts = @()
         function Add-ReparoSummaryRecord { param($Bucket,$Software,$Version,$Method,$Reason) $script:receipts += [pscustomobject]@{Bucket=$Bucket;Software=$Software;Reason=$Reason} }
         function Add-ReparoSummaryNote { param($Note) }
         Add-ReparoWindowsUpdateReceipts -Output $lines
+        if($case -eq 'accepted-download' -and @($script:receipts|Where-Object Bucket -eq Pending).Count -ne 1){throw 'Accepted-only download lost its unresolved state.'}
         if($case -in 'unknown-result','mixed-install-results' -and @($script:receipts | Where-Object Bucket -eq Failed).Count -ne 1){throw 'Missing/mixed terminal results were called success.'}
     }
     Write-Host 'Windows Update phases/details, identity scope, empty/error/failure/unknown outcomes, reboot policy, safe cancellation and partial receipts passed (no live updates).'

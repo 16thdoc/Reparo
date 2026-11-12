@@ -1,4 +1,4 @@
-<# 
+﻿<#
 .SYNOPSIS
 Client-safe maintenance runner for RMM/Ninja deployment.
 
@@ -171,7 +171,8 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.7'
+$script:ReparoVersion = '1.4.4.8'
+$script:ReparoSourcePath = $PSCommandPath
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($Headless) {
     if ($Task -or $PSBoundParameters.ContainsKey('Time')) { throw '-Headless cannot be combined with -Task or -Time.' }
@@ -273,6 +274,7 @@ function Get-ReparoVersionFlavor {
     # On every runtime version bump, add a fresh Quote/Source pair here instead
     # of reusing the previous version's quote.
     $versionFlavors = @{
+        '1.4.4.8' = [pscustomobject]@{ Quote = 'You must unlearn what you have learned.'; Source = 'Star Wars: The Empire Strikes Back (1980), Yoda'; Art = '  <(-_-)>  YODA -- judge outcomes by their receipts' }
         '1.0.8.1' = [pscustomobject]@{ Quote = 'Hotfix applied. The goblin has been relocated.'; Source = 'Reparo maintenance log'; Art = '  GOBLIN: evicted from version output' }
         '1.0.8.2' = [pscustomobject]@{ Quote = 'New quote online. Old ghosts denied boarding.'; Source = 'Reparo maintenance log'; Art = '  QUOTE BAY: temporal lint removed' }
         '1.0.8.3' = [pscustomobject]@{ Quote = 'I cast Magic Missile at the darkness.'; Source = 'Dungeons & Dragons'; Art = '  D20: quote gremlin takes 1d4+1 force damage' }
@@ -784,8 +786,8 @@ Modes:
    -Install,-I           Offline: install this executing Reparo.ps1 into ProgramData.
    -New                  Install/update the reviewed manifest-pinned release.
    -N,-Latest            Install/update directly from main; intentionally unpinned.
-   -Force               Run all sections except PowerShell 7, including Windows feature updates,
-                         developer toolchains, and WSL apt handling.
+   -Force               Run present maintenance and developer toolchains, including WSL apt.
+                         Excludes PowerShell 7 MSI and Windows feature updates.
                         Use -7 explicitly for the PowerShell 7 MSI update.
   -Kill                Stop running Reparo PowerShell processes and known updater front ends.
   -KillUpdaterNames    Additional process base names swept by -Kill after Reparo process trees stop.
@@ -2320,6 +2322,7 @@ function Write-ReparoLog {
                 continue
             }
 
+            if (Get-Variable ReparoOutcomeLedger -Scope Script -ErrorAction SilentlyContinue) { $script:ReparoOutcomeLedger.evidence_health = 'degraded'; $script:ReparoOutcomeLedger.publication_errors += $_.Exception.Message }
             Write-Warning "Failed to write to log file '$script:ReparoLogPath': $($_.Exception.Message)"
         }
     }
@@ -2631,11 +2634,266 @@ function Get-ReparoLogPathForPid {
     return $null
 }
 
+function Get-ReparoOutcomeLedger {
+    if (-not (Get-Variable ReparoOutcomeLedger -Scope Script -ErrorAction SilentlyContinue)) {
+        $source = $null
+        if ($script:ReparoSourcePath -and (Test-Path -LiteralPath $script:ReparoSourcePath)) {
+            try { $source = (Get-FileHash -LiteralPath $script:ReparoSourcePath -Algorithm SHA256 -ErrorAction Stop).Hash } catch { }
+        }
+        $script:ReparoOutcomeLedger = [ordered]@{
+            schema = 'reparo-repair/1'; run_id = $script:ReparoLogBaseName
+            host = $env:COMPUTERNAME; platform = 'windows'; as_of = [DateTime]::UtcNow.ToString('o')
+            source = @{ version = $script:ReparoVersion; sha256 = $source }
+            parent = @{ exit_code = $null; requested_exit_code = $null; reported_status = 'RUNNING'; execution_finished = $false }
+            records = @{}; commands = @{}; workers = @{}; coverage = @()
+            evidence_health = 'complete'; publication_errors = @()
+            consequences = @{ os_reboot = 'unknown'; installer_restart = 'unknown'; app_activation = 'unknown'; service_restart = 'unknown' }
+            telemetry = @{ delivery = 'unverified' }
+        }
+    }
+    return $script:ReparoOutcomeLedger
+}
+
+function Get-ReparoOutcomeId {
+    param([string]$Value)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Value))).Replace('-', '').Substring(0, 24).ToLowerInvariant()) }
+    finally { $sha.Dispose() }
+}
+
+function Write-ReparoAtomicJson {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)]$Value)
+    $temporary = $Path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+    try {
+        $json = ConvertTo-Json -InputObject $Value -Depth 30
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($json)
+        $stream = [IO.File]::Open($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+        try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+        if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary, $Path, [NullString]::Value) }
+        else { [IO.File]::Move($temporary, $Path) }
+        return $Path
+    }
+    finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }
+}
+
+function Save-ReparoReceipt {
+    param([string]$Name, [Parameter(Mandatory)]$Value)
+    $ledger = Get-ReparoOutcomeLedger
+    $primary = Join-Path $LogRoot ($ledger.run_id + '_' + $Name + '.json')
+    try { return Write-ReparoAtomicJson -Path $primary -Value $Value }
+    catch {
+        $ledger.evidence_health = 'degraded'
+        $ledger.publication_errors += $_.Exception.Message
+        try {
+            $root = Join-Path ([IO.Path]::GetTempPath()) ('Reparo-receipts-' + $PID)
+            [void][IO.Directory]::CreateDirectory($root)
+            $fallback = Join-Path $root ($ledger.run_id + '_' + $Name + '.json')
+            $saved = Write-ReparoAtomicJson -Path $fallback -Value $Value
+            [Console]::Error.WriteLine('Reparo evidence publication degraded; retained receipt: ' + $saved)
+            return $saved
+        }
+        catch {
+            $ledger.evidence_health = 'unavailable'
+            $ledger.publication_errors += $_.Exception.Message
+            [Console]::Error.WriteLine('Reparo could not persist receipt ' + $Name + '; outcome retained in memory only: ' + $_.Exception.Message)
+            return $null
+        }
+    }
+}
+
+function Add-ReparoOutcome {
+    param([string]$Id, [string]$Backend, [string]$Package, [string]$Scope = 'current-context',
+          [string]$Phase = 'package', [string]$Outcome, [string]$Reason,
+          $ExitCode = $null, [string]$OldVersion, [string]$NewVersion,
+          [string]$Effect = 'unknown', [string]$CaptureHealth = 'complete', [string[]]$Evidence = @(), [string]$CodeKind = 'native-exit', [string]$Identity)
+    $ledger = Get-ReparoOutcomeLedger
+    if (-not $Id) { $identityKey = if ($Identity) { $Identity } else { $Package }; $Id = Get-ReparoOutcomeId "$Backend|$identityKey|$Scope|$Phase" }
+    $code = $null
+    if ($null -ne $ExitCode) {
+        $number = [long]$ExitCode
+        $unsigned = $number -band 4294967295L
+        $code = @{ kind = $CodeKind; value = $number; unsigned = $unsigned; hex = ('0x{0:X8}' -f $unsigned) }
+    }
+    $record = [ordered]@{
+        id = $Id; occurrence_id = ($ledger.run_id + ':' + $Id); signature = (Get-ReparoOutcomeId "$Backend|$Package|$Scope|$Phase|$Outcome|$ExitCode"); backend = $Backend; package = $Package; package_id = $Identity; identity_basis = $(if ($Identity) { 'manager-id' } else { 'display-fallback' }); scope = $Scope; phase = $Phase
+        outcome = $Outcome; reason = $Reason; cause = 'unknown'; code = $code
+        delta = @{ effect = $Effect; old = $OldVersion; new = $NewVersion }
+        capture_health = $CaptureHealth; evidence = @($Evidence)
+        next_action = 'Inspect retained evidence; do not repeat maintenance to repair its report.'
+    }
+    $ledger.records[$Id] = $record
+    [void](Save-ReparoReceipt -Name ('event-' + [guid]::NewGuid().ToString('N')) -Value $record)
+}
+
+function Add-ReparoLegacyOutcome {
+    param([string]$Bucket, [string]$Software, [string]$CurrentVersion, [string]$Version, [string]$Method, [string]$Reason, [string]$PackageId)
+    # The legacy Updated bucket contains advertised versions and section rows.
+    # It establishes a reported command success, never an independently observed delta.
+    $outcome = switch ($Bucket) { Updated { 'command-success' }; Failed { 'failed' }; Pending { 'pending' }; default { 'coverage' } }
+    if ($Reason -match 'worker status:') { return }
+    elseif ($Bucket -eq 'Skipped' -and $Reason -match '(?i)denied|blocked|manual|in use|cannot|could not|privilege|sudo|elevat|lock|protected|unconfirmed') { $outcome = 'blocked' }
+    Add-ReparoOutcome -Backend $Method -Package $Software -Identity $PackageId -Outcome $outcome -Reason $Reason
+}
+
+function Get-ReparoRepairView {
+    param([Parameter(Mandatory)]$Ledger, [string]$Root = $LogRoot)
+    # A read-only as-of view: worker results replace pending by stable ID; the
+    # stored parent exit and original snapshot are never rewritten by Status.
+    $copy = $Ledger | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    $records = @($copy.records.PSObject.Properties | ForEach-Object { $_.Value })
+    foreach ($workerProperty in $copy.workers.PSObject.Properties) {
+        $worker = $workerProperty.Value
+        $record = $records | Where-Object id -EQ $worker.id | Select-Object -First 1
+        if (-not $record) { continue }
+        try {
+            $path = $worker.status_path
+            if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $Root $path }
+            if (-not (Test-Path -LiteralPath $path) -and $worker.PSObject.Properties['fallback_path'] -and (Test-Path -LiteralPath $worker.fallback_path)) { $path = $worker.fallback_path }
+            $status = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            if ($worker.PSObject.Properties['format'] -and $worker.format -eq 'legacy-exit-only' -and $status.PSObject.Properties['ExitCode']) {
+                $status | Add-Member -NotePropertyName schema -NotePropertyValue 'reparo-worker/1'
+                $status | Add-Member -NotePropertyName worker_id -NotePropertyValue $worker.id
+                $status | Add-Member -NotePropertyName state -NotePropertyValue terminal
+                $status | Add-Member -NotePropertyName capture_health -NotePropertyValue degraded
+                $status | Add-Member -NotePropertyName reason -NotePropertyValue 'Legacy worker exit retained; original identity/capture evidence unavailable.'
+            }
+            if ($status.schema -ne 'reparo-worker/1' -or $status.worker_id -ne $worker.id -or $status.state -ne 'terminal') { throw 'Missing or mismatched terminal worker receipt.' }
+            if ($worker.PSObject.Properties['pid'] -and $null -ne $worker.pid) {
+                if (-not $status.PSObject.Properties['pid'] -or $status.pid -ne $worker.pid) { throw 'Terminal worker process identity mismatch.' }
+                if ($worker.created_utc -and ([datetime]$status.created_utc).ToUniversalTime().Ticks -ne ([datetime]$worker.created_utc).ToUniversalTime().Ticks) { throw 'Terminal worker creation identity mismatch; possible PID reuse.' }
+                if (-not $status.PSObject.Properties['identity'] -or -not $status.identity.verified -or $status.identity.sid -ne $worker.expected_sid -or $status.identity.session -ne $worker.expected_session) { throw 'Terminal worker owner/session evidence is unverified.' }
+            }
+            $record.outcome = if ($null -eq $status.ExitCode) { 'unknown' } elseif ($status.ExitCode -eq 0) { 'command-success' } else { 'failed' }
+            $record.reason = $status.reason
+            $record.capture_health = $status.capture_health
+            if ($null -ne $status.ExitCode) {
+                $unsigned = [long]$status.ExitCode -band 4294967295L
+                $record.code = @{ value = $status.ExitCode; unsigned = $unsigned; hex = ('0x{0:X8}' -f $unsigned) }
+            }
+        }
+        catch { $record.reason = 'Await valid terminal worker receipt; cause unknown. ' + $_.Exception.Message }
+    }
+    foreach ($record in $records) {
+        $missing = @()
+        foreach ($reference in $record.evidence) {
+            $path = if ($reference -is [string]) { $reference } else { $reference.path }
+            if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $Root $path }
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $missing += $path }
+        }
+        if ($missing.Count) { $record.capture_health = 'degraded'; $record | Add-Member -NotePropertyName missing_evidence -NotePropertyValue $missing -Force }
+    }
+    if ($copy.evidence_health -ne 'complete') {
+        $records += [pscustomobject]@{ id='capture-health'; backend='evidence'; package='capture'; scope='run'; phase='publication'; outcome='unknown'; reason='Evidence publication degraded; inspect retained receipts. Cause unknown.'; cause='unknown'; code=$null; delta=@{effect='unknown';old=$null;new=$null}; capture_health=$copy.evidence_health; evidence=@();next_action='Inspect retained local evidence; do not repeat maintenance to repair reporting.' }
+    }
+    $attention = @($records | Where-Object { $_.outcome -in @('failed','blocked','pending','unknown','staged','warning') -or $_.capture_health -ne 'complete' } | Sort-Object @{Expression={switch ($_.outcome) { failed {0};unknown {1};blocked {2};pending {3};staged {4};default {5} }}},id)
+    $coverage = @($records | Where-Object outcome -EQ 'coverage')
+    $gaps = @($records | Where-Object capture_health -NE 'complete').Count
+    if ($copy.evidence_health -ne 'complete') { $gaps++ }
+    $pending = @($records | Where-Object outcome -In @('pending','unknown','staged')).Count
+    $blocked = @($records | Where-Object outcome -EQ 'blocked').Count
+    $failed = @($records | Where-Object outcome -EQ 'failed').Count
+    $settled = $copy.parent.execution_finished -and $pending -eq 0 -and $blocked -eq 0 -and $gaps -eq 0
+    $manifest = @{}
+    foreach ($record in $records) {
+        foreach ($reference in $record.evidence) {
+            $path = if ($reference -is [string]) { $reference } else { $reference.path }
+            if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $Root $path }
+            try {
+                $file=Get-Item -LiteralPath $path -ErrorAction Stop
+                $rootUri=[Uri]([IO.Path]::GetFullPath($Root).TrimEnd('\')+'\')
+                $relative=[Uri]::UnescapeDataString($rootUri.MakeRelativeUri([Uri]$file.FullName).ToString())
+                $manifest[$relative]=@{path=$relative;bytes=$file.Length;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256 -ErrorAction Stop).Hash}
+            } catch { $manifest[$path]=@{path=$path;bytes=$null;sha256=$null;missing=$true} }
+        }
+    }
+    $copy | Add-Member -NotePropertyName evidence_manifest -NotePropertyValue @($manifest.Values) -Force
+    $copy | Add-Member -NotePropertyName evidence_root -NotePropertyValue $Root -Force
+    $copy.as_of = [DateTime]::UtcNow.ToString('o')
+    $copy | Add-Member -NotePropertyName finality -NotePropertyValue @{ parent_finished = $copy.parent.execution_finished; settled = $settled } -Force
+    $copy | Add-Member -NotePropertyName attention -NotePropertyValue $attention -Force
+    $copy | Add-Member -NotePropertyName counts -NotePropertyValue @{
+        confirmed_changes = @($records | Where-Object { $_.delta.effect -eq 'version-change' }).Count
+        command_success = @($copy.commands.PSObject.Properties | Where-Object { $null -ne $_.Value.exit_code -and $_.Value.exit_code -eq 0 }).Count
+        legacy_success_receipts = @($records | Where-Object { $_.outcome -eq 'command-success' -and $_.phase -eq 'package' }).Count
+        failed = $failed; blocked = $blocked; pending_unknown = $pending; evidence_gaps = $gaps; coverage = $coverage.Count
+    } -Force
+    return $copy
+}
+
+function Get-ReparoRepairLines {
+    param([Parameter(Mandatory)]$View, [string]$RepairPath, [int]$MaximumGroups = 2)
+    $c = $View.counts
+    $state = if ($View.parent.reported_status -eq 'PREVIEW') { 'PREVIEW' } elseif ($c.failed -or $c.blocked -or $c.pending_unknown -or $c.evidence_gaps) { 'NEEDS ATTENTION' } elseif ($View.attention.Count) { 'SETTLED WITH WARNINGS' } else { 'SETTLED' }
+    $reference = if ($RepairPath) { $RepairPath } else { 'unavailable; receipt publication failed' }
+    $lead = @($View.attention | Select-Object -First 1)
+    $attentionText = if ($lead.Count) { ($lead[0].package + ': ' + $lead[0].reason) -replace '\s+', ' ' } else { 'No repair actions identified in this run.' }
+    if ($attentionText.Length -gt 140) { $attentionText = $attentionText.Substring(0,137) + '...' }
+    $human = @(
+        "REPARO - $state"
+        ('  Changes confirmed : {0} | Successful commands/receipts: {1}; package deltas may be unknown' -f $c.confirmed_changes, $c.command_success)
+        ('  Review records    : {0} failed | {1} blocked | {2} pending/unknown' -f $c.failed, $c.blocked, $c.pending_unknown)
+        ('  Attention         : {0}' -f $attentionText)
+        ('  Evidence gaps     : {0} | Coverage exceptions: {1}' -f $c.evidence_gaps, $c.coverage)
+        ('  Restart/activation: OS {0}; installer {1}; app {2}; service restart {3}' -f $View.consequences.os_reboot, $View.consequences.installer_restart, $View.consequences.app_activation, $View.consequences.service_restart)
+        '  Next              : Inspect the attention evidence; await pending work before any retry.'
+        "  Repair handoff    : $reference"
+    )
+    $brief = @('REPARO-REPAIR-HANDOFF/1 | {0} / {1} / Reparo {2}' -f $View.host, $View.run_id, $View.source.version)
+    foreach ($item in @($View.attention | Select-Object -First $MaximumGroups)) {
+        $reason = ($item.reason -replace '\s+', ' ').Trim()
+        if ($reason.Length -gt 180) { $reason = $reason.Substring(0, 177) + '...' }
+        $code = if ($item.code) { ' [' + $item.code.value + '/' + $item.code.hex + ']' } else { '' }
+        $brief += '{0} {1}/{2}: {3}; {4}{5}; cause unknown' -f $item.id, $item.backend, $item.package, $item.outcome, $reason, $code
+    }
+    if ($View.attention.Count -eq 0) { $brief += 'No repair actions identified in this run; coverage exceptions: ' + $c.coverage }
+    $overflow = [Math]::Max(0, $View.attention.Count - $MaximumGroups)
+    if ($overflow) { $brief += "+$overflow groups in complete repair file" }
+    $brief += "Evidence/repair: $reference | as-of $($View.as_of)"
+    return @{ Human = $human; Brief = $brief }
+}
+
+function Write-ReparoRepairSummary {
+    $ledger = Get-ReparoOutcomeLedger
+    $ledger.parent.execution_finished = $true
+    $ledger.parent.reported_status = $script:ReparoFinalStatus
+    $ledger.parent.requested_exit_code = if ($script:ReparoFinalStatus -eq 'FAILED') { 1 } else { 0 }
+    # No self-observed OS parent exit exists while this process is still running.
+    $ledger.telemetry.delivery = if ($script:ReparoSyslogFailureReported) { 'failed' } else { 'unverified' }
+    if ($script:ReparoSyslogFailureReported) { Add-ReparoOutcome -Backend telemetry -Package delivery -Phase reporting -Outcome warning -Reason 'Syslog delivery failed; local evidence retained. Endpoint cause unknown.' }
+    $view = Get-ReparoRepairView -Ledger $ledger
+    $path = Save-ReparoReceipt -Name 'repair' -Value $view
+    # Publishing can degrade evidence independently from maintenance. Recompute
+    # both outputs from exactly the body subsequently written to the fallback.
+    if ($ledger.evidence_health -ne $view.evidence_health) {
+        $view = Get-ReparoRepairView -Ledger $ledger
+        $path = Save-ReparoReceipt -Name 'repair' -Value $view
+    }
+    $lines = Get-ReparoRepairLines -View $view -RepairPath $path
+    foreach ($line in @($lines.Human) + @('') + @($lines.Brief)) { Write-Host $line; Write-ReparoLog $line }
+}
+
+function Get-ReparoLatestRepairView {
+    $candidates = foreach ($file in @(Get-ChildItem -LiteralPath $LogRoot -File -Filter 'reparo_*_repair.json' -ErrorAction SilentlyContinue)) {
+        try {
+            $saved = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            if ($saved.schema -ne 'reparo-repair/1' -or -not $saved.parent.execution_finished) { continue }
+            [pscustomobject]@{ Path=$file.FullName; AsOf=[DateTime]::Parse($saved.as_of).ToUniversalTime(); Ledger=$saved }
+        } catch { continue }
+    }
+    $latest = $candidates | Sort-Object AsOf -Descending | Select-Object -First 1
+    if ($latest) { return [pscustomobject]@{ Path=$latest.Path; View=(Get-ReparoRepairView -Ledger $latest.Ledger -Root $LogRoot) } }
+}
+
 function Get-ReparoLatestCompletedLog {
     Get-ChildItem -LiteralPath $LogRoot -File -Filter 'reparo_*.log' -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -notlike '*_RUNNING.log' } |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
+        Where-Object {
+            if ($_.Name -notmatch '^reparo_.+_\d+_\d{4}-\d{2}-\d{2}_\d{6}_(COMPLETE|FAILED|PREVIEW)\.log$') { return $false }
+            try {
+                if (Select-String -LiteralPath $_.FullName -Pattern '^\[MAINTENANCE-RUN\]' -Quiet -ErrorAction Stop) { return $true }
+                return ((Select-String -LiteralPath $_.FullName -Pattern '^\[SUMMARY\] Result=' -Quiet) -and (Select-String -LiteralPath $_.FullName -Pattern '^\[CMD-START\]|^\[STEP\] (WindowsUpdate|Winget|Scoop|Choco|Pip|Npm|Wsl|Steam)' -Quiet))
+            }
+            catch { return $false }
+        } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 
 function Get-ReparoStaleRunningLog {
@@ -2783,6 +3041,12 @@ function Show-ReparoStatus {
     Write-Host "Version: $script:ReparoVersion"
     Write-Host "Computer: $env:COMPUTERNAME"
     Write-Host "Log root: $LogRoot"
+    $repair = Get-ReparoLatestRepairView
+    if ($repair) {
+        $lines = Get-ReparoRepairLines -View $repair.View -RepairPath $repair.Path
+        foreach ($line in @($lines.Human) + @($lines.Brief)) { Write-Host $line }
+    }
+
 
     $pendingRebootEvidence = @(Get-ReparoPendingRebootEvidence)
     if ($pendingRebootEvidence.Count -gt 0) {
@@ -2856,6 +3120,7 @@ function Show-ReparoStatus {
 
         Write-Host "  Last write: $($latest.LastWriteTime) ($(Format-ReparoAge -Timestamp $latest.LastWriteTime))"
         Write-Host "  Log: $($latest.FullName)"
+
     }
     else {
         Write-Host 'Latest completed log: none'
@@ -3768,6 +4033,7 @@ exit 0
         $reason = if ($check.ExitCode -eq 3) { 'new processes appeared during maintenance' } else { 'safe cleanup could not be established' }
         Write-ReparoLog "[WSL-CLEANUP-DEFERRED] ${Distro}: $reason; left running."
         Add-ReparoSummaryNote "WSL ${Distro} left running: $reason. Review the workload before stopping it."
+        if (Get-Command Add-ReparoOutcome -ErrorAction SilentlyContinue) { Add-ReparoOutcome -Backend WSL -Package $Distro -Phase lifecycle -Outcome pending -Reason ("Cleanup deferred; workload preserved: " + $reason) }
         return
     }
     $stop = Invoke-ReparoWslControl -Arguments @('--terminate', $Distro)
@@ -3775,6 +4041,44 @@ exit 0
         throw "WSL ${Distro} termination was not confirmed; review its state."
     }
     Write-ReparoLog "[WSL-CLEANUP] ${Distro}: stopped maintenance-started distro; no new workload detected."
+}
+
+function Get-ReparoAptDeltaScript {
+    # Installed-package snapshots are evidence, not a package upgrade count from
+    # a section exit. No full-upgrade, phasing override, hold or policy changes.
+    @'
+before=$(mktemp /tmp/reparo-apt-before.XXXXXX) || exit 22
+after=$(mktemp /tmp/reparo-apt-after.XXXXXX) || { rm -f "$before"; exit 22; }
+trap 'rm -f "$before" "$after"' EXIT
+inventory_ok=0
+if command -v dpkg-query >/dev/null 2>&1 && dpkg-query -W -f '${binary:Package}\t${Version}\n' > "$before"; then inventory_ok=1; fi
+apt_status=0
+if [ "$(id -u)" -eq 0 ]; then
+    DEBIAN_FRONTEND=noninteractive apt update && DEBIAN_FRONTEND=noninteractive apt -y upgrade && DEBIAN_FRONTEND=noninteractive apt -y autoremove || apt_status=$?
+else
+    command -v sudo >/dev/null 2>&1 || exit 21
+    sudo -n -l -- env DEBIAN_FRONTEND=noninteractive apt update >/dev/null 2>&1 || exit 21
+    sudo -n env DEBIAN_FRONTEND=noninteractive apt update && sudo -n env DEBIAN_FRONTEND=noninteractive apt -y upgrade && sudo -n env DEBIAN_FRONTEND=noninteractive apt -y autoremove || apt_status=$?
+fi
+if [ "$inventory_ok" -eq 1 ] && dpkg-query -W -f '${binary:Package}\t${Version}\n' > "$after"; then
+    printf '%s\n' 'REPARO-APT-INVENTORY available'
+    awk -F '\t' 'NR==FNR {old[$1]=$2;next} ($1 in old) && old[$1]!=$2 {printf "REPARO-APT-DELTA\t%s\t%s\t%s\n",$1,old[$1],$2}' "$before" "$after"
+else
+    printf '%s\n' 'REPARO-APT-INVENTORY unavailable'
+fi
+exit "$apt_status"
+'@
+}
+
+function Add-ReparoAptOutcomes {
+    param([string]$Backend, [string[]]$Output, $ExitCode)
+    foreach ($line in $Output) {
+        if ($line -match '^REPARO-APT-DELTA\t(?<Package>[^\t]+)\t(?<Old>[^\t]+)\t(?<New>[^\t]+)$') {
+            Add-ReparoOutcome -Backend $Backend -Package $matches.Package -Outcome changed -Reason 'Observed installed dpkg version delta.' -OldVersion $matches.Old -NewVersion $matches.New -Effect version-change -ExitCode $ExitCode
+        }
+    }
+    $available = @($Output | Where-Object { $_ -eq 'REPARO-APT-INVENTORY available' }).Count -gt 0
+    Add-ReparoOutcome -Backend $Backend -Package $Backend -Phase command -Outcome $(if ($null -eq $ExitCode) { 'unknown' } elseif ($ExitCode -eq 0) { 'command-success' } else { 'failed' }) -Reason $(if ($available) { 'apt command finished; installed version deltas recorded separately; zero deltas is a no-op.' } else { 'apt command result retained; installed version delta inventory unavailable.' }) -ExitCode $ExitCode -Effect $(if ($available -and @($Output | Where-Object { $_ -like 'REPARO-APT-DELTA*' }).Count -eq 0) { 'unchanged' } else { 'unknown' })
 }
 
 function Invoke-ReparoWslApt {
@@ -3805,15 +4109,7 @@ function Invoke-ReparoWslApt {
             $baseline = '/tmp/reparo-' + [guid]::NewGuid().ToString('N') + '.processes'
             $linux = (Get-ReparoWslProcessSnapshotScript) + "`n"
             if (-not $wasRunning) { $linux += "umask 077; snapshot > '$baseline' || exit 22`n" }
-            $linux += @'
-command -v apt >/dev/null 2>&1 || exit 20
-if [ "$(id -u)" -eq 0 ]; then
-    DEBIAN_FRONTEND=noninteractive apt update && DEBIAN_FRONTEND=noninteractive apt -y upgrade && DEBIAN_FRONTEND=noninteractive apt -y autoremove
-else
-    command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1 || exit 21
-    sudo -n env DEBIAN_FRONTEND=noninteractive apt update && sudo -n env DEBIAN_FRONTEND=noninteractive apt -y upgrade && sudo -n env DEBIAN_FRONTEND=noninteractive apt -y autoremove
-fi
-'@
+            $linux += Get-ReparoAptDeltaScript
             $distroLiteral = ConvertTo-ReparoPowerShellLiteral -Value $distro
             $linuxLiteral = ConvertTo-ReparoPowerShellLiteral -Value (ConvertTo-ReparoWslShellCommand -Script $linux)
             $command = "Stop-ReparoAtSafeBoundary 'before WSL maintenance'; & wsl.exe --distribution $distroLiteral --exec sh -c $linuxLiteral; exit `$LASTEXITCODE"
@@ -3821,9 +4117,10 @@ fi
             try {
                 Write-Step $section
                 $result = Invoke-ReparoTimedCommand -ShellPath (Resolve-ReparoShell) -Command $command -Section $section -TimeoutSeconds $WslAptTimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
+                if (Get-Command Add-ReparoOutcome -ErrorAction SilentlyContinue) { Add-ReparoAptOutcomes -Backend $section -Output $result.Output -ExitCode $result.ExitCode }
                 $bucket = 'Failed'; $reason = "exit code $($result.ExitCode)"
                 switch ($result.ExitCode) {
-                    0 { $bucket = 'Updated'; $reason = 'apt update, upgrade and autoremove completed' }
+                    0 { $bucket = 'Skipped'; $reason = 'apt commands succeeded; installed version deltas reported separately' }
                     20 { $bucket = 'Skipped'; $reason = 'apt not present' }
                     21 { $bucket = 'Skipped'; $reason = 'sudo requires password or is unavailable' }
                     130 {
@@ -4520,7 +4817,8 @@ function Add-ReparoSummaryRecord {
         [string]$CurrentVersion,
         [string]$Version,
         [string]$Method,
-        [string]$Reason
+        [string]$Reason,
+        [string]$PackageId
     )
 
     if ([string]::IsNullOrWhiteSpace($Software)) { $Software = 'Unknown' }
@@ -4529,7 +4827,15 @@ function Add-ReparoSummaryRecord {
     if ([string]::IsNullOrWhiteSpace($Method)) { $Method = '-' }
     if ([string]::IsNullOrWhiteSpace($Reason)) { $Reason = '-' }
 
+    if (Get-Command Add-ReparoLegacyOutcome -ErrorAction SilentlyContinue) {
+        Add-ReparoLegacyOutcome -Bucket $Bucket -Software $Software -CurrentVersion $CurrentVersion -Version $Version -Method $Method -Reason $Reason -PackageId $PackageId
+    }
+    # Summary aggregation is idempotent even when per-package receipts are replayed.
+    foreach ($existing in $script:ReparoSummary[$Bucket]) {
+        if ($existing.Software -eq $Software -and $existing.Method -eq $Method -and $existing.Reason -eq $Reason -and ((-not $PackageId -and -not $existing.PSObject.Properties['PackageId']) -or ($existing.PSObject.Properties['PackageId'] -and $existing.PackageId -eq $PackageId))) { return }
+    }
     [void]$script:ReparoSummary[$Bucket].Add([pscustomobject]@{
+        PackageId      = $PackageId
         Software       = $Software
         CurrentVersion = $CurrentVersion
         Version        = $Version
@@ -5117,7 +5423,7 @@ function Add-ReparoSectionUpdates {
                 Write-ReparoLog ("[UPDATED] {0}: -> {1} via {2}" -f $update.Software, $update.Version, $update.Method)
             }
 
-            Add-ReparoSummaryRecord -Bucket Updated -Software $update.Software -CurrentVersion $update.CurrentVersion -Version $update.Version -Method $update.Method -Reason 'updated'
+            Add-ReparoSummaryRecord -Bucket Updated -Software $update.Software -CurrentVersion $update.CurrentVersion -Version $update.Version -Method $update.Method -Reason 'updated' -PackageId $(if ($update.PSObject.Properties['Id']) { [string]$update.Id } else { '' })
         }
         return
     }
@@ -6381,14 +6687,14 @@ function Get-ReparoNotUpdatedAction {
         '^safe boundary:' { return 'Remaining work was deliberately not started. Rerun the affected section when ready; earlier completed updates remain recorded.' }
         'seeker-offer automation is unsupported|Windows 10 to Windows 11 automation is unverified' { return 'Open Settings > Windows Update; review compatibility and the offered Download & install action. Choose restart timing manually; Reparo did not stage a feature update.' }
         'protected from Reparo-managed updates' { return 'No action required; update it intentionally through its own launcher or installer.' }
-        'manual uninstall/reinstall' { return 'Update it manually, or uninstall and reinstall it through Winget.' }
-        'files are in use or access was denied' { return 'Close the app or stop its service, then rerun reparo -Include Winget.' }
+        'manual uninstall/reinstall' { return 'Review installed owner, channel and installer technology; any migration needs separate authorization.' }
+        'files are in use or access was denied' { return 'Inspect exact access/ownership evidence; do not infer a file lock or stop a service from access denied.' }
         'non-elevated user session' { return 'Run reparo -Include Winget from a normal, non-elevated PowerShell session.' }
         'not applicable to this system' { return 'Check the vendor installer or Winget package requirements; Reparo cannot apply this upgrade automatically.' }
         'version lock' { return 'Keep the pinned version, or remove/change the Reparo version lock before rerunning.' }
         'preview only' { return 'Rerun without -Preview when you want Reparo to make changes.' }
         'not found or cannot run' { return 'Install or repair this package manager only if you expect Reparo to manage it.' }
-        'timed out' { return 'Close any installer or app holding the update, inspect the final log, and rerun the affected section.' }
+        'timed out' { return 'Reconcile the worker receipt and active process identity before considering a retry; leave active installers running.' }
     }
 
     if ($Outcome -eq 'FAILED') {
@@ -6463,7 +6769,7 @@ function Write-ReparoSummaryNextSteps {
     }
     if ($blockedWinget.Count -gt 0) {
         $packages = ($blockedWinget | Select-Object -ExpandProperty Software -Unique) -join ', '
-        $message = "Close the running app or stop its service, then rerun reparo -Include Winget for: $packages. Reparo did not force-kill it."
+        $message = "Inspect exact access/ownership evidence before separately authorized repair for: $packages. Reparo did not force-kill it."
         Write-Host ("  - {0}" -f $message)
         Write-ReparoLog ("[SUMMARY] NEXT {0}" -f $message)
     }
@@ -6619,13 +6925,31 @@ function Write-ReparoWUObject {
 }
 function Write-ReparoWUReceipt {
     param([string]$Title, [string]$Outcome, [string]$Reason)
-    $receipt = @{ Software = $Title; Outcome = $Outcome; Reason = $Reason } | ConvertTo-Json -Compress
+    $receipt = @{ Software = $Title; Outcome = $Outcome; Reason = $Reason; UpdateId = $id; NativeCode = $nativeCode } | ConvertTo-Json -Compress
     Write-ReparoWUStatus "REPARO-WU-RESULT $receipt"
 }
 
 Stop-ReparoAtSafeBoundary 'before Windows Update scan'
 Write-ReparoWUStatus '[WU-PHASE] Scanning configured update service; percentage unavailable. No installation has started.'
-$updates = @(Get-WindowsUpdate -ErrorAction Stop -Verbose 4>&1 | ForEach-Object {
+function Expand-ReparoWURecord {
+    param($Record)
+    if ($Record -is [array]) { foreach ($item in $Record) { Expand-ReparoWURecord $item }; return }
+    if ($Record -is [System.Management.Automation.VerboseRecord]) { $Record; return }
+    if ($Record.Title -is [array]) {
+        for ($index=0; $index -lt $Record.Title.Count; $index++) {
+            $logical = [ordered]@{}
+            foreach ($property in $Record.PSObject.Properties) {
+                $logical[$property.Name] = if ($property.Value -is [array]) {
+                    if ($index -lt $property.Value.Count) { $property.Value[$index] } else { $null }
+                } else { $property.Value }
+            }
+            [pscustomobject]$logical
+        }
+        return
+    }
+    $Record
+}
+$updates = @(Get-WindowsUpdate -ErrorAction Stop -Verbose 4>&1 | ForEach-Object { Expand-ReparoWURecord $_ } | ForEach-Object {
     Write-ReparoWUObject -Record $_ -Phase 'FOUND'
     if ($_ -isnot [System.Management.Automation.VerboseRecord] -and $_.Title) { $_ }
 })
@@ -6643,9 +6967,13 @@ foreach ($update in $updates) {
     if ($id -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') { throw 'An update has no valid identity; refusing an unscoped installation.' }
     $title = ([string]$update.Title) -replace '[\r\n\x00-\x1f]', ' '
     Write-ReparoWUStatus ("[WU-PHASE] Download {0}/{1}: {2}; percentage unavailable unless the backend reports it." -f $index, $updates.Count, $title)
+    $nativeCode = $null
+    $downloadTerminal = $false
     $downloadFailed = $false
-    Get-WindowsUpdate -UpdateID $id -AcceptAll -Download -IgnoreReboot -ErrorAction Stop -Verbose 4>&1 | ForEach-Object {
+    Get-WindowsUpdate -UpdateID $id -AcceptAll -Download -IgnoreReboot -ErrorAction Stop -Verbose 4>&1 | ForEach-Object { Expand-ReparoWURecord $_ } | ForEach-Object {
         Write-ReparoWUObject -Record $_ -Phase 'DOWNLOAD'
+        if ($_ -isnot [System.Management.Automation.VerboseRecord] -and [string]$_.Result -eq 'Downloaded') { $downloadTerminal = $true }
+        if ($_.PSObject.Properties['HResult']) { $nativeCode = $_.HResult }
         if ($_ -isnot [System.Management.Automation.VerboseRecord] -and [string]$_.Result -match 'Failed|Aborted|Error') { $downloadFailed = $true }
     }
     if ($downloadFailed) {
@@ -6653,14 +6981,16 @@ foreach ($update in $updates) {
         $failed = $true
         continue
     }
+    if (-not $downloadTerminal) { Write-ReparoWUReceipt -Title $title -Outcome Pending -Reason 'download terminal result unavailable; installation not started'; continue }
     Stop-ReparoAtSafeBoundary 'after download, before installation'
     Write-ReparoWUStatus ("[WU-PHASE] Install {0}/{1}: {2}; Esc cannot interrupt this indivisible installer, only request the next safe boundary." -f $index, $updates.Count, $title)
     $terminalResult = ''
     $installHadFailure = $false
     $installArguments = @{ UpdateID = $id; AcceptAll = $true; Install = $true; ErrorAction = 'Stop'; Verbose = $true }
     __REBOOT_ARGUMENT__
-    Get-WindowsUpdate @installArguments 4>&1 | ForEach-Object {
+    Get-WindowsUpdate @installArguments 4>&1 | ForEach-Object { Expand-ReparoWURecord $_ } | ForEach-Object {
         Write-ReparoWUObject -Record $_ -Phase 'INSTALL'
+        if ($_.PSObject.Properties['HResult']) { $nativeCode = $_.HResult }
         if ($_ -isnot [System.Management.Automation.VerboseRecord] -and [string]$_.Result -match '^(Installed|Failed|Aborted|InstalledWithErrors)$') { $terminalResult = [string]$_.Result }
         if ($_ -isnot [System.Management.Automation.VerboseRecord] -and [string]$_.Result -match 'Failed|Aborted|Error') { $installHadFailure = $true }
     }
@@ -6688,8 +7018,13 @@ function Add-ReparoWindowsUpdateReceipts {
         if ($line -match '^REPARO-WU-RESULT (?<Json>.+)$') {
             try {
                 $receipt = $matches.Json | ConvertFrom-Json -ErrorAction Stop
-                if ($receipt.Outcome -notin @('Updated', 'Failed', 'Skipped') -or [string]::IsNullOrWhiteSpace($receipt.Software)) { throw 'Invalid Windows Update receipt.' }
+                if ($receipt.Outcome -notin @('Updated', 'Failed', 'Skipped', 'Pending') -or [string]::IsNullOrWhiteSpace($receipt.Software)) { throw 'Invalid Windows Update receipt.' }
                 Add-ReparoSummaryRecord -Bucket $receipt.Outcome -Software $receipt.Software -Version '-' -Method 'PSWindowsUpdate' -Reason $receipt.Reason
+                if (Get-Command Add-ReparoOutcome -ErrorAction SilentlyContinue) {
+                    $outcome = if ($receipt.Outcome -eq 'Updated') { 'command-success' } elseif ($receipt.Outcome -eq 'Pending') { 'pending' } elseif ($receipt.Reason -match 'no terminal') { 'unknown' } else { 'failed' }
+                    $code = if ($receipt.PSObject.Properties['NativeCode']) { $receipt.NativeCode } else { $null }
+                    Add-ReparoOutcome -Backend PSWindowsUpdate -Package $receipt.Software -Outcome $outcome -Reason $receipt.Reason -ExitCode $code
+                }
             }
             catch { throw "Invalid Windows Update receipt: $($_.Exception.Message)" }
         }
@@ -6700,207 +7035,194 @@ function Add-ReparoWindowsUpdateReceipts {
 }
 
 function Invoke-ReparoTimedCommand {
-    param(
-        [Parameter(Mandatory)][string]$ShellPath,
-        [Parameter(Mandatory)][string]$Command,
-        [Parameter(Mandatory)][string]$Section,
-        [int]$TimeoutSeconds = 0,
-        [switch]$IgnoreTimeouts
-    )
-
-    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    $heartbeatSeconds = 60
-    $nextHeartbeat = [DateTime]::UtcNow.AddSeconds($heartbeatSeconds)
-    $timeoutEnabled = (-not $IgnoreTimeouts -and $TimeoutSeconds -gt 0)
-    $safeSection = ConvertTo-ReparoSafeFileName -Value $Section
-    $commandOutputPath = Join-Path $LogRoot ("{0}_{1}.out.log" -f $script:ReparoLogBaseName, $safeSection)
-    $commandScriptPath = Join-Path $LogRoot ("{0}_{1}.command.ps1" -f $script:ReparoLogBaseName, $safeSection)
-    $skipRequestPath = Join-Path $LogRoot ("{0}_{1}_{2}.skip" -f $script:ReparoLogBaseName, $safeSection, [guid]::NewGuid().ToString('N'))
-    $safeSkipSupported = $Command.Contains('Stop-ReparoAtSafeBoundary')
-
-    Remove-Item -LiteralPath $commandOutputPath, $commandScriptPath -Force -ErrorAction SilentlyContinue
-
-    $commandScript = @(
-        '$ErrorActionPreference = ''Continue'''
-        '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8'
-        '$OutputEncoding = [System.Text.Encoding]::UTF8'
-        ('$outputPath = {0}' -f (ConvertTo-ReparoPowerShellLiteral -Value $commandOutputPath))
-        'function Write-ReparoChildOutput {'
-        '    param([object]$Value)'
-        '    $line = [string]$Value'
-        '    Add-Content -LiteralPath $outputPath -Value $line -Encoding UTF8'
-        '}'
-        ('$skipRequestPath = {0}' -f (ConvertTo-ReparoPowerShellLiteral -Value $skipRequestPath))
-        'function Stop-ReparoAtSafeBoundary {'
-        '    param([string]$Boundary)'
-        '    if (Test-Path -LiteralPath $skipRequestPath) {'
-        '        Write-ReparoChildOutput -Value ("REPARO-STEP-SKIPPED safe boundary: {0}; remaining work not started" -f $Boundary)'
-        '        exit 130'
-        '    }'
-        '}'
-        'try {'
-        '    & {'
-        'Stop-ReparoAtSafeBoundary ''before starting the section'''
-        $Command
-        '    } 2>&1 | ForEach-Object { Write-ReparoChildOutput -Value $_ }'
-        '    if ($null -ne $global:LASTEXITCODE) { exit $global:LASTEXITCODE }'
-        '    exit 0'
-        '}'
-        'catch {'
-        '    $failure = $_'
-        '    $exception = $failure.Exception'
-        '    while ($null -ne $exception) {'
-        '        Write-ReparoChildOutput -Value ("[WORKER-ERROR] {0}: {1} (HRESULT 0x{2:X8})" -f $exception.GetType().FullName, $exception.Message, $exception.HResult)'
-        '        $exception = $exception.InnerException'
-        '    }'
-        '    Write-ReparoChildOutput -Value ("[WORKER-ERROR-ID] {0}" -f $failure.FullyQualifiedErrorId)'
-        '    Write-ReparoChildOutput -Value $failure.InvocationInfo.PositionMessage'
-        '    Write-ReparoChildOutput -Value $failure.ScriptStackTrace'
-        '    exit 1'
-        '}'
-    )
-    Set-Content -LiteralPath $commandScriptPath -Value $commandScript -Encoding UTF8
-
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$commandScriptPath`""
-
-    if (-not $timeoutEnabled) {
-        Write-ReparoLog ("[CMD-START] {0} | timeout=disabled" -f $Section)
+    param([Parameter(Mandatory)][string]$ShellPath, [Parameter(Mandatory)][string]$Command,
+          [Parameter(Mandatory)][string]$Section, [int]$TimeoutSeconds = 0, [switch]$IgnoreTimeouts)
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $key = [guid]::NewGuid().ToString('N')
+    $safe = ConvertTo-ReparoSafeFileName $Section
+    $base = Join-Path $LogRoot ($script:ReparoLogBaseName + '_' + $safe + '_' + $key)
+    $commandScriptPath = $base + '.command.ps1'
+    $skipRequestPath = $base + '.skip'
+    $commandOutputPath = $base + '.stdout.raw'
+    $errorPath = $base + '.stderr.raw'
+    $receipt = [ordered]@{
+        schema = 'reparo-command/1'; state = 'planned'; id = $key; section = $Section; command = $Command
+        argv = @($ShellPath, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $commandScriptPath)
+        pid = $null; created_utc = $null; started_utc = [DateTime]::UtcNow.ToString('o'); ended_utc = $null
+        exit_code = $null; launch_error = $null; launch_code = $null; capture_health = 'complete'; capture_errors = @()
+        stdout = $commandOutputPath; stderr = $errorPath; decoder = 'UTF-8 host stream; raw bytes retained'
     }
-    else {
-        Write-ReparoLog ("[CMD-START] {0} | timeout={1}s" -f $Section, $TimeoutSeconds)
-    }
-    Write-ReparoDebug ("Launching {0} via {1} with arguments: {2}" -f $Section, $ShellPath, $arguments)
-
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $ShellPath
-    $psi.Arguments = $arguments
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $psi
-    $null = $process.Start()
-    # Drain both pipes asynchronously, including errors before the generated try/catch.
-    $standardOutput = $process.StandardOutput.ReadToEndAsync()
-    $standardError = $process.StandardError.ReadToEndAsync()
-    Write-ReparoDebug ("Started PID {0} for section {1}" -f $process.Id, $Section)
-
-    $timedOut = $false
-    $skipRequested = $false
-    $timeoutDeferred = $false
-    if (Test-ReparoInteractiveSkip) {
-        $skipHint = if ($safeSkipSupported) { 'Esc requests skip at the next safe boundary; it never kills an active installer.' } else { 'Esc cannot cancel this backend safely; a request waits for completion without killing its worker.' }
-        Write-Info $skipHint
-    }
-    $output = New-Object System.Collections.Generic.List[string]
-    $loggedLineCount = 0
-    while (-not $process.HasExited) {
-        Start-Sleep -Milliseconds 500
-
-        Sync-ReparoCommandOutputLog -Path $commandOutputPath -LineCount ([ref]$loggedLineCount) -Output $output -Section $Section
-
-        $skipKey = Read-ReparoSkipKey
-        if (-not $skipRequested -and $skipKey) {
+    $output = New-Object 'System.Collections.Generic.List[string]'
+    $process = $null; $exitCode = $null; $skipRequested = $false; $skipIntent = $false; $deadlineReported = $false; $heartbeatAt = [DateTime]::UtcNow.AddSeconds(60)
+    # Pipe readers never write the display log. A failed spool keeps draining so
+    # neither a full disk nor a contended renderer can deadlock the child.
+    if (-not ('ReparoRawCaptureV1448' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Threading.Tasks;
+public sealed class ReparoRawCaptureV1448 {
+    public string Error;
+    public readonly MemoryStream Retained = new MemoryStream();
+    public Task Completion;
+    public static ReparoRawCaptureV1448 Start(Stream input, string path) {
+        var capture = new ReparoRawCaptureV1448();
+        capture.Completion = Task.Run(() => {
+            FileStream file = null;
+            try { file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read); }
+            catch (Exception e) { capture.Error = e.Message; }
+            var buffer = new byte[8192];
             try {
-                Set-Content -LiteralPath $skipRequestPath -Value 'skip requested by interactive operator' -Encoding UTF8 -ErrorAction Stop
-                $skipRequested = $true
-            }
-            catch {
-                Write-ReparoLog ("[WARN] Cannot deliver skip request for {0}; continuing to wait safely: {1}" -f $Section, $_.Exception.Message)
-            }
-            $skipMessage = if (-not $skipRequested) { 'Skip request could not be delivered; still waiting safely.' } elseif ($safeSkipSupported) { 'Skip requested; waiting for the next supported safe boundary. No process was killed.' } else { 'Skip unavailable during this backend operation; waiting for completion. No process was killed.' }
-            Write-Info $skipMessage
-            Write-ReparoLog ("[SKIP-REQUEST] {0}: {1}" -f $Section, $skipMessage)
-        }
-
-        if ([DateTime]::UtcNow -ge $nextHeartbeat) {
-            Write-ReparoLog ("[CMD-WAIT] {0} still running elapsed={1} pid={2}" -f $Section, $stopwatch.Elapsed, $process.Id)
-            if ($Section -eq 'WindowsUpdate') {
-                Write-Info ("WindowsUpdate is still active (elapsed {0}). Windows Update can be quiet while it scans, downloads, or stages an install." -f $stopwatch.Elapsed)
-            }
-            $nextHeartbeat = [DateTime]::UtcNow.AddSeconds($heartbeatSeconds)
-        }
-
-        if ($timeoutEnabled -and $stopwatch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
-            if ($skipRequested -or $Section -eq 'WindowsUpdate' -or $Section -like 'WslApt:*') {
-                if (-not $timeoutDeferred) {
-                    if (-not $skipRequested) {
-                        try {
-                            Set-Content -LiteralPath $skipRequestPath -Value 'Maintenance deadline reached; safe boundary requested' -Encoding UTF8 -ErrorAction Stop
-                            $skipRequested = $true
-                        }
-                        catch { Write-ReparoLog '[WARN] Could not deliver safe-boundary request; still waiting without killing servicing.' }
+                int n;
+                while ((n = input.Read(buffer, 0, buffer.Length)) > 0) {
+                    if (capture.Retained.Length < 16 * 1024 * 1024)
+                        capture.Retained.Write(buffer, 0, Math.Min(n, 16 * 1024 * 1024 - (int)capture.Retained.Length));
+                    if (file != null) {
+                        try { file.Write(buffer, 0, n); }
+                        catch (Exception e) { capture.Error = e.Message; file.Dispose(); file = null; }
                     }
-                    $timeoutDeferred = $true
-                    Write-ReparoLog ("[SAFE-WAIT] {0} deadline reached; not killing an installer or abandoning Windows servicing. Waiting for completion/safe boundary." -f $Section)
-                    Write-Info 'Deadline reached; safe cancellation is pending. This is not a hard upper bound on installer completion.'
                 }
-                continue
+                if (file != null) file.Flush(true);
+            } catch (Exception e) { capture.Error = e.Message; }
+            finally { if (file != null) file.Dispose(); }
+        });
+        return capture;
+    }
+}
+'@
+    }
+    $scriptText = @(
+        '$ErrorActionPreference = ''Continue'''
+        '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)'
+        '$OutputEncoding = [Console]::OutputEncoding'
+        'function Write-ReparoChildOutput { param($Value) [Console]::Out.WriteLine([string]$Value) }'
+        ('$skipRequestPath = {0}' -f (ConvertTo-ReparoPowerShellLiteral $skipRequestPath))
+        'function Stop-ReparoAtSafeBoundary { param($Boundary) if (Test-Path -LiteralPath $skipRequestPath) { Write-ReparoChildOutput ("REPARO-STEP-SKIPPED safe boundary: {0}; remaining work not started" -f $Boundary); exit 130 } }'
+        'try {'
+        '  $global:LASTEXITCODE = 0'
+        '  & {'
+        '    Stop-ReparoAtSafeBoundary ''before starting the section'''
+        $Command
+        '  } | ForEach-Object { Write-ReparoChildOutput $_ }'
+        '  exit $global:LASTEXITCODE'
+        '} catch {'
+        '  $failure = $_; $exception = $_.Exception'
+        '  while ($null -ne $exception) { [Console]::Error.WriteLine(("[WORKER-ERROR] {0}: {1} (HRESULT 0x{2:X8})" -f $exception.GetType().FullName, $exception.Message, $exception.HResult)); $exception = $exception.InnerException }'
+        '  [Console]::Error.WriteLine(("[WORKER-ERROR-ID] {0}" -f $failure.FullyQualifiedErrorId))'
+        '  [Console]::Error.WriteLine($failure.InvocationInfo.PositionMessage)'
+        '  [Console]::Error.WriteLine($failure.ScriptStackTrace)'
+        '  exit 1'
+        '}'
+    )
+    try {
+        Set-Content -LiteralPath $commandScriptPath -Value $scriptText -Encoding UTF8 -ErrorAction Stop
+        $psi = New-Object Diagnostics.ProcessStartInfo
+        $psi.FileName = $ShellPath
+        $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $commandScriptPath + '"'
+        $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+        if (Get-Command Save-ReparoReceipt -ErrorAction SilentlyContinue) { [void](Save-ReparoReceipt -Name ('planned-' + $key) -Value $receipt) }
+        $process = New-Object Diagnostics.Process
+        $process.StartInfo = $psi
+        if (-not $process.Start()) { throw 'Child process did not start.' }
+        # Keep the native handle alive even if the process exits before the first poll.
+        $handle = $process.Handle
+        $receipt.pid = $process.Id; $receipt.created_utc = $process.StartTime.ToUniversalTime().ToString('o')
+        $receipt.state = 'running'
+        if (Get-Command Save-ReparoReceipt -ErrorAction SilentlyContinue) { [void](Save-ReparoReceipt -Name ('started-' + $key) -Value $receipt) }
+
+        $stdout = [ReparoRawCaptureV1448]::Start($process.StandardOutput.BaseStream, $commandOutputPath)
+        $stderr = [ReparoRawCaptureV1448]::Start($process.StandardError.BaseStream, $errorPath)
+        while (-not $process.WaitForExit(250)) {
+            if ([DateTime]::UtcNow -ge $heartbeatAt) {
+                try { if ($Section -eq 'WindowsUpdate') { Write-Info ("WindowsUpdate is still active (elapsed {0}). Windows Update can be quiet while it scans, downloads, or stages an install." -f $watch.Elapsed) } else { Write-Info ("{0} remains active; elapsed {1}. Waiting without killing its worker." -f $Section,$watch.Elapsed) } }
+                catch { $receipt.capture_errors += $_.Exception.Message }
+                $heartbeatAt = [DateTime]::UtcNow.AddSeconds(60)
             }
-            $timedOut = $true
-            Stop-ReparoProcessTree -ProcessId $process.Id
-            break
+            if (-not $skipRequested -and (Read-ReparoSkipKey)) { $skipIntent = $true }
+            if (-not $IgnoreTimeouts -and $TimeoutSeconds -gt 0 -and $watch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+                $skipIntent = $true
+                if (-not $deadlineReported) {
+                    $deadlineReported = $true
+                    try { Write-Info 'Deadline reached; waiting for completion or a supported safe boundary. No installer is killed.' } catch { $receipt.capture_errors += $_.Exception.Message }
+                }
+            }
+            if ($skipIntent -and -not (Test-Path -LiteralPath $skipRequestPath)) {
+                try { Set-Content -LiteralPath $skipRequestPath -Value 'safe boundary requested' -ErrorAction Stop; $skipRequested = $true }
+                catch { $receipt.capture_errors += $_.Exception.Message }
+            }
         }
-    }
-
-    $process.WaitForExit()
-    foreach ($stream in @(
-        @{ Name='STDOUT'; Text=$standardOutput.GetAwaiter().GetResult() },
-        @{ Name='STDERR'; Text=$standardError.GetAwaiter().GetResult() }
-    )) {
-        foreach ($line in ($stream.Text -split '\r?\n')) {
-            if (-not [string]::IsNullOrWhiteSpace($line)) {
-                $capturedLine = if ($stream.Name -eq 'STDERR') { "[CHILD-STDERR] $line" } else { $line }
-                Add-Content -LiteralPath $commandOutputPath -Value $capturedLine -Encoding UTF8
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+        $receipt.exit_code = $exitCode
+        $receipt.state = 'terminal'
+        $receipt.ended_utc = [DateTime]::UtcNow.ToString('o')
+        # Preserve the actual exit BEFORE draining/rendering/publishing can fail.
+        if (Get-Command Save-ReparoReceipt -ErrorAction SilentlyContinue) { [void](Save-ReparoReceipt -Name ('command-' + $key) -Value $receipt) }
+        foreach ($capture in @(@{Value=$stdout; Path=$commandOutputPath; Label='STDOUT'}, @{Value=$stderr; Path=$errorPath; Label='STDERR'})) {
+            $capture.Value.Completion.GetAwaiter().GetResult()
+            if ($capture.Value.Error) { $receipt.capture_errors += $capture.Value.Error }
+            $bytes = if (-not $capture.Value.Error) { [IO.File]::ReadAllBytes($capture.Path) } else { $capture.Value.Retained.ToArray() }
+            $text = ConvertFrom-ReparoCapturedBytes -Bytes $bytes
+            foreach ($line in ($text -split '\r?\n')) {
+                if (-not [string]::IsNullOrWhiteSpace($line)) {
+                    $display = if ($capture.Label -eq 'STDERR') { '[CHILD-STDERR] ' + $line } else { $line }
+                    [void]$output.Add($display)
+                }
             }
         }
     }
-    Sync-ReparoCommandOutputLog -Path $commandOutputPath -LineCount ([ref]$loggedLineCount) -Output $output -Section $Section
-    $stopwatch.Stop()
-    Remove-Item -LiteralPath $skipRequestPath -Force -ErrorAction SilentlyContinue
-
-    if ($timedOut) {
-        Write-ReparoLog ("[CMD-TIMEOUT] {0} timed out after {1}s elapsed={2}" -f $Section, $TimeoutSeconds, $stopwatch.Elapsed)
-        Write-ReparoLog ("[DIAGNOSTIC] Retained {0} artifacts after timeout: command={1}; output={2}" -f $Section, $commandScriptPath, $commandOutputPath)
-        Write-ReparoEventLog -EventId 1201 -EntryType Warning -Message @"
-Reparo command timed out.
-
-Computer: $env:COMPUTERNAME
-PID: $PID
-Section: $Section
-TimeoutSeconds: $TimeoutSeconds
-Elapsed: $($stopwatch.Elapsed)
-CommandOutputLog: $commandOutputPath
-Log: $script:ReparoLogPath
-"@
-        return [pscustomobject]@{
-            TimedOut = $true
-            ExitCode = 124
-            Output   = @($output.ToArray()) + @("[TIMEOUT] $Section exceeded ${TimeoutSeconds}s")
-            Elapsed  = $stopwatch.Elapsed
+    catch {
+        $receipt.launch_error = $_.Exception.Message
+        $exception = $_.Exception
+        while ($exception) {
+            if ($exception -is [ComponentModel.Win32Exception]) { $receipt.launch_code = @{ kind='win32'; value=$exception.NativeErrorCode; hresult=$exception.HResult }; break }
+            $exception = $exception.InnerException
         }
-    }
 
-    Write-ReparoLog ("[CMD-END] {0} exit={1} elapsed={2}" -f $Section, $process.ExitCode, $stopwatch.Elapsed)
-    Write-ReparoDebug ("{0} completed with exit={1} elapsed={2} outputLines={3}" -f $Section, $process.ExitCode, $stopwatch.Elapsed, $output.Count)
-    # Preserve exact child-host behavior for debug and failed-section forensics.
-    if ($script:ReparoDebug -or $process.ExitCode -ne 0) {
-        Write-ReparoLog ("[DIAGNOSTIC] Retained {0} artifacts: command={1}; output={2}" -f $Section, $commandScriptPath, $commandOutputPath)
+        [void]$output.Add('[LAUNCH/CAPTURE-ERROR] ' + $_.Exception.Message)
     }
+    finally {
+        $receipt.ended_utc = [DateTime]::UtcNow.ToString('o')
+        if ($receipt.capture_errors.Count -or $receipt.launch_error) { $receipt.capture_health = 'degraded' }
+        if (Get-Command Save-ReparoReceipt -ErrorAction SilentlyContinue) {
+            $ledger = Get-ReparoOutcomeLedger
+            $ledger.commands[$key] = $receipt
+            Add-ReparoOutcome -Id ('command-' + $key) -Backend $Section -Package $Section -Phase command -Outcome $(if ($null -eq $exitCode) { 'unknown' } elseif ($exitCode -eq 0) { 'command-success' } elseif ($exitCode -eq 130) { 'blocked' } else { 'failed' }) -Reason $(if ($null -eq $exitCode) { 'Native child exit unavailable; inspect launch/capture receipt.' } else { 'Child host exited ' + $exitCode + '; package effects recorded separately.' }) -ExitCode $exitCode -Evidence @([IO.Path]::GetFileName($commandOutputPath),[IO.Path]::GetFileName($errorPath))
 
-    else {
-        Remove-Item -LiteralPath $commandOutputPath, $commandScriptPath -Force -ErrorAction SilentlyContinue
+            [void](Save-ReparoReceipt -Name ('command-' + $key) -Value $receipt)
+            if ($receipt.capture_health -ne 'complete') {
+                Add-ReparoOutcome -Id $key -Backend $Section -Package $Section -Phase capture -Outcome unknown -Reason (($receipt.capture_errors + @($receipt.launch_error)) -join '; ') -ExitCode $exitCode -CaptureHealth $receipt.capture_health -Evidence @($commandOutputPath,$errorPath)
+            }
+        }
+        if ($process) { $process.Dispose() }
+        Remove-Item -LiteralPath $skipRequestPath -Force -ErrorAction SilentlyContinue
     }
+    foreach ($line in $output) {
+        try { Write-Host $line; Write-ReparoLog ("[CMD-OUT] {0}: {1}" -f $Section, $line) }
+        catch { $receipt.capture_health = 'degraded'; $receipt.capture_errors += $_.Exception.Message }
+    }
+    try { Write-ReparoLog ("[CMD-END] {0} exit={1} elapsed={2}" -f $Section, $exitCode, $watch.Elapsed) } catch { $receipt.capture_health = 'degraded'; $receipt.capture_errors += $_.Exception.Message }
+    if (Get-Command Save-ReparoReceipt -ErrorAction SilentlyContinue) { [void](Save-ReparoReceipt -Name ('command-' + $key) -Value $receipt) }
+    if ($receipt.capture_health -ne 'complete' -and (Get-Command Add-ReparoOutcome -ErrorAction SilentlyContinue)) {
+        Add-ReparoOutcome -Id ('capture-' + $key) -Backend $Section -Package $Section -Phase capture -Outcome unknown -Reason ($receipt.capture_errors -join '; ') -ExitCode $exitCode -CaptureHealth degraded -Evidence @([IO.Path]::GetFileName($commandOutputPath),[IO.Path]::GetFileName($errorPath))
+    }
+    return [pscustomobject]@{ TimedOut=$false; ExitCode=$exitCode; Output=$output.ToArray(); Elapsed=$watch.Elapsed; SkipRequested=$skipRequested; CaptureHealth=$receipt.capture_health; Receipt=$receipt }
+}
 
-    [pscustomobject]@{
-        TimedOut = $false
-        ExitCode = $process.ExitCode
-        Output   = $output.ToArray()
-        Elapsed  = $stopwatch.Elapsed
-        SkipRequested = $skipRequested
-    }
+function ConvertFrom-ReparoCapturedBytes {
+    param([byte[]]$Bytes)
+    if ($null -eq $Bytes -or $Bytes.Count -eq 0) { return '' }
+    if ($Bytes.Length -ge 2 -and $Bytes[0] -eq 255 -and $Bytes[1] -eq 254) { return [Text.Encoding]::Unicode.GetString($Bytes,2,$Bytes.Length-2) }
+    if ($Bytes.Length -ge 2 -and $Bytes[0] -eq 254 -and $Bytes[1] -eq 255) { return [Text.Encoding]::BigEndianUnicode.GetString($Bytes,2,$Bytes.Length-2) }
+    $pairs = [Math]::Floor([Math]::Min(1024,$Bytes.Length)/2)
+    $oddZeros = 0
+    for ($i=0; $i -lt $pairs; $i++) { if ($Bytes[$i*2+1] -eq 0) { $oddZeros++ } }
+    if ($pairs -ge 2 -and $oddZeros -gt $pairs/2) { return [Text.Encoding]::Unicode.GetString($Bytes) }
+    # WSL can concatenate UTF-16 ASCII fragments with UTF-8 native output. Only
+    # normalize ASCII/NUL pairs in the display; the retained raw file is untouched.
+    $text = [Text.Encoding]::UTF8.GetString($Bytes)
+    return ($text -replace '(?<=[\x01-\x7F])\x00', '')
 }
 
 function Test-ReparoIgnorableCommandOutputLine {
@@ -6983,13 +7305,14 @@ function Start-ReparoProcessWithExplorerToken {
         [Parameter(Mandatory)][string]$Arguments
     )
 
-    if (-not ('ReparoExplorerTokenLauncher' -as [type])) {
+    if (-not ('ReparoExplorerTokenLauncherV1448' -as [type])) {
         Add-Type -TypeDefinition @'
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 
-public static class ReparoExplorerTokenLauncher
+public static class ReparoExplorerTokenLauncherV1448
 {
     const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
     const uint TOKEN_ASSIGN_PRIMARY = 0x0001;
@@ -7012,164 +7335,198 @@ public static class ReparoExplorerTokenLauncher
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr handle);
     [DllImport("kernel32.dll")] static extern uint WTSGetActiveConsoleSessionId();
 
-    public static int Start(string applicationPath, string arguments, int sessionId)
+    [DllImport("advapi32.dll", SetLastError = true)] static extern bool GetTokenInformation(IntPtr token, int type, IntPtr buffer, int length, out int needed);
+    static int TokenInt(IntPtr token, int type) {
+        IntPtr buffer = Marshal.AllocHGlobal(4);
+        try { int needed; if (!GetTokenInformation(token, type, buffer, 4, out needed)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()); return Marshal.ReadInt32(buffer); }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+    static string Integrity(IntPtr token) {
+        int needed; GetTokenInformation(token, 25, IntPtr.Zero, 0, out needed);
+        IntPtr buffer = Marshal.AllocHGlobal(needed);
+        try { if (!GetTokenInformation(token, 25, buffer, needed, out needed)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()); return new SecurityIdentifier(Marshal.ReadIntPtr(buffer)).Value; }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+    public static bool IdentityMatches(string expectedSid, int expectedSession, string sid, int session, int elevated, string integrity) {
+        return !String.IsNullOrEmpty(expectedSid) && expectedSession > 0 && expectedSid == sid && expectedSession == session && elevated == 0 && integrity == "S-1-16-8192";
+    }
+    [StructLayout(LayoutKind.Sequential)] struct FILETIME { public uint Low; public uint High; }
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetProcessTimes(IntPtr process, out FILETIME created, out FILETIME exited, out FILETIME kernel, out FILETIME user);
+    public sealed class LaunchReceipt { public int Id; public string CreatedUtc; }
+    public static bool CurrentIdentityMatches(string expectedSid, int expectedSession) {
+        using (var identity = WindowsIdentity.GetCurrent()) { return identity.User != null && IdentityMatches(expectedSid, expectedSession, identity.User.Value, TokenInt(identity.Token, 12), TokenInt(identity.Token, 20), Integrity(identity.Token)); }
+    }
+    public static LaunchReceipt Start(string applicationPath, string arguments, int sessionId)
     {
+        if (sessionId <= 0) throw new InvalidOperationException("User workers require a verified same-user interactive session; SYSTEM/cross-session launch is unsupported.");
+        string expectedSid = WindowsIdentity.GetCurrent().User.Value;
         Process explorer = null;
-        var activeSessionId = unchecked((int)WTSGetActiveConsoleSessionId());
-        foreach (var process in Process.GetProcessesByName("explorer")) { if (process.SessionId == sessionId) { explorer = process; break; } }
-        if (explorer == null) foreach (var process in Process.GetProcessesByName("explorer")) { if (process.SessionId == activeSessionId) { explorer = process; break; } }
-        if (explorer == null) foreach (var process in Process.GetProcessesByName("explorer")) { explorer = process; break; }
-        if (explorer == null) throw new InvalidOperationException("No Explorer process exists in the active Reparo session.");
+        foreach (var candidate in Process.GetProcessesByName("explorer")) {
+            if (candidate.SessionId != sessionId) { candidate.Dispose(); continue; }
+            if (explorer != null) { candidate.Dispose(); explorer.Dispose(); throw new InvalidOperationException("Ambiguous Explorer identity in intended session; worker blocked."); }
+            explorer = candidate;
+        }
+        if (explorer == null) throw new InvalidOperationException("No Explorer in the intended session; worker blocked.");
         IntPtr processHandle = IntPtr.Zero, token = IntPtr.Zero, primaryToken = IntPtr.Zero;
         try {
-            processHandle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, explorer.Id);
+            // Process.Handle retains the exact process instance, preventing PID reuse.
+            processHandle = explorer.Handle;
             if (processHandle == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Unable to open the Explorer process.");
             if (!OpenProcessToken(processHandle, TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY, out token)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Unable to open the Explorer token.");
+            using (var identity = new WindowsIdentity(token)) {
+                if (identity.User == null || !IdentityMatches(expectedSid, sessionId, identity.User.Value, TokenInt(token, 12), TokenInt(token, 20), Integrity(token)))
+                    throw new InvalidOperationException("Explorer SID/session/integrity/elevation mismatch; worker blocked.");
+            }
             if (!DuplicateTokenEx(token, TOKEN_ALL_ACCESS, IntPtr.Zero, SecurityImpersonation, TokenPrimary, out primaryToken)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Unable to duplicate the Explorer token.");
             var startupInfo = new STARTUPINFO(); startupInfo.cb = Marshal.SizeOf(startupInfo);
             PROCESS_INFORMATION processInformation;
             var commandLine = "\"" + applicationPath + "\" " + arguments;
-            if (!CreateProcessWithTokenW(primaryToken, LOGON_WITH_PROFILE, applicationPath, commandLine, 0, IntPtr.Zero, null, ref startupInfo, out processInformation)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Unable to start the Explorer-token worker.");
+            if (!CreateProcessWithTokenW(primaryToken, LOGON_WITH_PROFILE, applicationPath, commandLine, 0x08000000, IntPtr.Zero, null, ref startupInfo, out processInformation)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Unable to start the Explorer-token worker.");
+            var launched = new LaunchReceipt(); launched.Id = processInformation.dwProcessId;
+            FILETIME created, exited, kernel, user;
+            if (GetProcessTimes(processInformation.hProcess, out created, out exited, out kernel, out user))
+                launched.CreatedUtc = DateTime.FromFileTimeUtc(((long)created.High << 32) | created.Low).ToString("o");
             CloseHandle(processInformation.hThread); CloseHandle(processInformation.hProcess);
-            return processInformation.dwProcessId;
+            return launched;
         }
-        finally { if (primaryToken != IntPtr.Zero) CloseHandle(primaryToken); if (token != IntPtr.Zero) CloseHandle(token); if (processHandle != IntPtr.Zero) CloseHandle(processHandle); }
+        finally { if (primaryToken != IntPtr.Zero) CloseHandle(primaryToken); if (token != IntPtr.Zero) CloseHandle(token); if (explorer != null) explorer.Dispose(); }
     }
 }
 '@
     }
 
     $sessionId = (Get-Process -Id $PID -ErrorAction Stop).SessionId
-    return [ReparoExplorerTokenLauncher]::Start($ApplicationPath, $Arguments, $sessionId)
+    return [ReparoExplorerTokenLauncherV1448]::Start($ApplicationPath, $Arguments, $sessionId)
+}
+
+function New-ReparoWingetWorkerScript {
+    param([string]$Id, [string]$Source, [string]$WorkerId, [string]$StatusPath,
+          [string]$FallbackPath, [string]$WorkerRoot, [int]$ParentId = 0,
+          [string]$ParentCreatedUtc, [int]$WaitSeconds = 3600)
+    $expectedSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $expectedSession = (Get-Process -Id $PID -ErrorAction Stop).SessionId
+    $definitions = foreach ($name in @('ConvertTo-ReparoSafeFileName','ConvertTo-ReparoPowerShellLiteral',
+        'Get-ReparoOutcomeLedger','Get-ReparoOutcomeId','Write-ReparoAtomicJson','Save-ReparoReceipt',
+        'Add-ReparoOutcome','ConvertFrom-ReparoCapturedBytes','Invoke-ReparoTimedCommand')) {
+        (Get-Command $name -CommandType Function -ErrorAction Stop).ScriptBlock.ToString().Insert(0, "function $name {") + "`n}"
+    }
+    $command = '& winget upgrade --id ' + (ConvertTo-ReparoPowerShellLiteral $Id) + ' --exact --source ' + (ConvertTo-ReparoPowerShellLiteral $Source) + ' --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force; exit $LASTEXITCODE'
+    $launcher = (Get-Command Start-ReparoProcessWithExplorerToken -CommandType Function).ScriptBlock.Ast
+    $identityType = $launcher.Find({param($node) $node -is [Management.Automation.Language.StringConstantExpressionAst] -and $node.Value -like '*public static class ReparoExplorerTokenLauncherV1448*'}, $true).Value
+    $settings = @{
+        Id=$WorkerId; Status=$StatusPath; Fallback=$FallbackPath; Root=$WorkerRoot
+        ParentId=$ParentId; ParentCreated=$ParentCreatedUtc; WaitSeconds=$WaitSeconds
+        ExpectedSid=$expectedSid; ExpectedSession=$expectedSession; Command=$command
+    } | ConvertTo-Json -Compress
+    $template = @'
+$ErrorActionPreference = 'Stop'
+__DEFINITIONS__
+$settings = __SETTINGS__ | ConvertFrom-Json
+Add-Type -TypeDefinition __IDENTITY_TYPE__
+$LogRoot = Split-Path -Parent $settings.Root
+$script:ReparoLogBaseName = [IO.Path]::GetFileName($settings.Root)
+$script:ReparoVersion = __VERSION__
+$script:ReparoSourcePath = $null
+function Read-ReparoSkipKey { return $false }
+function Write-Info { param($Message) }
+function Write-ReparoLog { param($Message) }
+function Write-Host { param($Object) }
+$status = [ordered]@{ schema='reparo-worker/1'; worker_id=$settings.Id; state='terminal'; ExitCode=$null; reason='Worker did not reach package execution; cause unknown'; capture_health='complete'; pid=$PID; created_utc=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o'); command=$settings.Command }
+try {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    if (-not [ReparoExplorerTokenLauncherV1448]::CurrentIdentityMatches($settings.ExpectedSid, $settings.ExpectedSession)) { throw 'Worker SID/session/integrity/elevation mismatch; no package operation started.' }
+    $status['identity'] = @{ sid=$identity.User.Value; session=(Get-Process -Id $PID).SessionId; integrity='S-1-16-8192'; elevated=$false; verified=$true }
+    $deadline = [DateTime]::UtcNow.AddSeconds($settings.WaitSeconds)
+    if ($settings.ParentId -gt 0) {
+        while ($true) {
+            $parent = Get-Process -Id $settings.ParentId -ErrorAction SilentlyContinue
+            if (-not $parent) { break }
+            if (-not $settings.ParentCreated) { throw 'Parent creation identity unavailable; package operation not started.' }
+            if ($parent.StartTime.ToUniversalTime().Ticks -ne ([datetime]$settings.ParentCreated).ToUniversalTime().Ticks) { break }
+            if ([DateTime]::UtcNow -ge $deadline) { throw 'Parent wait deadline reached; package operation not started.' }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    $shell = (Get-Process -Id $PID).Path
+    $result = Invoke-ReparoTimedCommand -ShellPath $shell -Command $settings.Command -Section WingetWorker -IgnoreTimeouts
+    $status.ExitCode = $result.ExitCode
+    $status.capture_health = $result.CaptureHealth
+    $status.reason = if ($null -eq $result.ExitCode) { 'Package command exit unavailable; inspect command receipt.' } else { 'Package command exited ' + $result.ExitCode + '; package version delta unverified.' }
+    $status['receipt'] = $result.Receipt
+} catch { $status.reason = $_.Exception.Message }
+finally {
+    $status['ended_utc'] = [DateTime]::UtcNow.ToString('o')
+    try { [void](Write-ReparoAtomicJson -Path $settings.Status -Value $status) }
+    catch {
+        $status.capture_health = 'degraded'
+        try { [void](Write-ReparoAtomicJson -Path $settings.Fallback -Value $status) }
+        catch { [Console]::Error.WriteLine('Worker terminal receipt unavailable: ' + $_.Exception.Message) }
+    }
+}
+'@
+    return $template.Replace('__IDENTITY_TYPE__', (ConvertTo-ReparoPowerShellLiteral $identityType)).Replace('__DEFINITIONS__', ($definitions -join "`n")).Replace('__SETTINGS__', (ConvertTo-ReparoPowerShellLiteral $settings)).Replace('__VERSION__', (ConvertTo-ReparoPowerShellLiteral $script:ReparoVersion))
+}
+
+function Start-ReparoWingetWorker {
+    param([string]$Id, [string]$Source = 'winget', [int]$ParentId = 0, [int]$WaitSeconds = 3600)
+    if ($Id -eq 'Microsoft.PowerShell') {
+        Add-ReparoOutcome -Backend winget -Package $Id -Phase worker -Outcome blocked -Reason 'PowerShell owner/channel/technology requires refreshed registration evidence; generic deferred upgrade not started. Preserve the active runtime and LTS channel.'
+        throw 'PowerShell deferred upgrade blocked: owner/channel/technology is unverified; no automatic reinstall or migration.'
+    }
+    if ([string]::IsNullOrWhiteSpace($Source)) { $Source = 'winget' }
+    $workerId = Get-ReparoOutcomeId "winget|$Id|current-context|worker"
+    $ledger = Get-ReparoOutcomeLedger
+    if ($ledger.workers.ContainsKey($workerId)) { throw 'This package already has a worker receipt in the run; reconcile it instead of launching again.' }
+    $root = Join-Path $LogRoot ($ledger.run_id + '_worker-' + $workerId)
+    $fallbackRoot = Join-Path ([IO.Path]::GetTempPath()) ('Reparo-worker-' + [guid]::NewGuid().ToString('N'))
+    [void][IO.Directory]::CreateDirectory($fallbackRoot)
+    $statusPath = $root + '.status.json'
+    $fallbackPath = Join-Path $fallbackRoot 'status.json'
+    $created = if ($ParentId) { (Get-Process -Id $ParentId -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o') } else { '' }
+    Add-ReparoOutcome -Id $workerId -Backend winget -Package $Id -Phase worker -Outcome pending -Reason 'Await terminal worker receipt; cause unknown.' -Evidence @([IO.Path]::GetFileName($statusPath))
+    $worker = @{ id=$workerId; package=$Id; status_path=[IO.Path]::GetFileName($statusPath); fallback_path=$fallbackPath; pid=$null; created_utc=$null; expected_sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; expected_session=(Get-Process -Id $PID).SessionId }
+    $ledger.workers[$workerId] = $worker
+    [void](Save-ReparoReceipt -Name ('worker-' + $workerId) -Value $worker)
+    try {
+        $shell = Resolve-ReparoCommand -Name powershell
+        if (-not $shell) { throw 'Windows PowerShell unavailable; worker not started.' }
+        $text = New-ReparoWingetWorkerScript -Id $Id -Source $Source -WorkerId $workerId -StatusPath $statusPath -FallbackPath $fallbackPath -WorkerRoot $root -ParentId $ParentId -ParentCreatedUtc $created -WaitSeconds $WaitSeconds
+        $scriptPath = $root + '.ps1'
+        Set-Content -LiteralPath $scriptPath -Value $text -Encoding UTF8 -ErrorAction Stop
+        $launched = Start-ReparoProcessWithExplorerToken -ApplicationPath $shell.Source -Arguments ('-NoProfile -ExecutionPolicy Bypass -File "' + $scriptPath + '"')
+        $worker.pid = $launched.Id; $worker.created_utc = $launched.CreatedUtc
+        [void](Save-ReparoReceipt -Name ('worker-' + $workerId) -Value $worker)
+    }
+    catch {
+        $ledger.workers.Remove($workerId)
+        Add-ReparoOutcome -Id $workerId -Backend winget -Package $Id -Phase worker -Outcome blocked -Reason ('Worker launch blocked; cause unknown: ' + $_.Exception.Message)
+        throw
+    }
+    return [pscustomobject]@{ OutputPath=$root+'.stdout.raw'; StatusPath=$statusPath; FallbackPath=$fallbackPath; Worker=$worker }
 }
 
 function Invoke-ReparoNonElevatedWingetUpdate {
-    param(
-        [Parameter(Mandatory)][string]$Id,
-        [string]$Source = 'winget',
-        [ValidateSet('upgrade', 'install')][string]$Action = 'upgrade',
-        [string]$InstallerOverride,
-        [int]$TimeoutSeconds = 0
-    )
-
-    if (-not $script:ReparoIsWindows) { throw 'Non-elevated Winget retry is supported on Windows only.' }
-    $powershell = Resolve-ReparoCommand -Name 'powershell'
-    if (-not $powershell) { throw 'Windows PowerShell is unavailable for the non-elevated Winget worker.' }
-
-    if ([string]::IsNullOrWhiteSpace($Source)) { $Source = 'winget' }
-    $safeId = ConvertTo-ReparoSafeFileName -Value $Id
-    $workerRoot = Join-Path $LogRoot ("{0}_WingetNonElevated_{1}_{2}" -f $script:ReparoLogBaseName, $safeId, [guid]::NewGuid().ToString('N'))
-    $workerScriptPath = "$workerRoot.ps1"
-    $workerOutputPath = "$workerRoot.out.log"
-    $workerStatusPath = "$workerRoot.status.json"
-    $idLiteral = ConvertTo-ReparoPowerShellLiteral -Value $Id
-    $sourceLiteral = ConvertTo-ReparoPowerShellLiteral -Value $Source
-    $actionLiteral = ConvertTo-ReparoPowerShellLiteral -Value $Action
-    $overrideLiteral = ConvertTo-ReparoPowerShellLiteral -Value $InstallerOverride
-    $outputLiteral = ConvertTo-ReparoPowerShellLiteral -Value $workerOutputPath
-    $statusLiteral = ConvertTo-ReparoPowerShellLiteral -Value $workerStatusPath
-    $workerScript = @"
-`$ErrorActionPreference = 'Continue'
-`$outputPath = $outputLiteral
-`$statusPath = $statusLiteral
-`$exitCode = 1
-try {
-    `$wingetArguments = @($actionLiteral, '--id', $idLiteral, '--exact', '--source', $sourceLiteral, '--include-unknown', '--accept-source-agreements', '--accept-package-agreements', '--disable-interactivity', '--silent', '--force')
-    if (-not [string]::IsNullOrWhiteSpace($overrideLiteral)) { `$wingetArguments += @('--override', $overrideLiteral) }
-    & winget @wingetArguments 2>&1 | ForEach-Object { Add-Content -LiteralPath `$outputPath -Value ([string]`$_) -Encoding UTF8 }
-    `$exitCode = `$LASTEXITCODE
-}
-catch {
-    Add-Content -LiteralPath `$outputPath -Value (`$_ | Out-String) -Encoding UTF8
-}
-[pscustomobject]@{ ExitCode = `$exitCode } | ConvertTo-Json -Compress | Set-Content -LiteralPath `$statusPath -Encoding UTF8
-"@
-    Set-Content -LiteralPath $workerScriptPath -Value $workerScript -Encoding UTF8
-
-    try {
-        [void](Start-ReparoProcessWithExplorerToken -ApplicationPath $powershell.Source -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$workerScriptPath`"")
-    }
-    catch {
-        throw "Could not start an unelevated Winget worker with the logged-in Explorer token: $($_.Exception.Message)"
-    }
-
-    Write-Info "Started non-elevated Winget worker for $Id; tailing its status."
-    Write-ReparoLog "[WINGET-NON-ELEVATED] Started Explorer-shell worker for $Id; action=$Action; source=$Source."
-    $output = New-Object System.Collections.Generic.List[string]
-    $loggedLineCount = 0
-    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    while (-not (Test-Path -LiteralPath $workerStatusPath)) {
-        Start-Sleep -Milliseconds 500
-        Sync-ReparoCommandOutputLog -Path $workerOutputPath -LineCount ([ref]$loggedLineCount) -Output $output -Section 'Winget(non-elevated)'
-        if ($TimeoutSeconds -gt 0 -and -not $IgnoreTimeouts -and $stopwatch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
-            throw "Non-elevated Winget worker for $Id timed out after $($stopwatch.Elapsed)."
+    param([Parameter(Mandatory)][string]$Id, [string]$Source='winget',
+          [ValidateSet('upgrade','install')][string]$Action='upgrade', [string]$InstallerOverride, [int]$TimeoutSeconds=0)
+    if ($Action -ne 'upgrade' -or $InstallerOverride) { throw 'Automatic reinstall/installer override is unavailable in the reliability worker; review package ownership first.' }
+    $worker = Start-ReparoWingetWorker -Id $Id -Source $Source
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    while (-not (Test-Path -LiteralPath $worker.StatusPath) -and -not (Test-Path -LiteralPath $worker.FallbackPath)) {
+        if ($TimeoutSeconds -gt 0 -and -not $IgnoreTimeouts -and $watch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+            return [pscustomobject]@{ ExitCode=$null; Output=@('Worker remains unresolved after wait deadline; do not duplicate it.'); Elapsed=$watch.Elapsed }
         }
+        Start-Sleep -Milliseconds 250
     }
-    Sync-ReparoCommandOutputLog -Path $workerOutputPath -LineCount ([ref]$loggedLineCount) -Output $output -Section 'Winget(non-elevated)'
-    $status = Get-Content -LiteralPath $workerStatusPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $stopwatch.Stop()
-    [pscustomobject]@{ ExitCode = [int]$status.ExitCode; Output = $output.ToArray(); Elapsed = $stopwatch.Elapsed }
+    $path = if (Test-Path -LiteralPath $worker.StatusPath) { $worker.StatusPath } else { $worker.FallbackPath }
+    $status = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    if ($status.schema -ne 'reparo-worker/1' -or $status.worker_id -ne $worker.Worker.id) { throw 'Invalid worker receipt; retain unresolved state.' }
+    return [pscustomobject]@{ ExitCode=$status.ExitCode; Output=@($status.reason); Elapsed=$watch.Elapsed }
 }
 
 function Invoke-ReparoDeferredWingetUpdate {
-    param(
-        [Parameter(Mandatory)][string]$Id,
-        [string]$Source = 'winget',
-        [Parameter(Mandatory)][int]$WaitForProcessId,
-        [int]$TimeoutSeconds = 0
-    )
-
-    if (-not $script:ReparoIsWindows) { throw 'Deferred Winget updates are supported on Windows only.' }
-    $powershell = Resolve-ReparoCommand -Name 'powershell'
-    if (-not $powershell) { throw 'Windows PowerShell is unavailable for the deferred Winget worker.' }
-    if ([string]::IsNullOrWhiteSpace($Source)) { $Source = 'winget' }
-
-    $safeId = ConvertTo-ReparoSafeFileName -Value $Id
-    $workerRoot = Join-Path $LogRoot ("{0}_WingetDeferred_{1}_{2}" -f $script:ReparoLogBaseName, $safeId, [guid]::NewGuid().ToString('N'))
-    $workerScriptPath = "$workerRoot.ps1"
-    $workerOutputPath = "$workerRoot.out.log"
-    $workerStatusPath = "$workerRoot.status.json"
-    $idLiteral = ConvertTo-ReparoPowerShellLiteral -Value $Id
-    $sourceLiteral = ConvertTo-ReparoPowerShellLiteral -Value $Source
-    $outputLiteral = ConvertTo-ReparoPowerShellLiteral -Value $workerOutputPath
-    $statusLiteral = ConvertTo-ReparoPowerShellLiteral -Value $workerStatusPath
-    $deadlineUtc = (Get-Date).AddSeconds($(if ($TimeoutSeconds -gt 0) { $TimeoutSeconds } else { 3600 })).ToUniversalTime().ToString('o')
-    $deadlineLiteral = ConvertTo-ReparoPowerShellLiteral -Value $deadlineUtc
-    $workerScript = @"
-`$ErrorActionPreference = 'Continue'
-`$outputPath = $outputLiteral
-`$statusPath = $statusLiteral
-`$deadline = [datetime]::Parse($deadlineLiteral).ToUniversalTime()
-`$exitCode = 1
-while (Get-Process -Id $WaitForProcessId -ErrorAction SilentlyContinue) {
-    if ([datetime]::UtcNow -ge `$deadline) {
-        Add-Content -LiteralPath `$outputPath -Value 'Timed out waiting for Reparo to exit.' -Encoding UTF8
-        [pscustomobject]@{ ExitCode = `$exitCode } | ConvertTo-Json -Compress | Set-Content -LiteralPath `$statusPath -Encoding UTF8
-        exit `$exitCode
-    }
-    Start-Sleep -Seconds 1
-}
-try {
-    & winget upgrade --id $idLiteral --exact --source $sourceLiteral --include-unknown --accept-source-agreements --accept-package-agreements --disable-interactivity --silent --force 2>&1 | ForEach-Object { Add-Content -LiteralPath `$outputPath -Value ([string]`$_) -Encoding UTF8 }
-    `$exitCode = `$LASTEXITCODE
-}
-catch {
-    Add-Content -LiteralPath `$outputPath -Value (`$_ | Out-String) -Encoding UTF8
-}
-[pscustomobject]@{ ExitCode = `$exitCode } | ConvertTo-Json -Compress | Set-Content -LiteralPath `$statusPath -Encoding UTF8
-"@
-    Set-Content -LiteralPath $workerScriptPath -Value $workerScript -Encoding UTF8
-
-    try {
-        [void](Start-ReparoProcessWithExplorerToken -ApplicationPath $powershell.Source -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$workerScriptPath`"")
-    }
-    catch {
-        throw "Could not start a deferred Winget worker with the logged-in Explorer token: $($_.Exception.Message)"
-    }
-
-    Write-Info "Queued deferred Winget update for $Id after Reparo exits."
-    Write-ReparoLog "[WINGET-DEFERRED] Queued Explorer-shell worker for $Id after PID $WaitForProcessId exits."
-    return [pscustomobject]@{ OutputPath = $workerOutputPath; StatusPath = $workerStatusPath }
+    param([Parameter(Mandatory)][string]$Id, [string]$Source='winget', [Parameter(Mandatory)][int]$WaitForProcessId, [int]$TimeoutSeconds=0)
+    $wait = if ($TimeoutSeconds -gt 0) { $TimeoutSeconds } else { 3600 }
+    return Start-ReparoWingetWorker -Id $Id -Source $Source -ParentId $WaitForProcessId -WaitSeconds $wait
 }
 
 function Invoke-ReparoWingetPackageQueue {
@@ -7185,14 +7542,22 @@ function Invoke-ReparoWingetPackageQueue {
     foreach ($update in @($PendingUpdates) | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_.Id) }) {
         $packageCommand = New-ReparoWingetUpgradeQueueCommand -Section $Section -ExcludedIds $ExcludedIds -PendingUpdates @($update)
         $packageSection = "{0}:{1}" -f $Section, $update.Id
+        try {
         $packageResult = Invoke-ReparoTimedCommand -ShellPath (Resolve-ReparoShell) -Command $packageCommand -Section $packageSection -TimeoutSeconds $TimeoutSeconds -IgnoreTimeouts:$IgnoreTimeouts
         foreach ($line in @($packageResult.Output)) { [void]$queueOutput.Add([string]$line) }
+        $success = @($packageResult.Output | Where-Object { $_ -match '^REPARO-WINGET-UPDATED\s+' })
+        if ($success.Count) { Add-ReparoSectionUpdates -Section $Section -PendingUpdates @($update) }
+
 
         if ($packageResult.TimedOut) {
             [void]$queueOutput.Add("REPARO-WINGET-FAILED timeout $($update.Id)")
         }
         elseif ($packageResult.ExitCode -ne 0) {
             [void]$queueOutput.Add("REPARO-WINGET-FAILED exit-code $($update.Id) $($packageResult.ExitCode)")
+        }
+        } catch {
+            [void]$queueOutput.Add("REPARO-WINGET-FAILED launch $($update.Id)")
+            Add-ReparoSummaryRecord -Bucket Failed -Software $update.Software -CurrentVersion $update.CurrentVersion -Version $update.Version -Method $update.Method -Reason ('launch failed; cause unknown: ' + $_.Exception.Message)
         }
     }
     $stopwatch.Stop()
@@ -7207,9 +7572,73 @@ function Invoke-ReparoWingetPackageQueue {
 
 # Steam desktop game updates use the signed-in Steam client, never SteamCMD.
 # Steam controls downloads; completed updates require fresh manifest evidence.
+function Read-ReparoStableText {
+    param([Parameter(Mandatory)][string]$Path, [ValidateRange(1,5)][int]$Attempts=3)
+    $failures = [System.Collections.Generic.List[string]]::new()
+    for ($attempt=1; $attempt -le $Attempts; $attempt++) {
+        try {
+            $before = Get-Item -LiteralPath $Path -ErrorAction Stop
+            $length=$before.Length; $stamp=$before.LastWriteTimeUtc
+            $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            try {
+                if ($stream.Length -gt 4MB) { throw 'Manifest exceeds bounded read size.' }
+                $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8, $true)
+                try { $text=$reader.ReadToEnd() } finally { $reader.Dispose() }
+            } finally { $stream.Dispose() }
+            $after=Get-Item -LiteralPath $Path -ErrorAction Stop
+            if ($length -ne $after.Length -or $stamp -ne $after.LastWriteTimeUtc) { throw 'Manifest changed during read.' }
+            if ($text -notmatch '"AppState"\s*\{' -or $text -notmatch '"StateFlags"\s+"\d+"' -or $text.TrimEnd() -notmatch '\}$') { throw 'Manifest snapshot incomplete or invalid.' }
+            return $text
+        }
+        catch { [void]$failures.Add($_.Exception.Message); if ($attempt -lt $Attempts) { Start-Sleep -Milliseconds 40 } }
+    }
+    throw ('Manifest remains unverified after bounded non-mutating reads; cause unknown: ' + ($failures -join '; '))
+}
+
+function Get-ReparoToolCapability {
+    param([string]$Name)
+    try {
+        $resolved = Get-Command $Name -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        return [pscustomobject]@{ State='resolved'; Path=$resolved.Source; Reason='Executable resolved; backend capability and owner still require validation.' }
+    }
+    catch [Management.Automation.CommandNotFoundException] { return [pscustomobject]@{State='absent';Path=$null;Reason='Optional executable absent in this context.'} }
+    catch { return [pscustomobject]@{State='unverified';Path=$null;Reason=$_.Exception.Message} }
+}
+
+function Get-ReparoConsumerDecision {
+    param([Parameter(Mandatory)][string]$PackagePath, [AllowEmptyCollection()][object[]]$Processes, [bool]$VisibilityComplete=$true)
+    if (-not $VisibilityComplete -or [string]::IsNullOrWhiteSpace($PackagePath)) { return 'blocked: active-consumer visibility or owning package path is unverified' }
+    foreach ($process in $Processes) {
+        $command = [string]$process.CommandLine
+        $executable = [string]$process.ExecutablePath
+        if ($command.IndexOf($PackagePath,[StringComparison]::OrdinalIgnoreCase) -ge 0 -or $executable.IndexOf($PackagePath,[StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            return 'blocked: active consumer uses the owning package tree; leave its process/service running'
+        }
+    }
+    return 'ready'
+}
+
+function Write-ReparoCapabilityPlan {
+    param([string[]]$Sections)
+    $elevated = Test-ReparoCurrentProcessElevated
+    $session = (Get-Process -Id $PID).SessionId
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $ledger = Get-ReparoOutcomeLedger
+    $ledger['identity'] = @{ sid=$sid; session=$session; elevated=$elevated }
+    $ledger.coverage = @(@('WindowsUpdate','WindowsFeatureUpdate','PowerShell7','Winget','Winget(msstore)','Scoop','Choco','Pip','Pipx','Npm','Opencode','Pnpm','Yarn','DotNet','Rust','CargoBins','Conda','Gem','Composer','Wsl','WslApt','Steam') | ForEach-Object {
+        @{ backend=$_; state=$(if (Test-ReparoSectionSelected $_) { 'selected' } else { 'excluded' }) }
+    })
+
+    $machine = @($Sections | Where-Object { $_ -in @('WindowsUpdate','PowerShell7') })
+    Write-Info ('Readiness: context SID={0}; session={1}; elevated={2}. Selected machine lanes={3}. User-owned work requires the same verified owner/session; no cross-session broker.' -f $sid,$session,$elevated,($machine -join ','))
+    if ($machine.Count -and -not $elevated) {
+        Write-Info 'Selected machine lanes require elevation. They will be blocked in this invocation; use one separately chosen elevated invocation. Reparo will not automate consent.'
+    }
+}
+
 function Read-ReparoSteamManifestState {
     param([Parameter(Mandatory)][string]$Path)
-    $data = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    $data = Read-ReparoStableText -Path $Path
     $values = @{}
     foreach ($key in @('name','StateFlags','buildid','LastUpdated','AutoUpdateBehavior','installdir','BytesDownloaded','BytesToDownload')) {
         $match = [regex]::Match($data, '(?m)^\s*"' + $key + '"\s+"(?<Value>[^"]*)"')
@@ -7477,7 +7906,7 @@ function Invoke-ReparoSteamDesktopQueue {
                 $item.Accepted = $snapshot -and -not (Find-ReparoSteamQueueRow -Snapshot $snapshot -Name $game.Name)
                 $item.Status = Get-ReparoSteamRequestOutcome -Before $item.Before -After $item.After -Accepted $item.Accepted
                 $item.Reason = if ($item.Status -eq 'Unconfirmed') { 'request sent; Steam acknowledgment not observed within the wait window' } else { 'requested through Steam Downloads; persistent update policy unchanged' }
-            } catch { $item.Status='Failed'; $item.Reason=$_.Exception.Message }
+            } catch { $item.Status=if ($_.Exception.Message -match '^Manifest remains unverified') { 'Unverified' } else { 'Failed' }; $item.Reason=$_.Exception.Message }
         }
         $verifyDeadline = (Get-Date).AddSeconds([int]$Config.WaitSeconds)
         do {
@@ -7506,7 +7935,7 @@ function Invoke-ReparoSteamDesktopQueue {
 }
 
 function New-ReparoSteamQueueWorker {
-    $names = @('Read-ReparoSteamManifestState','Test-ReparoSteamInputDesktop','Test-ReparoSteamAppRunning','Initialize-ReparoSteamAutomation','Get-ReparoSteamAutomationSnapshot','Find-ReparoSteamQueueRow','Invoke-ReparoSteamQueueButton','Get-ReparoSteamRequestOutcome','Invoke-ReparoSteamDesktopQueue')
+    $names = @('Read-ReparoStableText','Read-ReparoSteamManifestState','Test-ReparoSteamInputDesktop','Test-ReparoSteamAppRunning','Initialize-ReparoSteamAutomation','Get-ReparoSteamAutomationSnapshot','Find-ReparoSteamQueueRow','Invoke-ReparoSteamQueueButton','Get-ReparoSteamRequestOutcome','Invoke-ReparoSteamDesktopQueue')
     $definitions = foreach ($name in $names) { "function $name {`n" + (Get-Command $name -CommandType Function -ErrorAction Stop).Definition + "`n}" }
     return @'
 param([Parameter(Mandatory)][string]$InputPath,[Parameter(Mandatory)][string]$ResultPath)
@@ -7629,7 +8058,10 @@ function Get-ReparoSteamGameInventory {
                 }
                 $seen[$id] = $true
                 [pscustomobject]@{ AppId=$id; Name=$name; StateFlags=$state.StateFlags; UpdateFlagged=$state.UpdateFlagged; FullyInstalled=$state.FullyInstalled; BuildId=$state.BuildId; LastUpdated=$state.LastUpdated; AutoUpdateBehavior=$state.AutoUpdateBehavior; BytesDownloaded=$state.BytesDownloaded; BytesToDownload=$state.BytesToDownload; ManifestPath=$manifest.FullName; LibraryPath=$library; InstallDirectory=$installDirectory }
-            } catch { Write-ReparoLog ("[STEAM] manifest unreadable: {0}" -f $manifest.FullName) }
+            } catch {
+                if (Get-Command Add-ReparoOutcome -ErrorAction SilentlyContinue) { Add-ReparoOutcome -Backend Steam -Package $id -Phase inventory -Outcome unknown -Reason $_.Exception.Message -CaptureHealth degraded -Evidence @($manifest.FullName) }
+                Write-ReparoLog ("[STEAM] manifest unreadable: {0}" -f $manifest.FullName)
+            }
         }
     }
 }
@@ -7700,7 +8132,7 @@ function Invoke-ReparoSteamGameUpdates {
     foreach ($item in $receipt.Results) {
         Write-Info ("Steam {0}: {1} ({2})" -f $item.Status,$item.Name,$item.AppId)
         Write-ReparoLog ("[STEAM-QUEUE] AppId={0}; Status={1}; Accepted={2}; Reason={3}" -f $item.AppId,$item.Status,$item.Accepted,$item.Reason)
-        $bucket = if ($item.Status -eq 'Completed') { 'Updated' } elseif ($item.Status -in @('Queued','Downloading','Unconfirmed')) { 'Pending' } elseif ($item.Status -eq 'Failed') { 'Failed' } else { 'Skipped' }
+        $bucket = if ($item.Status -eq 'Completed') { 'Updated' } elseif ($item.Status -in @('Queued','Downloading','Unconfirmed','Unverified')) { 'Pending' } elseif ($item.Status -eq 'Failed') { 'Failed' } else { 'Skipped' }
         $reason = if ($item.Status -in @('Queued','Downloading')) { $item.Status.ToLowerInvariant() + '; Steam continues processing; completion not verified' } elseif ($item.Status -eq 'Completed') { 'Steam manifest confirms the update completed' } else { $item.Reason }
         Add-ReparoSummaryRecord -Bucket $bucket -Software ($item.Name + ' (Steam ' + $item.AppId + ')') -Method 'Steam client' -Reason $reason
     }
@@ -7722,7 +8154,12 @@ function Invoke-ReparoCommandStep {
     if ($PresenceCmd -and -not (Test-ReparoSectionTool -Section $Section -PresenceCmd $PresenceCmd)) {
         Write-Skip "$Section not found or cannot run in this context; skipping"
         Write-ReparoLog "[SKIP] $Section not found or cannot run in this context; skipping"
-        Add-ReparoSummaryRecord -Bucket Skipped -Software $Section -Version '-' -Method $Section -Reason "$PresenceCmd not found or cannot run"
+        $reason = "$PresenceCmd not found or cannot run"
+        if (Get-Command Get-ReparoToolCapability -ErrorAction SilentlyContinue) {
+            $capability = Get-ReparoToolCapability -Name $PresenceCmd
+            $reason = if ($capability.State -eq 'absent') { 'optional executable absent in this context' } else { 'blocked: executable/capability probe is unverified in this context; inspect resolved path and probe output' }
+        }
+        Add-ReparoSummaryRecord -Bucket Skipped -Software $Section -Version '-' -Method $Section -Reason $reason
         return
     }
 
@@ -7781,6 +8218,24 @@ function Invoke-ReparoCommandStep {
             }
         }
         Write-ReparoDebug ("{0} output lines captured: {1}" -f $Section, $output.Count)
+        if (Get-Command Add-ReparoOutcome -ErrorAction SilentlyContinue) {
+            $activation = @($output | Where-Object { $_ -match '(?i)restart the application to complete|0x80073D02|staged.*not.*registered' })
+            if ($activation.Count) {
+                (Get-ReparoOutcomeLedger).consequences.app_activation = 'pending'
+                Add-ReparoOutcome -Backend $Section -Package $Section -Phase activation -Outcome staged -Reason ($activation -join '; ') -ExitCode $exitCode -Effect staged
+            }
+            if (@($output | Where-Object { $_ -eq 'REPARO-CONSEQUENCE installer-restart required code=3010' }).Count) {
+                (Get-ReparoOutcomeLedger).consequences.installer_restart = 'required'
+                Add-ReparoOutcome -Backend $Section -Package $Section -Phase restart -Outcome staged -Reason 'Installer reported success requiring restart; no restart performed.' -ExitCode 3010 -Effect installed-restart-required
+            }
+        }
+
+        if ($Section -in @('Npm','Opencode')) {
+            foreach ($warning in @($output | Where-Object { $_ -match '(?i)EBADENGINE|blocked.*script|allow-scripts|blocked active consumer' })) {
+                Add-ReparoOutcome -Id (Get-ReparoOutcomeId ("$Section|warning|$warning")) -Backend $Section -Package $Section -Phase warning -Outcome $(if ($warning -match 'blocked active consumer') { 'blocked' } else { 'warning' }) -Reason $warning
+            }
+        }
+
 
         if ($Section -eq 'WindowsUpdate') { Add-ReparoWindowsUpdateReceipts -Output $output }
         if ($exitCode -eq 130 -and @($output | Where-Object { $_ -match '^REPARO-STEP-SKIPPED safe boundary:' }).Count -gt 0) {
@@ -7856,7 +8311,7 @@ function Invoke-ReparoCommandStep {
         )
         $failedWingetReceipts = @(
             $output |
-                ForEach-Object { [regex]::Match([string]$_, 'REPARO-WINGET-FAILED\s+(?<Reason>timeout|exit-code)\s+(?<Id>\S+)(?:\s+(?<ExitCode>\d+))?') } |
+                ForEach-Object { [regex]::Match([string]$_, 'REPARO-WINGET-FAILED\s+(?<Reason>timeout|exit-code|launch)\s+(?<Id>\S+)(?:\s+(?<ExitCode>-?\d+))?') } |
                 Where-Object { $_.Success }
         )
         $failedWingetPackageIds = @($failedWingetReceipts | ForEach-Object { $_.Groups['Id'].Value } | Select-Object -Unique)
@@ -7925,16 +8380,7 @@ function Invoke-ReparoCommandStep {
                             Add-ReparoSummaryRecord -Bucket Skipped -Software $notApplicableUpdate[0].Software -CurrentVersion $notApplicableUpdate[0].CurrentVersion -Version $notApplicableUpdate[0].Version -Method $notApplicableUpdate[0].Method -Reason $workerReason
                             continue
                         }
-                        Write-ReparoLog "[WINGET-RETRY] ${packageId}: non-elevated upgrade was not applicable; trying explicit install fallback."
-                        $installOverride = Get-ReparoWingetInstallerOverride -Id $packageId
-                        $installFallbackResult = Invoke-ReparoNonElevatedWingetUpdate -Id $packageId -Source $notApplicableUpdate[0].Source -Action install -InstallerOverride $installOverride -TimeoutSeconds $WingetTimeoutSeconds
-                        if ($installFallbackResult.ExitCode -eq 0) {
-                            Add-ReparoSummaryRecord -Bucket Updated -Software $notApplicableUpdate[0].Software -CurrentVersion $notApplicableUpdate[0].CurrentVersion -Version $notApplicableUpdate[0].Version -Method $notApplicableUpdate[0].Method -Reason 'reinstalled by non-elevated Explorer-shell worker after Winget upgrade applicability failure'
-                            $updatedWingetPackageIds += $packageId
-                            continue
-                        }
-                        $workerReason = Get-ReparoWingetWorkerFailureReason -Result $installFallbackResult
-                        Add-ReparoSummaryRecord -Bucket Skipped -Software $notApplicableUpdate[0].Software -CurrentVersion $notApplicableUpdate[0].CurrentVersion -Version $notApplicableUpdate[0].Version -Method $notApplicableUpdate[0].Method -Reason $workerReason
+                        Add-ReparoSummaryRecord -Bucket Skipped -Software $notApplicableUpdate[0].Software -Method $notApplicableUpdate[0].Method -Reason 'blocked: upgrade not applicable; inspect owner/channel before a separately authorized repair'
                         continue
                     }
                     Add-ReparoSummaryRecord -Bucket Skipped -Software $notApplicableUpdate[0].Software -CurrentVersion $notApplicableUpdate[0].CurrentVersion -Version $notApplicableUpdate[0].Version -Method $notApplicableUpdate[0].Method -Reason 'not applicable to this system or its current requirements'
@@ -8015,6 +8461,7 @@ function Invoke-ReparoCommandStep {
             return
         }
 
+        Add-ReparoSectionUpdates -Section $Section -PendingUpdates $pendingUpdates
         foreach ($deferredUpdate in $deferredWingetUpdates) {
             $deferredResult = Invoke-ReparoDeferredWingetUpdate -Id $deferredUpdate.Id -Source $deferredUpdate.Source -WaitForProcessId $PID -TimeoutSeconds $WingetTimeoutSeconds
             Add-ReparoSummaryRecord -Bucket Skipped -Software $deferredUpdate.Software -CurrentVersion $deferredUpdate.CurrentVersion -Version $deferredUpdate.Version -Method $deferredUpdate.Method -Reason ("deferred until Reparo exits; worker status: {0}" -f $deferredResult.StatusPath)
@@ -8115,6 +8562,8 @@ else {
 }
 
 if ($Preview) { $mode = "$mode + PREVIEW" }
+Write-ReparoCapabilityPlan -Sections $Include
+$rebootBefore = [bool](Test-ReparoPendingReboot)
 
 Write-ReparoConsole ("REPARO starting on {0} [{1}]" -f $script:ReparoHostName, $mode) Magenta
 Write-ReparoLog ("=== reparo start: {0} on {1} (PID {2}) ===" -f (Get-Date), $script:ReparoHostName, $PID)
@@ -8334,6 +8783,7 @@ try {
     `$msiArguments = @('/i', `$msiPath, '/quiet', '/norestart', 'ADD_PATH=1', 'REGISTER_MANIFEST=1', 'USE_MU=1', 'ENABLE_MU=1')
     `$msiProcess = Start-Process -FilePath (Join-Path `$env:SystemRoot 'System32\msiexec.exe') -ArgumentList `$msiArguments -Wait -PassThru
     `$msiExitCode = `$msiProcess.ExitCode
+if (`$msiExitCode -eq 3010) { Write-Output 'REPARO-CONSEQUENCE installer-restart required code=3010' }
     if (`$msiExitCode -notin @(0, 3010)) {
         throw "PowerShell MSI installation failed with exit code `$msiExitCode."
     }
@@ -8752,69 +9202,12 @@ function New-ReparoNpmUpdateCommand {
 @"
 `$ErrorActionPreference = 'Continue'
 `$lockedPackages = $npmLockLiteral
-function Set-ReparoProfilePathBlock {
-    param(
-        [Parameter(Mandatory)][string]`$ProfilePath,
-        [Parameter(Mandatory)][string]`$PrefixBin
-    )
-
-    `$profileParent = Split-Path -Parent `$ProfilePath
-    if (-not [string]::IsNullOrWhiteSpace(`$profileParent) -and -not (Test-Path -LiteralPath `$profileParent)) {
-        New-Item -ItemType Directory -Path `$profileParent -Force | Out-Null
-    }
-
-    `$begin = '# >>> reparo npm global bin >>>'
-    `$end = '# <<< reparo npm global bin <<<'
-    `$prefixForShell = `$PrefixBin -replace [regex]::Escape(`$HOME), '`$HOME'
-    `$block = @(
-        `$begin,
-        ('if [ -d "{0}" ]; then' -f `$prefixForShell),
-        '    case ":`$PATH:" in',
-        ('        *":{0}:"*) ;;' -f `$prefixForShell),
-        ('        *) export PATH="{0}:`$PATH" ;;' -f `$prefixForShell),
-        '    esac',
-        'fi',
-        `$end
-    ) -join [Environment]::NewLine
-
-    `$existing = if (Test-Path -LiteralPath `$ProfilePath) { Get-Content -LiteralPath `$ProfilePath -Raw } else { '' }
-    `$pattern = "(?ms)^" + [regex]::Escape(`$begin) + ".*?^" + [regex]::Escape(`$end) + "\r?\n?"
-    if (`$existing -match `$pattern) {
-        `$updated = [regex]::Replace(`$existing, `$pattern, `$block + [Environment]::NewLine)
-    }
-    else {
-        `$separator = if ([string]::IsNullOrWhiteSpace(`$existing) -or `$existing.EndsWith([Environment]::NewLine)) { '' } else { [Environment]::NewLine }
-        `$updated = `$existing + `$separator + `$block + [Environment]::NewLine
-    }
-
-    if (`$updated -ne `$existing) {
-        Set-Content -LiteralPath `$ProfilePath -Value `$updated -Encoding UTF8
-        Write-Host "Updated PATH profile entry: `$ProfilePath"
-    }
-}
-
-function Repair-ReparoNpmBuiltinConfig {
-    param([Parameter(Mandatory)][string]`$Prefix)
-
-    `$npmrcPath = Join-Path `$Prefix 'lib/node_modules/npm/npmrc'
-    if (-not (Test-Path -LiteralPath `$npmrcPath)) { return }
-
-    try { `$npmrc = Get-Content -LiteralPath `$npmrcPath -Raw -ErrorAction Stop } catch { return }
-    `$updated = (`$npmrc -split "`r?`n" | Where-Object { `$_ -notmatch '^\s*globalignorefile\s*=' }) -join [Environment]::NewLine
-    if (-not `$updated.EndsWith([Environment]::NewLine)) { `$updated += [Environment]::NewLine }
-
-    if (`$updated -ne `$npmrc) {
-        Set-Content -LiteralPath `$npmrcPath -Value `$updated -Encoding UTF8
-        Write-Host "Removed deprecated npm globalignorefile config: `$npmrcPath"
-    }
-}
-
 function Add-ReparoNpmPrefixToPath {
     `$prefix = (& npm config get prefix 2>`$null | Select-Object -First 1)
     if ([string]::IsNullOrWhiteSpace(`$prefix)) { return `$null }
 
     `$prefix = `$prefix.Trim()
-    `$prefixBin = if (`$IsWindows) { `$prefix } else { Join-Path `$prefix 'bin' }
+    `$prefixBin = if (`$env:OS -eq 'Windows_NT') { `$prefix } else { Join-Path `$prefix 'bin' }
     if (-not (Test-Path -LiteralPath `$prefixBin)) { return `$null }
 
     `$pathParts = @((`$env:PATH -split [IO.Path]::PathSeparator) | Where-Object { -not [string]::IsNullOrWhiteSpace(`$_) })
@@ -8823,12 +9216,6 @@ function Add-ReparoNpmPrefixToPath {
         Write-Host "Added npm global bin to PATH for this run: `$prefixBin"
     }
 
-    if (-not `$IsWindows) {
-        Set-ReparoProfilePathBlock -ProfilePath (Join-Path `$HOME '.profile') -PrefixBin `$prefixBin
-        Set-ReparoProfilePathBlock -ProfilePath (Join-Path `$HOME '.bashrc') -PrefixBin `$prefixBin
-    }
-
-    Repair-ReparoNpmBuiltinConfig -Prefix `$prefix
     return `$prefixBin
 }
 
@@ -8868,10 +9255,10 @@ function Invoke-ReparoNpmSelfUpdate {
         Write-Host "npm self-update target `$target failed with exit code `$LASTEXITCODE; trying next compatible target."
     }
 
-    Write-Host 'npm self-update could not find a compatible target; continuing with global package updates.'
-    return `$false
+    throw 'npm self-update exhausted compatible targets; inspect retained command results.'
 }
 
+if (`$env:OS -eq 'Windows_NT' -and [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18') { throw 'User npm ownership is unverified under SYSTEM; no mutation started.' }
 Add-ReparoNpmPrefixToPath
 `$npmSelfUpdated = Invoke-ReparoNpmSelfUpdate
 `$outdatedOutput = @(npm outdated -g --json 2>`$null)
@@ -8882,7 +9269,7 @@ if (`$outdatedExit -notin 0, 1) {
 }
 
 if (-not [string]::IsNullOrWhiteSpace(`$jsonText)) {
-    try { `$outdated = `$jsonText | ConvertFrom-Json } catch { `$outdated = `$null }
+    try { `$outdated = `$jsonText | ConvertFrom-Json -ErrorAction Stop } catch { throw "npm discovery returned invalid JSON: `$(`$_.Exception.Message)" }
     if (`$outdated) {
         foreach (`$property in `$outdated.PSObject.Properties) {
             if (Get-Command Stop-ReparoAtSafeBoundary -ErrorAction SilentlyContinue) { Stop-ReparoAtSafeBoundary 'between npm package updates' }
@@ -8906,6 +9293,15 @@ if (-not [string]::IsNullOrWhiteSpace(`$jsonText)) {
                 continue
             }
 
+            `$root = (& npm root -g 2>`$null | Select-Object -First 1)
+            if (`$LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(`$root)) { throw 'npm owning root is unverified; update blocked.' }
+            `$packagePath = Join-Path `$root `$property.Name
+            if (`$env:OS -eq 'Windows_NT') {
+                try { `$consumers = @(Get-CimInstance Win32_Process -ErrorAction Stop) } catch { throw 'Process visibility unavailable; npm mutation blocked.' }
+                if (@(`$consumers | Where-Object { `$_.Name -match '^(node|npm|codex|opencode)(\.exe)?$' -and -not `$_.CommandLine }).Count) { throw 'Relevant process ownership is inaccessible; npm mutation blocked.' }
+                `$active = @(`$consumers | Where-Object { (`$_.CommandLine -and `$_.CommandLine.IndexOf(`$packagePath, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or (`$_.ExecutablePath -and `$_.ExecutablePath.IndexOf(`$packagePath, [StringComparison]::OrdinalIgnoreCase) -ge 0) })
+                if (`$active.Count) { Write-Host "[SKIP] Npm: blocked active consumer for `$(`$property.Name); leave its process/service running."; continue }
+            }
             Write-Host "Updating npm package: `$(`$property.Name)"
             npm update -g `$property.Name
             if (`$LASTEXITCODE -ne 0) { throw "Failed updating npm package: `$(`$property.Name)" }
@@ -9009,37 +9405,16 @@ else {
     $prefix = $prefixOutput | Select-Object -First 1
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($prefix)) { throw 'Cannot determine the npm global prefix.' }
     $prefix = $prefix.Trim()
-    Write-Host 'opencode not found; installing OpenCode V2 via @opencode/cli.'
+    Write-Host '[SKIP] Opencode: absent optional tool; no installation requested.'
+    exit 0
 }
 if ($lockedPackages -contains $package -or $lockedPackages -contains '@opencode/cli') {
     Write-Host "[SKIP] Opencode: locked npm package: $package"
     exit 0
 }
 
-if ($package -eq 'opencode-ai') {
-    if (Test-Path -LiteralPath (Join-Path $moduleRoot '@opencode/cli/package.json')) {
-        Write-Host '[SKIP] Opencode: V1 owns the command but V2 is also installed; resolve the mixed installation before migrating.'
-        exit 0
-    }
-    $legacyManifest = Get-Content -LiteralPath (Join-Path $moduleRoot 'opencode-ai/package.json') -Raw | ConvertFrom-Json
-    $legacyVersion = [string]$legacyManifest.version
-    if ($legacyVersion -notmatch '^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$') { throw 'Cannot read the installed OpenCode V1 version for rollback.' }
-    Write-Host "Migrating opencode-ai $legacyVersion to @opencode/cli in owning npm prefix: $prefix"
-    Invoke-ReparoOpencodeNative -FilePath $npm.Source -Arguments @('uninstall', '--global', '--prefix', $prefix, 'opencode-ai')
-    $migrationExit = $LASTEXITCODE
-    if ($migrationExit -eq 0) {
-        Invoke-ReparoOpencodeNative -FilePath $npm.Source -Arguments @('install', '--global', '--prefix', $prefix, '@opencode/cli@latest', '--allow-scripts=@opencode/cli', '--ignore-scripts=false')
-        $migrationExit = $LASTEXITCODE
-    }
-    if ($migrationExit -ne 0) {
-        Write-Host '[ROLLBACK] OpenCode V2 migration failed; attempting to restore the original V1 package version.'
-        Invoke-ReparoOpencodeNative -FilePath $npm.Source -Arguments @('uninstall', '--global', '--prefix', $prefix, '@opencode/cli')
-        Invoke-ReparoOpencodeNative -FilePath $npm.Source -Arguments @('install', '--global', '--prefix', $prefix, "opencode-ai@$legacyVersion", '--allow-scripts=opencode-ai', '--ignore-scripts=false')
-        if ($LASTEXITCODE -ne 0) { throw "OpenCode V2 migration failed (exit $migrationExit); V1 rollback also failed (exit $LASTEXITCODE). Repair this npm prefix manually." }
-        throw "OpenCode V2 migration failed with exit code $migrationExit; restored opencode-ai $legacyVersion."
-    }
-}
-else {
+if ($package -eq 'opencode-ai') { Write-Host '[SKIP] Opencode: V1 ownership retained; migration requires explicit scope.'; exit 0 }
+if ($package -ne 'opencode-ai') {
     Write-Host "Updating $package in owning npm prefix: $prefix"
     Invoke-ReparoOpencodeNative -FilePath $npm.Source -Arguments @('install', '--global', '--prefix', $prefix, "$package@latest", "--allow-scripts=$package", '--ignore-scripts=false')
     if ($LASTEXITCODE -ne 0) { throw "npm install for $package failed with exit code $LASTEXITCODE" }
@@ -9070,7 +9445,7 @@ else {
 }
 Invoke-ReparoCommandStep -Section 'Npm' -PresenceCmd 'npm' -Command $npmCommand
 Invoke-ReparoCommandStep -Section 'Opencode' -PresenceCmd '' -Command $opencodeCommand
-Invoke-ReparoCommandStep -Section 'Pnpm' -PresenceCmd 'pnpm' -Command 'pnpm add -g pnpm@latest; pnpm update -g'
+Invoke-ReparoCommandStep -Section 'Pnpm' -PresenceCmd 'pnpm' -Command 'pnpm add -g pnpm@latest; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; pnpm update -g'
 Invoke-ReparoCommandStep -Section 'Yarn' -PresenceCmd 'yarn' -Command 'yarn global upgrade'
 $lockedDotNetIds = @(Get-ReparoLockedPackageIds -Method 'dotnet')
 $dotNetLockLiteral = '@({0})' -f ((@($lockedDotNetIds | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ', '))
@@ -9113,9 +9488,9 @@ else {
 "@
 Invoke-ReparoCommandStep -Section 'Rust' -PresenceCmd 'rustup' -Command 'rustup update'
 Invoke-ReparoCommandStep -Section 'CargoBins' -PresenceCmd 'cargo-install-update' -Command 'cargo-install-update -a'
-Invoke-ReparoCommandStep -Section 'Conda' -PresenceCmd 'conda' -Command 'conda update -n base conda -y; conda update --all -y'
-Invoke-ReparoCommandStep -Section 'Gem' -PresenceCmd 'gem' -Command 'gem update --system; gem update'
-Invoke-ReparoCommandStep -Section 'Composer' -PresenceCmd 'composer' -Command 'composer self-update; composer global update'
+Invoke-ReparoCommandStep -Section 'Conda' -PresenceCmd 'conda' -Command 'conda update -n base conda -y; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; conda update --all -y'
+Invoke-ReparoCommandStep -Section 'Gem' -PresenceCmd 'gem' -Command 'gem update --system; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; gem update'
+Invoke-ReparoCommandStep -Section 'Composer' -PresenceCmd 'composer' -Command 'composer self-update; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; composer global update'
 Invoke-ReparoCommandStep -Section 'Wsl' -PresenceCmd 'wsl' -Command 'wsl --update'
 if (Test-ReparoSectionSelected 'WslApt') { Invoke-ReparoWslApt }
 
@@ -9185,7 +9560,7 @@ Log: $script:ReparoLogPath
 "@
 }
 
-Write-ReparoSummary
+Write-ReparoLog '[MAINTENANCE-RUN] parent execution finished'
 Write-ReparoLog ("=== reparo end: {0} ===" -f (Get-Date))
 if ($script:ReparoSummary['Failed'].Count -gt 0) {
     $script:ReparoFinalStatus = 'FAILED'
@@ -9202,6 +9577,9 @@ if ($Preview) {
 }
 
 Finalize-ReparoLogFile -Status $script:ReparoFinalStatus
+$outcomeLedger = Get-ReparoOutcomeLedger
+$outcomeLedger.consequences.os_reboot = if ($rebootBefore) { 'pre-existing' } elseif ($script:ReparoPendingRebootDetected) { 'new' } else { 'not-observed' }
+try { Write-ReparoRepairSummary } catch { [Console]::Error.WriteLine('Reparo summary unavailable; inspect durable receipts: ' + $_.Exception.Message) }
 Write-ReparoNinjaMaintenanceActivity -Mode $mode -Status $script:ReparoFinalStatus
 
 $eventEntryType = if ($script:ReparoFinalStatus -eq 'FAILED') { 'Error' } elseif ($script:ReparoFinalStatus -eq 'PREVIEW') { 'Warning' } else { 'Information' }
