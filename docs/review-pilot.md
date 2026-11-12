@@ -1,8 +1,11 @@
-# Candidate review, release and rollback gates
+# Review, release and rollback gates
 
-The review branch is source only. Production `deploy/reparo-release.json` stays
-unchanged. `deploy/reparo-candidate.json` is a separately named immutable review
-pin; ordinary installed `-New` continues using the production manifest.
+Release 1.4.4.8 promotes reviewed source to `deploy/reparo-release.json` in a
+separate immutable pin transaction. `deploy/reparo-candidate.json` retains the
+earlier review pin. Ordinary installed `-New` uses the production manifest;
+publication does not itself run an installer or maintenance. Review and test
+future source/pin transactions using the same sequence below. Endpoint deployment,
+controller reenrollment and maintenance remain separate scoped actions.
 
 1. Review the exact source/test/doc commits and platform receipts. Confirm no
    private evidence or host data entered the public diff. Existing PR CI uses
@@ -35,8 +38,8 @@ For runner rollback, retain and select the previously reviewed immutable manifes
 and use the supported installation transaction after reconciling newer settings.
 Keep new-schema evidence and worker receipts even if the reader is rolled back.
 Do not reset a controller or restore somebody else's lock. The rollback artifact
-for this candidate remains the published 1.4.4.7 pin until a later authorized
-release replaces it.
+for 1.4.4.8 is the retained published 1.4.4.7 manifest/source pair.
+Do not confuse the current production pin with that previous rollback anchor.
 
 Runner rollback does **not** undo installed OS/driver/npm/apt changes or Steam
 downloads. Those require their own owner-specific recovery and approval. Killing

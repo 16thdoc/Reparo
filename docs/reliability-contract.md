@@ -1,8 +1,8 @@
-# Reliability candidate 1.4.4.8
+# Reliability contract 1.4.4.8
 
-This is a review candidate. The production manifest remains pinned to 1.4.4.7.
-Changing the reviewed source does not update an installed runner or enroll its
-new hash with a controller. See [review-pilot.md](review-pilot.md) before release.
+The production manifest pins reviewed 1.4.4.8 artifacts. Release publication does
+not itself update an installed runner or enroll its new hash with a controller.
+See [review-pilot.md](review-pilot.md) before deployment or maintenance.
 
 ## Decision: receipts precede presentation
 
@@ -142,6 +142,6 @@ pilot/review gates. Unknown package ownership, missing backend delta evidence,
 AppX activation, native service-restart attribution and host-specific registration
 problems are explicit remaining acceptance, not reasons to repair a host here.
 
-Candidate flavor: Yoda, *Star Wars: The Empire Strikes Back* (1980), with matching
+Release flavor: Yoda, *Star Wars: The Empire Strikes Back* (1980), with matching
 Yoda text art on Windows/native Linux. Quote attribution was checked against
 [StarWars.com](https://www.starwars.com/news/8-great-life-teachings-from-yoda).
