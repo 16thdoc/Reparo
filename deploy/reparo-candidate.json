@@ -1,0 +1,10 @@
+{
+  "version": "1.4.4.8",
+  "commit": "2d0f6ce7479782dcc63af6d59d9129720caa76a7",
+  "reparoUrl": "https://raw.githubusercontent.com/16thdoc/Reparo/2d0f6ce7479782dcc63af6d59d9129720caa76a7/Reparo.ps1",
+  "sha256": "4F1B9D2F3D1D787A725DACB148A643D5C26428348B5A465E1A1891DFC4FE9F6B",
+  "linuxUrl": "https://raw.githubusercontent.com/16thdoc/Reparo/2d0f6ce7479782dcc63af6d59d9129720caa76a7/linux/reparo-linux",
+  "linuxSha256": "6B3305D7BACCD749B14AFDAA0DD0BB88E91FD55CDEA96C1402329434959E0036",
+  "linuxInstallerUrl": "https://raw.githubusercontent.com/16thdoc/Reparo/2d0f6ce7479782dcc63af6d59d9129720caa76a7/deploy/install-reparo-linux.sh",
+  "linuxInstallerSha256": "2FFFE07FB1AFE3717CB7995C822BAD43D56ED1A17C447F0A0A13D666D563D207"
+}
