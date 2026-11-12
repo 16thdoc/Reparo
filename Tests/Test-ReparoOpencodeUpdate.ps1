@@ -1,4 +1,4 @@
-param([string]$WorkerHost = 'powershell.exe')
+﻿param([string]$WorkerHost = 'powershell.exe')
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -70,7 +70,7 @@ function Get-Process {
         } finally { $ErrorActionPreference = 'Stop' }
         $callsPath = Join-Path $fixture 'calls'
         if ($case -ne 'missing' -and (Test-Path (Join-Path $fixture 'configs'))) { throw 'Configured npm prefix must not shadow the active OpenCode command.' }
-        $skipped = $case -in 'running','locked','standalone','npm-missing','coexist-v1'
+        $skipped = $case -in 'running','locked','standalone','npm-missing','coexist-v1','v1','missing','migration-failed','rollback-failed'
         if ($skipped) {
             if ($code -ne 0 -or $output -notmatch '\[SKIP\] Opencode:' -or (Test-Path $callsPath)) { throw "$case did not safely skip: $output" }
         }
@@ -102,7 +102,7 @@ function Get-Process {
     if ($builder.Extent.Text -match 'oc -s|opencode upgrade|service (stop|restart)') { throw 'Updater still invokes interactive upgrades, legacy sync, or kills sessions.' }
     if ($source -notmatch "property.Name -in @\('opencode-ai', '@opencode/cli'\)") { throw 'General npm pass must exclude both OpenCode packages.' }
     if ($source -notmatch "opencodeSkip.Count -gt 0") { throw 'OpenCode skips must be reported as skipped, not updated.' }
-    Write-Host 'OpenCode V2 migration/rollback, ownership, coexistence, spaces, running service, locks, V2 fallback, unsupported install and npm failure tests passed.'
+    Write-Host 'OpenCode V2 owning-prefix updates, active-service/lock protection, absent-tool skip, V1 migration refusal and native warning/failure behavior passed.'
 }
 finally {
     $env:REPARO_OC_FIXTURE = $oldFixture

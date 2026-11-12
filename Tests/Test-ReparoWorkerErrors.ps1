@@ -1,10 +1,10 @@
-param([string]$SourcePath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'Reparo.ps1'))
+﻿param([string]$SourcePath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'Reparo.ps1'))
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $tokens=$null; $errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($SourcePath,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw ($errors | Out-String)}
-foreach($name in 'ConvertTo-ReparoSafeFileName','ConvertTo-ReparoPowerShellLiteral','Test-ReparoIgnorableCommandOutputLine','Sync-ReparoCommandOutputLog','Invoke-ReparoTimedCommand'){
+foreach($name in 'ConvertTo-ReparoSafeFileName','ConvertTo-ReparoPowerShellLiteral','Test-ReparoIgnorableCommandOutputLine','Sync-ReparoCommandOutputLog','ConvertFrom-ReparoCapturedBytes','Invoke-ReparoTimedCommand'){
     $node=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
     Invoke-Expression $node.Extent.Text
 }

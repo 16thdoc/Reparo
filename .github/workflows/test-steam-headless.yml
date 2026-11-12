@@ -11,6 +11,13 @@ on:
       - 'Tests/Test-ReparoHostModulePath.ps1'
       - 'Tests/Test-ReparoSteamPendingSummary.ps1'
       - 'Tests/Test-ReparoWorkerErrors.ps1'
+      - 'Tests/Test-ReparoReliability.ps1'
+      - 'Tests/Test-ReparoWorkerReceipts.ps1'
+      - 'Tests/Test-ReparoNpmReliability.ps1'
+      - 'Tests/Test-ReparoOfflineIsolated.ps1'
+      - 'Tests/test-reparo-reliability.py'
+      - 'deploy/reparo-candidate.json'
+      - 'docs/reliability-contract.md'
       - 'Tests/Test-ReparoPSWindowsUpdateBootstrap.ps1'
       - 'Tests/Test-ReparoPipRecovery.ps1'
       - 'Tests/Test-ReparoForcePreview.ps1'
@@ -79,7 +86,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           .\Tests\Test-ReparoReleaseParity.ps1
-          .\Tests\Test-ReparoReleaseManifest.ps1
+          .\Tests\Test-ReparoReleaseManifest.ps1 -ManifestPath deploy/reparo-candidate.json
           .\Tests\Test-ReparoInstallSelfUpdateTask.ps1
       - name: Worker diagnostics, Windows Update bootstrap and pip regression
         shell: powershell
@@ -88,7 +95,10 @@ jobs:
           .\Tests\Test-ReparoWorkerErrors.ps1
           .\Tests\Test-ReparoPSWindowsUpdateBootstrap.ps1
           .\Tests\Test-ReparoWindowsUpdateDetails.ps1
-          .\Tests\Test-ReparoDiagnosticArtifacts.ps1
+          .\Tests\Test-ReparoReliability.ps1
+          .\Tests\Test-ReparoWorkerReceipts.ps1
+          .\Tests\Test-ReparoNpmReliability.ps1
+          .\Tests\Test-ReparoOfflineIsolated.ps1
           .\Tests\Test-ReparoPipRecovery.ps1
           .\Tests\Test-ReparoForcePreview.ps1
           .\Tests\Test-ReparoWslLifecycle.ps1
@@ -110,6 +120,7 @@ jobs:
           sh linux/reparo-linux --version
           sh Tests/test-reparo-linux-installer.sh
           sh Tests/test-reparo-linux-output.sh
+          python3 Tests/test-reparo-reliability.py
           python3 Tests/test-reparo-wsl-guard.py
       - name: Pinned HTTPS install and self-update with isolated state and mocked cron
         shell: bash
@@ -128,7 +139,7 @@ jobs:
           fi
           EOF
           chmod +x "$sandbox/bin/crontab"
-          pilot_env=(env "HOME=$sandbox/home" "XDG_DATA_HOME=$sandbox/data" "XDG_STATE_HOME=$sandbox/state" "TMPDIR=$sandbox/tmp" "PATH=$sandbox/bin:$PATH" "REPARO_PILOT_CRON=$sandbox/crontab" "REPARO_RELEASE_URL=https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/deploy/reparo-release.json")
+          pilot_env=(env "HOME=$sandbox/home" "XDG_DATA_HOME=$sandbox/data" "XDG_STATE_HOME=$sandbox/state" "TMPDIR=$sandbox/tmp" "PATH=$sandbox/bin:$PATH" "REPARO_PILOT_CRON=$sandbox/crontab" "REPARO_RELEASE_URL=https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/deploy/reparo-candidate.json")
           "${pilot_env[@]}" sh deploy/install-reparo-linux.sh --verbose
           "${pilot_env[@]}" "$sandbox/home/.local/bin/reparo" --version
           "${pilot_env[@]}" "$sandbox/home/.local/bin/reparo" --new

@@ -1,8 +1,9 @@
+﻿param([string]$ManifestPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'deploy\reparo-release.json'))
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$manifestPath = Join-Path $repoRoot 'deploy\reparo-release.json'
+$manifestPath = $ManifestPath
 $sourcePath = Join-Path $repoRoot 'Reparo.ps1'
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -ErrorAction Stop

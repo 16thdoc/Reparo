@@ -1,5 +1,10 @@
 # Reparo
 
+Review candidate **1.4.4.8** adds durable outcomes, a compact human panel and a
+separate manual AI repair handoff. The production release pin remains on 1.4.4.7.
+See [the reliability contract](docs/reliability-contract.md) and
+[release/pilot gates](docs/review-pilot.md); this branch is not a deployment.
+
 Reparo has separate native maintenance runners for Windows and Linux. Windows uses
 the PowerShell runner for RMM deployment; Linux uses a portable POSIX `sh`
 runtime and does not require PowerShell.

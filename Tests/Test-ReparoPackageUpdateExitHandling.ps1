@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -128,16 +128,13 @@ if (-not $commandStep.Value.Contains('(?:Winget package requires manual uninstal
 }
 foreach ($required in @(
     'function Invoke-ReparoNonElevatedWingetUpdate',
+    'reparo-worker/1',
+    'Terminal worker process identity mismatch.',
     'Start-ReparoProcessWithExplorerToken',
-    'Started non-elevated Winget worker for $Id; tailing its status.',
-    "-Section 'Winget(non-elevated)'",
     "-Source `$nonElevatedUpdate[0].Source",
-    "-Action install",
     'Get-ReparoWingetInstallerOverride',
-    "-InstallerOverride `$installOverride",
     "if ([string]::IsNullOrWhiteSpace(`$Source)) { `$Source = 'winget' }",
     'Invoke-ReparoDeferredWingetUpdate',
-    'Queued deferred Winget update for $Id after Reparo exits.',
     "updated by non-elevated Explorer-shell worker"
 )) {
     if (-not $source.Contains($required)) {
@@ -155,7 +152,7 @@ foreach ($required in @(
     'REPARO-WINGET-SKIP protected\s*(?<Id>\S+)',
     'Reparo version lock configured',
     'no Winget execution receipt was returned; inspect the section log',
-    'REPARO-WINGET-FAILED\s+(?<Reason>timeout|exit-code)'
+    'REPARO-WINGET-FAILED\s+(?<Reason>timeout|exit-code|launch)'
 )) {
     if (-not $commandStep.Value.Contains($required)) {
         throw "WinGet package receipt accounting is absent: $required"

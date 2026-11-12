@@ -9,10 +9,10 @@ umask 077
 # Interactive Esc cancellation is Windows-only: this POSIX runner does not own
 # a portable cooperative-cancel API for native package managers. No fake skip,
 # keyboard polling, or wrapper kill is substituted for installer completion.
-REPARO_LINUX_VERSION='1.4.4.7'
-REPARO_VERSION_QUOTE='Fly, you fools!'
-REPARO_VERSION_SOURCE='The Fellowship of the Ring (2001), Gandalf; directed by Peter Jackson'
-REPARO_VERSION_ART='  /\  GANDALF -- cross the bridge; leave no distro behind'
+REPARO_LINUX_VERSION='1.4.4.8'
+REPARO_VERSION_QUOTE='You must unlearn what you have learned.'
+REPARO_VERSION_SOURCE='Star Wars: The Empire Strikes Back (1980), Yoda'
+REPARO_VERSION_ART='  <(-_-)>  YODA -- judge outcomes by their receipts'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-}"
 REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
 LATEST=0
@@ -27,6 +27,13 @@ HOST_NAME=$(hostname 2>/dev/null || printf unknown)
 RUN_ID=''
 RUN_RESULT=complete
 NOT_UPDATED_FILE=''
+RUN_FAILED=0
+EVIDENCE_HEALTH=complete
+TELEMETRY_HEALTH=unverified
+COMMAND_INDEX=0
+RECEIPT_ROOT=''
+RECEIPT_FALLBACKS=''
+REBOOT_BEFORE=unknown
 
 usage() {
     cat <<'EOF'
@@ -103,7 +110,7 @@ ensure_log_root() {
 
 log() {
     stamp=$(date '+%Y-%m-%d %H:%M:%S')
-    printf '%s %s\n' "$stamp" "$*" >>"$LOG_FILE"
+    if ! printf '%s %s\n' "$stamp" "$*" >>"$LOG_FILE"; then EVIDENCE_HEALTH=degraded; fi
     if [ -t 1 ] && [ "${NO_COLOR+x}" != x ] && [ "${TERM:-}" != dumb ]; then
         case "$*" in
             '[STEP] '*|'[CMD] '*|'[DRY-RUN] '*|'[SKIP] '*|'[WARN] '*|'[DONE] '*|'[FAIL] '*|'[ERROR] '*)
@@ -137,7 +144,7 @@ syslog_event() {
 
     logger -p "user.$priority" -t reparo-linux -- \
         "event=$(syslog_value "$event") run_id=$(syslog_value "$RUN_ID") version=$REPARO_LINUX_VERSION host=$(syslog_value "$HOST_NAME") action=$(syslog_value "$ACTION") preview=$PREVIEW section=$(syslog_value "$section") result=$(syslog_value "$result") detail=$(syslog_value "$detail") log=$(syslog_value "${LOG_FILE:-}")" \
-        >/dev/null 2>&1 || true
+        >/dev/null 2>&1 || TELEMETRY_HEALTH=failed
 }
 
 command_exists() {
@@ -506,7 +513,6 @@ print_not_updated_report() {
         log "      Why: $reason"
         log "      Next: $action"
     done <"$NOT_UPDATED_FILE"
-    rm -f "$NOT_UPDATED_FILE"
 }
 
 detect_native_section() {
@@ -534,6 +540,149 @@ detect_native_section() {
     esac
 }
 
+# Receipt data is local and never uploaded. Python is used only for strict JSON;
+# commands still have literal shell exit/status evidence when it is unavailable.
+write_command_receipt() {
+    receipt_state=$1; receipt_status=$2; receipt_pid=$3; receipt_stdout=$4; receipt_stderr=$5; receipt_section=$6; receipt_description=$7
+    shift 7
+    if ! command_exists python3; then
+        EVIDENCE_HEALTH=degraded
+        printf '%s\n' "Receipt unavailable: python3 absent; command exit=$receipt_status; stdout=$receipt_stdout stderr=$receipt_stderr" >&2
+        return
+    fi
+    written_path=$(python3 - "$RECEIPT_ROOT/$COMMAND_INDEX.command.json" "$receipt_state" "$receipt_status" "$receipt_pid" "$receipt_stdout" "$receipt_stderr" "$receipt_section" "$receipt_description" "$EVIDENCE_HEALTH" "$HOME" "$(id -u)" "$(id -g)" "${COMMAND_STARTED_UTC:-}" "${COMMAND_CREATED_TICKS:-}" "${COMMAND_BOOT_ID:-}" "$@" <<'PY'
+import datetime,json,os,sys,tempfile
+path,state,code,pid,out,err,backend,description,health,home,uid,gid,started,ticks,boot,*argv=sys.argv[1:]
+record={'schema':'reparo-command/1','id':os.path.basename(path),'section':backend,'phase':'command','outcome':state,
+        'command':description,'argv':argv,'pid':int(pid) if pid else None,'created_utc':None,'started_utc':started or None,'process_creation':{'start_ticks':ticks or None,'boot_id':boot or None},
+        'ended_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'exit_code':int(code) if code else None,'capture_health':health,'stdout':os.path.basename(out),'stderr':os.path.basename(err),
+        'identity':{'uid':int(uid),'gid':int(gid),'home':home},'delta':{'effect':'unknown','old':None,'new':None}}
+def write(target):
+    with open(target+'.tmp','x',encoding='utf-8') as f:
+        json.dump(record,f,ensure_ascii=False);f.flush();os.fsync(f.fileno())
+    os.replace(target+'.tmp',target)
+try: write(path)
+except OSError as e:
+    record['capture_health']='degraded';record['publication_error']=str(e)
+    path=os.path.join(tempfile.mkdtemp(prefix='reparo-command-'),'receipt.json');write(path)
+print('FALLBACK:'+path if record.get('publication_error') else 'PRIMARY')
+PY
+    )
+    written_status=$?
+    if [ "$written_status" -eq 0 ]; then
+        case "$written_path" in FALLBACK:*)
+            written_path=${written_path#FALLBACK:}
+            EVIDENCE_HEALTH=degraded; RECEIPT_FALLBACKS="${RECEIPT_FALLBACKS}${RECEIPT_FALLBACKS:+|}$written_path"
+            printf '%s\n' "Command receipt retained at independent fallback: $written_path" >&2 ;;
+        esac
+    fi
+    if [ "$written_status" -ne 0 ]; then EVIDENCE_HEALTH=degraded; printf '%s\n' "Command receipt publication failed; exit=$receipt_status, retained streams: $receipt_stdout $receipt_stderr" >&2; fi
+}
+
+print_repair_summary() {
+    if ! command_exists python3; then
+        printf '%s\n' 'REPARO - EVIDENCE INCOMPLETE' 'Repair JSON unavailable: python3 is required for strict receipt export.' "Inspect retained log: $LOG_FILE"
+        return
+    fi
+    python3 - "$RECEIPT_ROOT" "$NOT_UPDATED_FILE" "$RUN_ID" "$HOST_NAME" "$REPARO_LINUX_VERSION" "$0" "$RUN_FAILED" "$EVIDENCE_HEALTH" "$TELEMETRY_HEALTH" "$LOG_FILE" "$REBOOT_BEFORE" "$RECEIPT_FALLBACKS" <<'PY'
+import datetime,hashlib,json,os,pathlib,sys,tempfile
+root,coverage_file,run,host,version,source,failed,health,telemetry,log,reboot_before,fallbacks=sys.argv[1:]
+records={}; commands={}; publication_errors=[]
+for path in sorted(pathlib.Path(root).glob('*.command.json'))+[pathlib.Path(p) for p in fallbacks.split('|') if p]:
+    try:
+        cmd=json.loads(path.read_text(encoding='utf-8'))
+        rank=lambda c: {'planned':0,'running':1}.get(c['outcome'],2)
+        if cmd['id'] in commands and rank(commands[cmd['id']])>rank(cmd): continue
+        commands[cmd['id']]=cmd
+        stream_refs=[]
+        for stream in ('stdout','stderr'):
+            raw=pathlib.Path(root)/cmd[stream]
+            if raw.is_file(): stream_refs.append({'path':os.path.relpath(raw,os.path.dirname(log)),'sha256':hashlib.sha256(raw.read_bytes()).hexdigest(),'bytes':raw.stat().st_size,'stream':stream})
+            elif cmd['exit_code'] is not None: health='degraded';publication_errors.append('Missing raw '+stream+' evidence: '+str(raw))
+        cmd['evidence']=stream_refs
+
+        key=hashlib.sha256((run+'|'+cmd['id']).encode()).hexdigest()[:24]
+        code=cmd['exit_code']; outcome=cmd['outcome']
+        records[key]={'id':key,'backend':cmd['section'],'package':cmd['section'],'scope':'current-context','phase':'command',
+            'outcome':outcome,'reason':('Command exited '+str(code)+'; package delta unverified.') if code is not None else 'Command not started or exit unavailable; cause unknown.',
+            'cause':'unknown','code':None if code is None else {'value':code,'unsigned':code & 0xffffffff,'hex':f'0x{code & 0xffffffff:08X}'},
+            'delta':cmd['delta'],'capture_health':cmd['capture_health'],'evidence':[{'path':os.path.relpath(path,os.path.dirname(log)),'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}],
+            'next_action':'Inspect retained evidence before any separately authorized retry.'}
+    except Exception as e: health='degraded';publication_errors.append(str(e))
+before=pathlib.Path(root)/'apt-before.tsv'; after=pathlib.Path(root)/'apt-after.tsv'
+if before.exists() and after.exists():
+    def inventory(p): return dict(line.split('\t',1) for line in p.read_text(encoding='utf-8').splitlines() if '\t' in line)
+    old=inventory(before);new=inventory(after)
+    for package in sorted(old.keys() & new.keys()):
+        if old[package]==new[package]: continue
+        key=hashlib.sha256((run+'|Apt|'+package).encode()).hexdigest()[:24]
+        records[key]={'id':key,'backend':'Apt','package':package,'scope':'native-manager','phase':'package','outcome':'changed','reason':'Observed installed dpkg version delta.','cause':'unknown','code':None,'delta':{'effect':'version-change','old':old[package],'new':new[package]},'capture_health':'complete','evidence':[],'next_action':'No repair action identified by this version delta.'}
+for cmd in commands.values():
+    for stream in ('stdout','stderr'):
+        path=pathlib.Path(root)/cmd[stream]
+        if not path.is_file(): continue
+        for line in path.read_text(encoding='utf-8',errors='replace').splitlines():
+            if not any(word in line.lower() for word in ('ebadengine','blocked install script','blocked build script')): continue
+            key=hashlib.sha256((run+'|'+cmd['section']+'|warning|'+line).encode()).hexdigest()[:24]
+            records[key]={'id':key,'backend':cmd['section'],'package':cmd['section'],'scope':'current-context','phase':'warning','outcome':'warning','reason':line,'cause':'unknown','code':None,'delta':{'effect':'unknown','old':None,'new':None},'capture_health':'complete','evidence':cmd.get('evidence',[]),'next_action':'Review effective engine/script policy and functional evidence; do not broaden trust automatically.'}
+coverage=[]
+try:
+    for line in pathlib.Path(coverage_file).read_text(encoding='utf-8').splitlines():
+        parts=line.split('\t',3)
+        if len(parts)!=4: continue
+        outcome,backend,reason,action=parts
+        if outcome=='FAILED': continue # The command receipt already owns this failure.
+        state='blocked' if any(x in reason.lower() for x in ('privilege','sudo','running','cannot check','ownership','ambiguous')) else 'coverage'
+        key=hashlib.sha256((run+'|'+backend+'|'+reason).encode()).hexdigest()[:24]
+        records[key]={'id':key,'backend':backend,'package':backend,'scope':'current-context','phase':'coverage','outcome':state,'reason':reason,'cause':'unknown','code':None,'delta':{'effect':'unknown','old':None,'new':None},'capture_health':'complete','evidence':[],'next_action':action}
+        coverage.append({'backend':backend,'state':state,'reason':reason})
+except Exception as e: health='degraded';publication_errors.append(str(e))
+if health!='complete':
+    records['capture-health']={'id':'capture-health','backend':'evidence','package':'capture','scope':'run','phase':'publication','outcome':'unknown','reason':'Evidence publication degraded; retained streams/receipts require review. Cause unknown.','cause':'unknown','code':None,'delta':{'effect':'unknown','old':None,'new':None},'capture_health':health,'evidence':[],'next_action':'Inspect retained local evidence; do not rerun maintenance to repair reporting.'}
+attention=[v for v in records.values() if v['outcome'] in ('failed','blocked','pending','unknown','staged','warning') or v['capture_health']!='complete']
+counts={'confirmed_changes':sum(v['delta']['effect']=='version-change' for v in records.values()),'command_success':sum(v['outcome']=='command-success' for v in records.values()),'legacy_success_receipts':0,'failed':sum(v['outcome']=='failed' for v in records.values()),'blocked':sum(v['outcome']=='blocked' for v in records.values()),'pending_unknown':sum(v['outcome'] in ('pending','unknown','staged') for v in records.values()),'evidence_gaps':sum(v['capture_health']!='complete' for v in records.values())+(health!='complete'),'coverage':sum(v['outcome']=='coverage' for v in records.values())}
+try: source_hash=hashlib.sha256(pathlib.Path(source).read_bytes()).hexdigest().upper()
+except OSError: source_hash=None
+reboot_after='required' if pathlib.Path('/run/reboot-required').exists() else 'not-observed'
+reboot='pre-existing' if reboot_before=='required' else ('new' if reboot_after=='required' else 'not-observed')
+view={'schema':'reparo-repair/1','run_id':run,'host':host,'platform':('linux' if sys.platform.startswith('linux') else 'posix-host-'+sys.platform),'as_of':datetime.datetime.now(datetime.timezone.utc).isoformat(),'source':{'version':version,'sha256':source_hash},
+      'parent':{'exit_code':None,'requested_exit_code':int(failed),'reported_status':'FAILED' if failed=='1' else 'COMPLETE','execution_finished':True},
+      'records':records,'commands':commands,'workers':{},'coverage':coverage,'evidence_health':health,'publication_errors':publication_errors,
+      'consequences':{'os_reboot':reboot,'installer_restart':'unknown','app_activation':'unknown','service_restart':'unknown'},'telemetry':{'delivery':telemetry},'attention':attention,'counts':counts,
+      'finality':{'parent_finished':True,'settled':not(counts['blocked'] or counts['pending_unknown'] or counts['evidence_gaps'])}}
+target=pathlib.Path(root).parent/(f'reparo_{run}_repair.json')
+def publish(path):
+    with open(str(path)+'.tmp','x',encoding='utf-8') as f:
+        json.dump(view,f,ensure_ascii=False,indent=2);f.flush();os.fsync(f.fileno())
+    os.replace(str(path)+'.tmp',path)
+try: publish(target)
+except OSError as e:
+    view['evidence_health']='degraded';view['publication_errors'].append(str(e));view['counts']['evidence_gaps']+=1;view['finality']['settled']=False
+    try:
+        target=pathlib.Path(tempfile.mkdtemp(prefix='reparo-receipt-'))/'repair.json';publish(target)
+    except OSError: target=None
+ref=str(target) if target else 'unavailable; publication failed'
+state='NEEDS ATTENTION' if attention or counts['evidence_gaps'] else 'SETTLED'
+print(f'REPARO - {state}')
+print(f"  Changes confirmed : {counts['confirmed_changes']} | Commands: {counts['command_success']} | Package receipts: {counts['legacy_success_receipts']}; deltas may be unknown")
+print(f"  Needs review      : {counts['failed']} failed | {counts['blocked']} blocked | {counts['pending_unknown']} pending/unknown")
+print(f"  Evidence gaps     : {counts['evidence_gaps']} | Coverage exceptions: {counts['coverage']}")
+print(f'  Restart/activation: OS {reboot}; installer unknown; app unknown; service restart unknown')
+print('  Next              : Review attention evidence before any retry.')
+print(f'  Repair handoff    : {ref}')
+print(f'\nREPARO-REPAIR-HANDOFF/1 | {host} / {run} / Reparo {version}')
+for item in attention[:2]:
+    reason=' '.join(item['reason'].split());reason=reason[:177]+'...' if len(reason)>180 else reason
+    code=f" [{item['code']['value']}/{item['code']['hex']}]" if item['code'] else ''
+    print(f"{item['id']} {item['backend']}/{item['package']}: {item['outcome']}; {reason}{code}; cause unknown")
+if not attention: print(f"No repair actions identified in this run; coverage exceptions: {counts['coverage']}")
+if len(attention)>2: print(f'+{len(attention)-2} groups in complete repair file')
+print(f"Evidence/repair: {ref} | as-of {view['as_of']}")
+PY
+    if [ "$?" -ne 0 ]; then EVIDENCE_HEALTH=degraded; printf '%s\n' "Repair summary unavailable; retained receipts: $RECEIPT_ROOT" >&2; fi
+}
+
 run_command() {
     section=$1
     description=$2
@@ -542,34 +691,42 @@ run_command() {
     syslog_event notice command_start "$section" running "$description"
     if [ "$PREVIEW" -eq 1 ]; then
         log "[DRY-RUN] $section: $description"
-        syslog_event notice command_preview "$section" skipped "$description"
-        record_not_updated SKIPPED "$section" 'preview only' 'Rerun without --preview when you want Reparo to make changes.'
+        record_not_updated SKIPPED "$section" 'preview only' 'Run without preview only when maintenance is authorized.'
         return 0
     fi
-
-    output_file=$(mktemp "${TMPDIR:-/tmp}/reparo-linux-command.XXXXXX") || {
-        log "[FAIL] $section: could not create command output file"
-        record_not_updated FAILED "$section" 'could not create command output file' 'Check temporary-directory permissions, then rerun the affected section.'
+    COMMAND_INDEX=$((COMMAND_INDEX+1))
+    output_file=$(mktemp "$RECEIPT_ROOT/$COMMAND_INDEX.stdout.XXXXXX") || {
+        RUN_FAILED=1; EVIDENCE_HEALTH=degraded
+        write_command_receipt unknown '' '' '' '' "$section" "$description" "$@"
         return 1
     }
-    if "$@" >"$output_file" 2>&1; then
-        status=0
-    else
-        status=$?
+    error_file=$(mktemp "$RECEIPT_ROOT/$COMMAND_INDEX.stderr.XXXXXX") || {
+        RUN_FAILED=1; EVIDENCE_HEALTH=degraded
+        write_command_receipt unknown '' '' "$output_file" '' "$section" "$description" "$@"
+        return 1
+    }
+    COMMAND_STARTED_UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    COMMAND_CREATED_TICKS=''; COMMAND_BOOT_ID=''
+    write_command_receipt planned '' '' "$output_file" "$error_file" "$section" "$description" "$@"
+    "$@" >"$output_file" 2>"$error_file" &
+    command_pid=$!
+    if [ -r "/proc/$command_pid/stat" ]; then COMMAND_CREATED_TICKS=$(awk '{print $22}' "/proc/$command_pid/stat" 2>/dev/null || true); fi
+    if [ -r /proc/sys/kernel/random/boot_id ]; then COMMAND_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id); fi
+    write_command_receipt running '' "$command_pid" "$output_file" "$error_file" "$section" "$description" "$@"
+    if wait "$command_pid"; then status=0; command_outcome=command-success
+    else status=$?; command_outcome=failed; RUN_FAILED=1; RUN_RESULT=failed
     fi
-    cat "$output_file" | tee -a "$LOG_FILE"
-    rm -f "$output_file"
-    if [ "$status" -eq 0 ]; then
-        log "[DONE] $section"
-        syslog_event notice command_complete "$section" success "$description"
-    else
-        log "[FAIL] $section exited $status"
-        RUN_RESULT=partial
-        syslog_event err command_complete "$section" failed "exit_$status"
-        record_not_updated FAILED "$section" "command exited $status" 'Inspect the final log, correct the reported error, and rerun the affected section.'
+    # Native exit is committed before log rendering; neither tee nor telemetry owns it.
+    write_command_receipt "$command_outcome" "$status" "$command_pid" "$output_file" "$error_file" "$section" "$description" "$@"
+    if ! tee -a "$LOG_FILE" <"$output_file"; then EVIDENCE_HEALTH=degraded; fi
+    if ! tee -a "$LOG_FILE" <"$error_file" >&2; then EVIDENCE_HEALTH=degraded; fi
+    if [ "$status" -eq 0 ]; then log "[DONE] $section"
+    else log "[FAIL] $section exited $status"; record_not_updated FAILED "$section" "command exited $status" 'Inspect retained evidence before retrying.'
     fi
+    syslog_event notice command_complete "$section" "$command_outcome" "exit_$status"
     return "$status"
 }
+
 
 run_privileged() {
     section=$1
@@ -579,12 +736,12 @@ run_privileged() {
         run_command "$section" "$description" "$@"
     elif [ "$(id -u)" -eq 0 ]; then
         run_command "$section" "$description" "$@"
-    elif command_exists sudo && sudo -n true >/dev/null 2>&1; then
+    elif command_exists sudo && sudo -n -l -- "$@" >/dev/null 2>&1; then
         run_command "$section" "$description" sudo -n "$@"
     else
         log "[SKIP] $section: root or passwordless sudo is required; refusing to prompt"
         syslog_event warning command_skipped "$section" skipped 'privilege_required'
-        record_not_updated SKIPPED "$section" 'root or passwordless sudo is required' 'Run Reparo as root or configure passwordless sudo for the required package-manager commands.'
+        record_not_updated SKIPPED "$section" 'root or passwordless sudo is required' 'Review available authority for the selected command; Reparo does not change sudo policy.'
         return 0
     fi
 }
@@ -624,6 +781,10 @@ run_npm_global_update() {
         return 0
     fi
     npm_executable=$(command -v npm)
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_UID:-}" ] && [ "$SUDO_UID" -ne 0 ]; then
+        record_not_updated SKIPPED Npm 'ownership ambiguous: elevated invocation retains another user context' 'Run the owning user lane separately; no prefix or HOME migration is performed.'
+        return 0
+    fi
 
     # Preview is a strict non-executing mode: do not even query npm configuration.
     if [ "$PREVIEW" -eq 1 ]; then
@@ -635,7 +796,7 @@ run_npm_global_update() {
     npm_inventory=$(mktemp "${TMPDIR:-/tmp}/reparo-npm-inventory.XXXXXX") || return 1
     if ! "$npm_executable" ls -g --depth=0 --parseable >"$npm_inventory"; then
         rm -f "$npm_inventory"
-        RUN_RESULT=partial
+        RUN_RESULT=failed; RUN_FAILED=1
         record_not_updated FAILED Npm 'cannot enumerate global npm packages' 'Repair npm ls -g --depth=0 before retrying; no broad update was attempted.'
         return 0
     fi
@@ -657,6 +818,33 @@ run_npm_global_update() {
     rm -f "$npm_inventory"
     if [ "$#" -eq 0 ]; then
         log '[SKIP] Npm: no global packages outside the dedicated Opencode section'
+        return 0
+    fi
+    if ! command_exists python3; then
+        record_not_updated SKIPPED Npm 'ownership visibility unavailable without python3' 'Inspect the owning prefix and active consumers before retrying.'
+        return 0
+    fi
+    npm_owner_clear=0
+    python3 - "$HOME" "$npm_executable" "$@" <<'PY' || npm_owner_clear=$?
+import os,pathlib,subprocess,sys
+home,npm,*packages=sys.argv[1:]
+try:
+    if os.stat(home).st_uid!=os.getuid(): raise ValueError('HOME owner mismatch')
+    root=subprocess.check_output([npm,'root','-g'],text=True).strip()
+    if not root or not os.path.isabs(root): raise ValueError('npm root unavailable')
+    trees=[os.path.realpath(os.path.join(root,p)) for p in packages]
+    if not pathlib.Path('/proc').is_dir(): raise ValueError('process visibility unavailable')
+    for proc in pathlib.Path('/proc').iterdir():
+        if not proc.name.isdigit(): continue
+        try: command=(proc/'cmdline').read_bytes().replace(b'\0',b' ').decode(errors='replace')
+        except FileNotFoundError: continue
+        except PermissionError: raise ValueError('process ownership inaccessible')
+        if any(tree in command for tree in trees): raise ValueError('active consumer in owning package tree')
+except Exception as e:
+    print('Npm ownership/consumer check blocked: '+str(e),file=sys.stderr);sys.exit(1)
+PY
+    if [ "$npm_owner_clear" -ne 0 ]; then
+        record_not_updated SKIPPED Npm 'ownership or active-consumer visibility blocked mutation' 'Leave active sessions/services running; inspect the owning prefix.'
         return 0
     fi
     if npm_system_scope; then
@@ -729,7 +917,7 @@ run_opencode_update() {
         case "$opencode_legacy_version" in
             ''|*[!0-9A-Za-z.+-]*)
                 record_not_updated FAILED Opencode 'cannot read installed V1 version for rollback' 'Repair the package manifest and node installation before migrating.'
-                RUN_RESULT=partial
+                RUN_RESULT=failed; RUN_FAILED=1
                 return 0 ;;
         esac
         opencode_migration_script='
@@ -782,9 +970,11 @@ run_native_manager() {
     case "$native_section" in
         Apt)
             command_exists apt-get || { log '[SKIP] Apt: apt-get not found'; syslog_event notice command_skipped Apt skipped tool_not_found; return; }
-            run_privileged Apt 'apt-get update' env DEBIAN_FRONTEND=noninteractive apt-get update || return
-            run_privileged Apt 'apt-get -y upgrade' env DEBIAN_FRONTEND=noninteractive apt-get -y upgrade || return
-            run_privileged Apt 'apt-get -y autoremove' env DEBIAN_FRONTEND=noninteractive apt-get -y autoremove || return
+            if command_exists dpkg-query; then dpkg-query -W -f '${binary:Package}\t${Version}\n' >"$RECEIPT_ROOT/apt-before.tsv" || EVIDENCE_HEALTH=degraded; fi
+            run_privileged Apt 'apt-get update' env DEBIAN_FRONTEND=noninteractive apt-get update || { if command_exists dpkg-query; then dpkg-query -W -f '${binary:Package}\t${Version}\n' >"$RECEIPT_ROOT/apt-after.tsv" || EVIDENCE_HEALTH=degraded; fi; return; }
+            run_privileged Apt 'apt-get -y upgrade' env DEBIAN_FRONTEND=noninteractive apt-get -y upgrade || { if command_exists dpkg-query; then dpkg-query -W -f '${binary:Package}\t${Version}\n' >"$RECEIPT_ROOT/apt-after.tsv" || EVIDENCE_HEALTH=degraded; fi; return; }
+            run_privileged Apt 'apt-get -y autoremove' env DEBIAN_FRONTEND=noninteractive apt-get -y autoremove || { if command_exists dpkg-query; then dpkg-query -W -f '${binary:Package}\t${Version}\n' >"$RECEIPT_ROOT/apt-after.tsv" || EVIDENCE_HEALTH=degraded; fi; return; }
+            if command_exists dpkg-query; then dpkg-query -W -f '${binary:Package}\t${Version}\n' >"$RECEIPT_ROOT/apt-after.tsv" || EVIDENCE_HEALTH=degraded; fi
             ;;
         Dnf)
             command_exists dnf || { log '[SKIP] Dnf: dnf not found'; syslog_event notice command_skipped Dnf skipped tool_not_found; return; }
@@ -808,6 +998,8 @@ latest_log() {
     latest=''
     for candidate in "$LOG_ROOT"/reparo_*.log; do
         [ -f "$candidate" ] || continue
+        case "$candidate" in *_COMPLETE.log|*_FAILED.log|*_PREVIEW.log) ;; *) continue ;; esac
+        grep -q 'Reparo Linux .* starting' "$candidate" || continue
         if [ -z "$latest" ] || [ "$candidate" -nt "$latest" ]; then latest=$candidate; fi
     done
     printf '%s' "$latest"
@@ -864,6 +1056,25 @@ show_status() {
     fi
     latest=$(latest_log)
     if [ -n "$latest" ]; then log "Latest log: $latest"; else log 'Latest log: none'; fi
+    if command_exists python3; then
+        python3 - "$LOG_ROOT" <<'PY'
+import datetime,json,pathlib,sys
+views=[]
+for path in pathlib.Path(sys.argv[1]).glob('reparo_*_repair.json'):
+    try:
+        view=json.loads(path.read_text(encoding='utf-8'))
+        if view['schema']=='reparo-repair/1' and view['parent']['execution_finished']: views.append((view['as_of'],path,view))
+    except (OSError,ValueError,KeyError,TypeError): pass
+if views:
+    _,path,view=max(views,key=lambda row:row[0]);c=view['counts']
+    print(f"REPARO - SAVED MAINTENANCE VIEW | changed {c['confirmed_changes']} | failed {c['failed']} | blocked {c['blocked']} | pending/unknown {c['pending_unknown']} | evidence gaps {c['evidence_gaps']}")
+    print(f"REPARO-REPAIR-HANDOFF/1 | {view['host']} / {view['run_id']} / Reparo {view['source']['version']}")
+    for item in view['attention'][:2]: print(f"{item['id']} {item['backend']}: {item['outcome']}; {' '.join(item['reason'].split())[:180]}; cause unknown")
+    if not view['attention']: print('No repair actions identified in this captured run.')
+    if len(view['attention'])>2: print(f"+{len(view['attention'])-2} groups in complete repair file")
+    print(f"Evidence/repair: {path} | read-only as-of {datetime.datetime.now(datetime.timezone.utc).isoformat()}")
+PY
+    fi
 }
 
 kill_reparo_processes() {
@@ -976,6 +1187,9 @@ case "$ACTION" in
 esac
 
 ensure_log_root
+RECEIPT_ROOT="$LOG_ROOT/reparo_${RUN_ID}_receipts"
+if ! mkdir -p "$RECEIPT_ROOT"; then die 'Cannot create receipt root; no maintenance started'; fi
+if [ -e /run/reboot-required ]; then REBOOT_BEFORE=required; else REBOOT_BEFORE=not-observed; fi
 NOT_UPDATED_FILE="$LOG_ROOT/reparo_${RUN_ID}_not-updated.tmp"
 : >"$NOT_UPDATED_FILE" || die "Cannot create not-updated report state: $NOT_UPDATED_FILE"
 log "Reparo Linux $REPARO_LINUX_VERSION starting"
@@ -983,7 +1197,11 @@ log "Mode: update force=$FORCE preview=$PREVIEW include=${INCLUDE:-auto} native=
 syslog_event notice run_start -- running "native_$(detect_native_section)"
 run_native_manager
 run_optional Flatpak flatpak flatpak update -y
-if section_selected Snap && command_exists snap; then run_privileged Snap 'snap refresh' snap refresh || true; fi
+if section_selected Snap; then
+    if command_exists snap; then run_privileged Snap 'snap refresh' snap refresh || true
+    else record_not_updated SKIPPED Snap 'snap not found' 'Optional tool absent; no installation requested.'; fi
+fi
+if section_selected Fwupd && ! command_exists fwupdmgr; then record_not_updated SKIPPED Fwupd 'fwupdmgr not found' 'Optional tool absent; no installation requested.'; fi
 if section_selected Fwupd && command_exists fwupdmgr; then
     run_privileged Fwupd 'fwupdmgr refresh --force' fwupdmgr refresh --force || true
     run_privileged Fwupd 'fwupdmgr update --assume-yes' fwupdmgr update --assume-yes || true
@@ -998,14 +1216,16 @@ run_optional Rust rustup rustup update
 run_optional Conda conda conda update -n base -c defaults conda -y
 run_optional Gem gem gem update
 run_optional Composer composer composer global update
-print_not_updated_report
-log "Reparo Linux complete. Log: $LOG_FILE"
-if [ "$PREVIEW" -eq 1 ]; then final_state=preview; else final_state=$RUN_RESULT; fi
-syslog_event notice run_complete -- "$final_state" "force_$FORCE"
-final_log="${LOG_FILE%_RUNNING.log}_$( [ "$PREVIEW" -eq 1 ] && printf PREVIEW || printf COMPLETE ).log"
-mv "$LOG_FILE" "$final_log"
-printf '%s\n' "Final log: $final_log"
+if [ "$RUN_FAILED" -eq 1 ]; then terminal=FAILED; elif [ "$PREVIEW" -eq 1 ]; then terminal=PREVIEW; else terminal=COMPLETE; fi
+log "Reparo Linux $terminal. Log: $LOG_FILE"
+syslog_event notice run_complete -- "$terminal" "force_$FORCE"
+final_log="${LOG_FILE%_RUNNING.log}_${terminal}.log"
+if mv "$LOG_FILE" "$final_log"; then LOG_FILE=$final_log
+else EVIDENCE_HEALTH=degraded; printf '%s\n' "Final log publication failed; retained working log: $LOG_FILE" >&2
+fi
+print_repair_summary
 reporting_outcome=unknown
-[ "$RUN_RESULT" != failed ] || reporting_outcome=failed
+[ "$RUN_FAILED" -eq 0 ] || reporting_outcome=failed
 [ "$PREVIEW" -eq 0 ] || reporting_outcome=preview
 report_native_result maintenance_summary '' "$reporting_outcome" ''
+exit "$RUN_FAILED"

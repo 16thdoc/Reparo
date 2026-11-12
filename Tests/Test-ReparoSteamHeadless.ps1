@@ -1,4 +1,4 @@
-# No game downloads, Steam launches, Task Scheduler mutations, or reboots.
+﻿# No game downloads, Steam launches, Task Scheduler mutations, or reboots.
 # Run in Windows PowerShell 5.1 or PowerShell 7 on Windows:
 # powershell.exe -NoProfile -File .\Tests\Test-ReparoSteamHeadless.ps1
 Set-StrictMode -Version Latest
@@ -15,7 +15,7 @@ if ($source -notmatch '(?m)^Invoke-ReparoSteamGameUpdates$') { throw 'Steam upda
 if ($source -notmatch '\$script:ReparoBoundParameters\[''Time''\] = \$Time') { throw '-Headless is not scheduling a one-shot task.' }
 if ($source -notmatch "if \(\`$entry.Key -in @\('Time', 'Task', 'Headless'\)\)") { throw 'Scheduled worker leaks Headless flag.' }
 if ($source -match 'steamcmd.*app_update|app_update.*steamcmd') { throw 'Unsafe SteamCMD in-place desktop updates detected.' }
-$functions=@('Read-ReparoSteamManifestState','Get-ReparoSteamGameInventory','Get-ReparoScheduledArgumentTokens')
+$functions=@('Read-ReparoStableText','Read-ReparoSteamManifestState','Get-ReparoSteamGameInventory','Get-ReparoScheduledArgumentTokens')
 foreach ($fn in $functions) {
     $node=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fn},$true)
     if (-not $node) { throw "Missing function $fn" }
