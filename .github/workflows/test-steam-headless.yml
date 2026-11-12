@@ -17,6 +17,7 @@ on:
       - 'Tests/Test-ReparoOfflineIsolated.ps1'
       - 'Tests/test-reparo-reliability.py'
       - 'deploy/reparo-candidate.json'
+      - 'deploy/reparo-release.json'
       - 'docs/reliability-contract.md'
       - 'Tests/Test-ReparoPSWindowsUpdateBootstrap.ps1'
       - 'Tests/Test-ReparoPipRecovery.ps1'
@@ -86,6 +87,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           .\Tests\Test-ReparoReleaseParity.ps1
+          .\Tests\Test-ReparoReleaseManifest.ps1
           .\Tests\Test-ReparoReleaseManifest.ps1 -ManifestPath deploy/reparo-candidate.json
           .\Tests\Test-ReparoInstallSelfUpdateTask.ps1
       - name: Worker diagnostics, Windows Update bootstrap and pip regression
@@ -139,7 +141,7 @@ jobs:
           fi
           EOF
           chmod +x "$sandbox/bin/crontab"
-          pilot_env=(env "HOME=$sandbox/home" "XDG_DATA_HOME=$sandbox/data" "XDG_STATE_HOME=$sandbox/state" "TMPDIR=$sandbox/tmp" "PATH=$sandbox/bin:$PATH" "REPARO_PILOT_CRON=$sandbox/crontab" "REPARO_RELEASE_URL=https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/deploy/reparo-candidate.json")
+          pilot_env=(env "HOME=$sandbox/home" "XDG_DATA_HOME=$sandbox/data" "XDG_STATE_HOME=$sandbox/state" "TMPDIR=$sandbox/tmp" "PATH=$sandbox/bin:$PATH" "REPARO_PILOT_CRON=$sandbox/crontab" "REPARO_RELEASE_URL=https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/deploy/reparo-release.json")
           "${pilot_env[@]}" sh deploy/install-reparo-linux.sh --verbose
           "${pilot_env[@]}" "$sandbox/home/.local/bin/reparo" --version
           "${pilot_env[@]}" "$sandbox/home/.local/bin/reparo" --new
