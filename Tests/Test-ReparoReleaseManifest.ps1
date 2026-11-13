@@ -1,10 +1,11 @@
-﻿param([string]$ManifestPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'deploy\reparo-release.json'))
+﻿param([string]$ManifestPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'deploy\reparo-release.json'),
+      [string]$SourceRoot = (Split-Path -Parent $PSScriptRoot))
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $manifestPath = $ManifestPath
-$sourcePath = Join-Path $repoRoot 'Reparo.ps1'
+$sourcePath = Join-Path $SourceRoot 'Reparo.ps1'
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -ErrorAction Stop
 if ($manifest.version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'Release manifest version is invalid.' }
@@ -25,7 +26,7 @@ foreach ($artifact in @(
 )) {
     $expected = 'https://raw.githubusercontent.com/16thdoc/Reparo/{0}/{1}' -f $manifest.commit, $artifact.Path
     if ($manifest.($artifact.Url) -cne $expected) { throw "Native artifact URL is not commit-pinned: $($artifact.Path)" }
-    $digest = (Get-FileHash -LiteralPath (Join-Path $repoRoot $artifact.Path) -Algorithm SHA256).Hash
+    $digest = (Get-FileHash -LiteralPath (Join-Path $SourceRoot $artifact.Path) -Algorithm SHA256).Hash
     if ($manifest.($artifact.Hash) -cne $digest) { throw "Native artifact digest mismatch: $($artifact.Path)" }
 }
 

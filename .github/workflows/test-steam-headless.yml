@@ -14,6 +14,8 @@ on:
       - 'Tests/Test-ReparoReliability.ps1'
       - 'Tests/Test-ReparoWorkerReceipts.ps1'
       - 'Tests/Test-ReparoNpmReliability.ps1'
+      - 'Tests/Test-ReparoNativeNpmProbes.ps1'
+      - 'Tests/Test-ReparoCleanupOutcomes.ps1'
       - 'Tests/Test-ReparoOfflineIsolated.ps1'
       - 'Tests/test-reparo-reliability.py'
       - 'deploy/reparo-candidate.json'
@@ -35,6 +37,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Steam integration regression
         shell: powershell
         run: .\Tests\Test-ReparoSteamHeadless.ps1
@@ -87,7 +91,16 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           .\Tests\Test-ReparoReleaseParity.ps1
-          .\Tests\Test-ReparoReleaseManifest.ps1
+          # Validate production against its own immutable source, even while
+          # reviewing a newer source/candidate without advancing production.
+          $production = Get-Content deploy/reparo-release.json -Raw | ConvertFrom-Json
+          if ($production.commit -notmatch '^[0-9a-f]{40}$') { throw 'Invalid production pin' }
+          $pinnedRoot = Join-Path $env:RUNNER_TEMP ('reparo-production-' + [guid]::NewGuid())
+          $pinnedZip = $pinnedRoot + '.zip'
+          git archive --format=zip --output=$pinnedZip $production.commit Reparo.ps1 linux/reparo-linux deploy/install-reparo-linux.sh
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read pinned production source' }
+          Expand-Archive -LiteralPath $pinnedZip -DestinationPath $pinnedRoot
+          .\Tests\Test-ReparoReleaseManifest.ps1 -SourceRoot $pinnedRoot
           .\Tests\Test-ReparoReleaseManifest.ps1 -ManifestPath deploy/reparo-candidate.json
           .\Tests\Test-ReparoInstallSelfUpdateTask.ps1
       - name: Worker diagnostics, Windows Update bootstrap and pip regression
@@ -100,6 +113,8 @@ jobs:
           .\Tests\Test-ReparoReliability.ps1
           .\Tests\Test-ReparoWorkerReceipts.ps1
           .\Tests\Test-ReparoNpmReliability.ps1
+          .\Tests\Test-ReparoNativeNpmProbes.ps1
+          .\Tests\Test-ReparoCleanupOutcomes.ps1
           .\Tests\Test-ReparoOfflineIsolated.ps1
           .\Tests\Test-ReparoPipRecovery.ps1
           .\Tests\Test-ReparoForcePreview.ps1

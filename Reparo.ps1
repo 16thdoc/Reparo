@@ -171,7 +171,7 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.8'
+$script:ReparoVersion = '1.4.4.9'
 $script:ReparoSourcePath = $PSCommandPath
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($Headless) {
@@ -274,6 +274,7 @@ function Get-ReparoVersionFlavor {
     # On every runtime version bump, add a fresh Quote/Source pair here instead
     # of reusing the previous version's quote.
     $versionFlavors = @{
+        '1.4.4.9' = [pscustomobject]@{ Quote = 'Your overconfidence is your weakness.'; Source = 'Star Wars: Return of the Jedi (1983), Luke Skywalker'; Art = '  (o_o) /==|  LUKE' }
         '1.4.4.8' = [pscustomobject]@{ Quote = 'You must unlearn what you have learned.'; Source = 'Star Wars: The Empire Strikes Back (1980), Yoda'; Art = '  <(-_-)>  YODA -- judge outcomes by their receipts' }
         '1.0.8.1' = [pscustomobject]@{ Quote = 'Hotfix applied. The goblin has been relocated.'; Source = 'Reparo maintenance log'; Art = '  GOBLIN: evicted from version output' }
         '1.0.8.2' = [pscustomobject]@{ Quote = 'New quote online. Old ghosts denied boarding.'; Source = 'Reparo maintenance log'; Art = '  QUOTE BAY: temporal lint removed' }
@@ -2816,6 +2817,7 @@ function Get-ReparoRepairView {
         command_success = @($copy.commands.PSObject.Properties | Where-Object { $null -ne $_.Value.exit_code -and $_.Value.exit_code -eq 0 }).Count
         legacy_success_receipts = @($records | Where-Object { $_.outcome -eq 'command-success' -and $_.phase -eq 'package' }).Count
         failed = $failed; blocked = $blocked; pending_unknown = $pending; evidence_gaps = $gaps; coverage = $coverage.Count
+        workloads_preserved = @($records | Where-Object { $_.backend -eq 'WSL' -and $_.phase -eq 'lifecycle' -and $_.outcome -eq 'coverage' }).Count
     } -Force
     return $copy
 }
@@ -2828,14 +2830,15 @@ function Get-ReparoRepairLines {
     $lead = @($View.attention | Select-Object -First 1)
     $attentionText = if ($lead.Count) { ($lead[0].package + ': ' + $lead[0].reason) -replace '\s+', ' ' } else { 'No repair actions identified in this run.' }
     if ($attentionText.Length -gt 140) { $attentionText = $attentionText.Substring(0,137) + '...' }
+    $next = if ($c.failed -or $c.blocked -or $c.pending_unknown -or $c.evidence_gaps) { 'Inspect the attention evidence; await pending work before any retry.' } elseif ($View.attention.Count) { 'Review the warning evidence; no maintenance retry is implied.' } else { 'No repair action is required for the recorded outcomes.' }
     $human = @(
         "REPARO - $state"
         ('  Changes confirmed : {0} | Commands: {1} | Package receipts: {2}; deltas may be unknown' -f $c.confirmed_changes, $c.command_success, $c.legacy_success_receipts)
         ('  Review records    : {0} failed | {1} blocked | {2} pending/unknown' -f $c.failed, $c.blocked, $c.pending_unknown)
         ('  Attention         : {0}' -f $attentionText)
-        ('  Evidence gaps     : {0} | Coverage exceptions: {1}' -f $c.evidence_gaps, $c.coverage)
+        ('  Evidence gaps     : {0} | Coverage: {1} | Workloads preserved: {2}' -f $c.evidence_gaps, $c.coverage, $c.workloads_preserved)
         ('  Restart/activation: OS {0}; installer {1}; app {2}; service restart {3}' -f $View.consequences.os_reboot, $View.consequences.installer_restart, $View.consequences.app_activation, $View.consequences.service_restart)
-        '  Next              : Inspect the attention evidence; await pending work before any retry.'
+        ('  Next              : ' + $next)
         "  Repair handoff    : $reference"
     )
     $brief = @('REPARO-REPAIR-HANDOFF/1 | {0} / {1} / Reparo {2}' -f $View.host, $View.run_id, $View.source.version)
@@ -3947,13 +3950,13 @@ function Invoke-ReparoWindowsFeatureUpdate {
 
 
 function Invoke-ReparoWslControl {
-    param([Parameter(Mandatory)][string[]]$Arguments)
+    param([Parameter(Mandatory)][string[]]$Arguments, [switch]$WslCleanupProbe)
     if ($Arguments.Count -ge 3 -and $Arguments[-2] -eq '-c' -and $Arguments[-3] -eq 'sh') {
         $Arguments[-1] = ConvertTo-ReparoWslShellCommand -Script $Arguments[-1]
     }
     $literalArguments = @($Arguments | ForEach-Object { ConvertTo-ReparoPowerShellLiteral -Value $_ }) -join ' '
     $command = '$lines = @(& wsl.exe ' + $literalArguments + ' 2>&1); $code = $LASTEXITCODE; $lines | ForEach-Object { ([string]$_) -replace "`0", "" }; exit $code'
-    Invoke-ReparoTimedCommand -ShellPath (Resolve-ReparoShell) -Command $command -Section 'WslControl' -TimeoutSeconds 30
+    Invoke-ReparoTimedCommand -ShellPath (Resolve-ReparoShell) -Command $command -Section 'WslControl' -TimeoutSeconds 30 -WslCleanupProbe:$WslCleanupProbe
 }
 
 function ConvertTo-ReparoWslShellCommand {
@@ -4029,12 +4032,12 @@ rm -f "$baseline" "$current"
 exit 0
 '@
     $probe = $probe.Replace('BASELINE', ("'" + $Baseline + "'"))
-    $check = Invoke-ReparoWslControl -Arguments @('--distribution', $Distro, '--exec', 'sh', '-c', $probe)
+    $check = Invoke-ReparoWslControl -Arguments @('--distribution', $Distro, '--exec', 'sh', '-c', $probe) -WslCleanupProbe
     if ($check.ExitCode -ne 0 -or $check.TimedOut) {
         $reason = if ($check.ExitCode -eq 3) { 'new processes appeared during maintenance' } else { 'safe cleanup could not be established' }
         Write-ReparoLog "[WSL-CLEANUP-DEFERRED] ${Distro}: $reason; left running."
         Add-ReparoSummaryNote "WSL ${Distro} left running: $reason. Review the workload before stopping it."
-        if (Get-Command Add-ReparoOutcome -ErrorAction SilentlyContinue) { Add-ReparoOutcome -Backend WSL -Package $Distro -Phase lifecycle -Outcome pending -Reason ("Cleanup deferred; workload preserved: " + $reason) }
+        if (Get-Command Add-ReparoOutcome -ErrorAction SilentlyContinue) { Add-ReparoOutcome -Backend WSL -Package $Distro -Phase lifecycle -Outcome $(if ($check.ExitCode -eq 3 -and -not $check.TimedOut) { 'coverage' } else { 'unknown' }) -Reason ("Cleanup deferred; workload preserved: " + $reason) }
         return
     }
     $stop = Invoke-ReparoWslControl -Arguments @('--terminate', $Distro)
@@ -7037,7 +7040,8 @@ function Add-ReparoWindowsUpdateReceipts {
 
 function Invoke-ReparoTimedCommand {
     param([Parameter(Mandatory)][string]$ShellPath, [Parameter(Mandatory)][string]$Command,
-          [Parameter(Mandatory)][string]$Section, [int]$TimeoutSeconds = 0, [switch]$IgnoreTimeouts)
+          [Parameter(Mandatory)][string]$Section, [int]$TimeoutSeconds = 0, [switch]$IgnoreTimeouts, [switch]$WslCleanupProbe)
+    if ($WslCleanupProbe -and $Section -ne 'WslControl') { throw 'Cleanup interpretation is restricted to the WSL control probe.' }
     $watch = [Diagnostics.Stopwatch]::StartNew()
     $key = [guid]::NewGuid().ToString('N')
     $safe = ConvertTo-ReparoSafeFileName $Section
@@ -7052,6 +7056,7 @@ function Invoke-ReparoTimedCommand {
         pid = $null; created_utc = $null; started_utc = [DateTime]::UtcNow.ToString('o'); ended_utc = $null
         exit_code = $null; launch_error = $null; launch_code = $null; capture_health = 'complete'; capture_errors = @()
         stdout = $commandOutputPath; stderr = $errorPath; decoder = 'UTF-8 host stream; raw bytes retained'
+        control_context = $(if ($WslCleanupProbe) { 'wsl-cleanup-probe' } else { $null }); control_outcome = $null
     }
     $output = New-Object 'System.Collections.Generic.List[string]'
     $process = $null; $exitCode = $null; $skipRequested = $false; $skipIntent = $false; $deadlineReported = $false; $heartbeatAt = [DateTime]::UtcNow.AddSeconds(60)
@@ -7188,8 +7193,9 @@ public sealed class ReparoRawCaptureV1448 {
         if ($receipt.capture_errors.Count -or $receipt.launch_error) { $receipt.capture_health = 'degraded' }
         if (Get-Command Save-ReparoReceipt -ErrorAction SilentlyContinue) {
             $ledger = Get-ReparoOutcomeLedger
+            if ($WslCleanupProbe -and $exitCode -eq 3) { $receipt.control_outcome = 'workload-preserved' }
             $ledger.commands[$key] = $receipt
-            Add-ReparoOutcome -Id ('command-' + $key) -Backend $Section -Package $Section -Phase command -Outcome $(if ($null -eq $exitCode) { 'unknown' } elseif ($exitCode -eq 0) { 'command-success' } elseif ($exitCode -eq 130) { 'blocked' } else { 'failed' }) -Reason $(if ($null -eq $exitCode) { 'Native child exit unavailable; inspect launch/capture receipt.' } else { 'Child host exited ' + $exitCode + '; package effects recorded separately.' }) -ExitCode $exitCode -Evidence @([IO.Path]::GetFileName($commandOutputPath),[IO.Path]::GetFileName($errorPath))
+            Add-ReparoOutcome -Id ('command-' + $key) -Backend $Section -Package $Section -Phase command -Outcome $(if ($receipt.control_outcome -eq 'workload-preserved') { 'coverage' } elseif ($null -eq $exitCode) { 'unknown' } elseif ($exitCode -eq 0) { 'command-success' } elseif ($exitCode -eq 130) { 'blocked' } else { 'failed' }) -Reason $(if ($receipt.control_outcome -eq 'workload-preserved') { 'WSL cleanup deferred to preserve new workload; probe exit 3 is expected.' } elseif ($null -eq $exitCode) { 'Native child exit unavailable; inspect launch/capture receipt.' } else { 'Child host exited ' + $exitCode + '; package effects recorded separately.' }) -ExitCode $exitCode -Evidence @([IO.Path]::GetFileName($commandOutputPath),[IO.Path]::GetFileName($errorPath))
 
             [void](Save-ReparoReceipt -Name ('command-' + $key) -Value $receipt)
             if ($receipt.capture_health -ne 'complete') {
@@ -9204,8 +9210,12 @@ function New-ReparoNpmUpdateCommand {
 `$ErrorActionPreference = 'Continue'
 `$lockedPackages = $npmLockLiteral
 function Add-ReparoNpmPrefixToPath {
-    `$prefix = (& npm config get prefix 2>`$null | Select-Object -First 1)
-    if ([string]::IsNullOrWhiteSpace(`$prefix)) { return `$null }
+    # Drain the native producer before selecting a line; early pipeline disposal
+    # can turn a valid native result into exit -1 in Windows PowerShell.
+    `$prefixOutput = @(& npm config get prefix 2>`$null)
+    `$prefixExit = `$LASTEXITCODE
+    `$prefix = (`$prefixOutput | Select-Object -First 1)
+    if (`$prefixExit -ne 0 -or [string]::IsNullOrWhiteSpace(`$prefix)) { return `$null }
 
     `$prefix = `$prefix.Trim()
     `$prefixBin = if (`$env:OS -eq 'Windows_NT') { `$prefix } else { Join-Path `$prefix 'bin' }
@@ -9248,7 +9258,8 @@ function Invoke-ReparoNpmSelfUpdate {
         if (`$LASTEXITCODE -eq 0 -or `$null -eq `$LASTEXITCODE) {
             Add-ReparoNpmPrefixToPath
             `$activeNpm = Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-            `$activeVersion = (& npm --version 2>`$null | Select-Object -First 1)
+            `$activeVersionOutput = @(& npm --version 2>`$null)
+            `$activeVersion = (`$activeVersionOutput | Select-Object -First 1)
             if (`$activeNpm) { Write-Host "Active npm for this run: `$(`$activeNpm.Source) `$activeVersion" }
             return `$true
         }
@@ -9294,8 +9305,10 @@ if (-not [string]::IsNullOrWhiteSpace(`$jsonText)) {
                 continue
             }
 
-            `$root = (& npm root -g 2>`$null | Select-Object -First 1)
-            if (`$LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(`$root)) { throw 'npm owning root is unverified; update blocked.' }
+            `$rootOutput = @(& npm root -g 2>`$null)
+            `$rootExit = `$LASTEXITCODE
+            `$root = (`$rootOutput | Select-Object -First 1)
+            if (`$rootExit -ne 0 -or [string]::IsNullOrWhiteSpace(`$root)) { throw 'npm owning root is unverified; update blocked.' }
             `$packagePath = Join-Path `$root `$property.Name
             if (`$env:OS -eq 'Windows_NT') {
                 try { `$consumers = @(Get-CimInstance Win32_Process -ErrorAction Stop) } catch { throw 'Process visibility unavailable; npm mutation blocked.' }

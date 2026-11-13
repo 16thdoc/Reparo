@@ -42,7 +42,7 @@ function Invoke-ReparoTimedCommand {
     [pscustomobject]@{ExitCode=$script:workerExit;TimedOut=($script:workerExit -eq 124);Output=$script:workerOutput;SkipRequested=$script:skipRequested}
 }
 function Invoke-ReparoWslControl {
-    param($Arguments)
+    param($Arguments,[switch]$WslCleanupProbe)
     Assert ($Arguments -notcontains '--shutdown') 'Global WSL shutdown must never run.'
     $script:controls += ,$Arguments
     if ($Arguments -contains '--terminate') {

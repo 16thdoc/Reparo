@@ -145,3 +145,27 @@ problems are explicit remaining acceptance, not reasons to repair a host here.
 Release flavor: Yoda, *Star Wars: The Empire Strikes Back* (1980), with matching
 Yoda text art on Windows/native Linux. Quote attribution was checked against
 [StarWars.com](https://www.starwars.com/news/8-great-life-teachings-from-yoda).
+
+## 1.4.4.9 probe and cleanup correction
+
+Native npm prefix/version/root probes consume the producer completely before
+selecting output. The root's actual exit is captured before further pipelines;
+a genuine failed or missing root still blocks mutation. The regression uses
+disposable native command shims with more than one pipe buffer, not just
+PowerShell function mocks. No actual package manager executes in the fixture.
+
+Only the explicitly marked WSL cleanup probe interprets exit 3 as
+`control_outcome: workload-preserved`. The raw command receipt retains numeric
+exit 3 and `control_context: wsl-cleanup-probe`; unrelated exit 3 and unexpected
+probe failures retain failure semantics. A confirmed preservation decision is
+coverage, not failed/pending maintenance. Unknown or timed-out cleanup stays
+unresolved and never permits termination. The human panel adds the derived
+`workloads_preserved` count; the native runner emits zero for this Windows-only
+lifecycle. Both summaries continue using the same view.
+
+Saved historical snapshots remain unchanged; no untyped old exit code is silently
+reinterpreted. The previous host reports already explain their historical cleanup
+signals. Syslog behavior and controller/exit interfaces are unchanged.
+
+1.4.4.9 flavor: Luke Skywalker, *Return of the Jedi* (1983), with matching text
+art. Attribution: [official StarWars.com quotes](https://www.starwars.com/news/jedi-at-40-star-wars-return-of-the-jedi-quotes).
