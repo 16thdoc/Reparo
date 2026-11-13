@@ -1,5 +1,8 @@
 # Reparo
 
+Patch candidate **1.4.4.9** fixes native npm probe capture and labels intentional
+WSL workload preservation as coverage. Production remains pinned to 1.4.4.8 during review.
+
 Release **1.4.4.8** adds durable outcomes, a compact human panel and a
 separate manual AI repair handoff. The production manifest pins immutable reviewed
 Windows/native artifacts; publishing a release does not install it on an endpoint.
