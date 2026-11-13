@@ -20,12 +20,16 @@ function Resolve-ReparoShell {throw 'Preview attempted to resolve an execution s
 function Invoke-ReparoTimedCommand {throw 'Preview attempted to execute a command.'}
 function Add-ReparoSummaryRecord {param($Bucket,$Software,$Version,$Method,$Reason) $script:records += [pscustomobject]@{Bucket=$Bucket;Reason=$Reason}}
 $PowerShell7Only=$false; $SevenZip=$false; $Force=$true; $Task=$false; $Update=$false; $WindowsFeatureUpdate=$false
-$windowsForceSections=@('WindowsUpdate','Pip','Steam'); $linuxForceSections=@('Apt','Pip'); $script:ReparoDebug=$false
+$windowsSelection=$ast.Find({param($n)$n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$windowsForceSections'},$true)
+if(-not $windowsSelection){throw 'Windows Force selection is unavailable.'}
+Invoke-Expression $windowsSelection.Extent.Text
+$linuxForceSections=@('Apt','Pip'); $script:ReparoDebug=$false
 foreach($platform in @($true,$false)){
     foreach($previewMode in @($true,$false)){
         $script:ReparoIsWindows=$platform; $Preview=$previewMode; $Include=@(); $WindowsUpdate=$false; $WslApt=$false
         Invoke-Expression $normalization.Extent.Text
         if([bool]$Preview -ne $previewMode){throw 'Force normalization changed the explicit Preview selection.'}
+        if(($Include -contains 'Slicer') -ne $platform){throw 'Slicer Force selection crossed the Windows-only management boundary.'}
         if($Preview){
             $script:logs=@(); $script:records=@()
             Invoke-ReparoCommandStep -Section Pip -Command 'throw "maintenance must never execute"'

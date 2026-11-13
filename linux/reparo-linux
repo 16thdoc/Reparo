@@ -9,10 +9,10 @@ umask 077
 # Interactive Esc cancellation is Windows-only: this POSIX runner does not own
 # a portable cooperative-cancel API for native package managers. No fake skip,
 # keyboard polling, or wrapper kill is substituted for installer completion.
-REPARO_LINUX_VERSION='1.4.4.9'
-REPARO_VERSION_QUOTE='Your overconfidence is your weakness.'
-REPARO_VERSION_SOURCE='Star Wars: Return of the Jedi (1983), Luke Skywalker'
-REPARO_VERSION_ART='  (o_o) /==|  LUKE'
+REPARO_LINUX_VERSION='1.4.5.0'
+REPARO_VERSION_QUOTE='Always in motion is the future.'
+REPARO_VERSION_SOURCE='Star Wars: The Empire Strikes Back (1980), Yoda'
+REPARO_VERSION_ART='  <(-_-)>  YODA ~ future in motion'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-}"
 REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
 LATEST=0
@@ -88,8 +88,10 @@ Native --new requires python3 for strict JSON validation and sha256sum for diges
 Both platforms validate immutable release artifacts before installation. Native
 Install shares New's download behavior; Windows Install remains offline.
 
-Windows-only: staged Windows Update details and interactive Esc safe-boundary
-skip requests. Native package managers have no portable cooperative-cancel API;
+Windows-only: Slicer management (--slicer or --include Slicer), staged Windows
+Update details and interactive Esc safe-boundary skip requests. Slicer selectors
+are rejected before maintenance, authentication or private-cache activity.
+Native package managers have no portable cooperative-cancel API;
 this runner does not poll keys or kill a wrapper to pretend its installer stopped.
 EOF
 }
@@ -475,6 +477,9 @@ normalize_section() {
 }
 
 add_include() {
+    case "$(normalize_option "$1")" in
+        slicer) die 'Slicer management is Windows-only; native Linux does not acquire or run its private owner' ;;
+    esac
     section=$(normalize_section "$1") || die "Unknown section: $1"
     case "|$INCLUDE|" in
         *"|$section|"*) ;;
@@ -1108,6 +1113,7 @@ parse_args() {
             case "$option" in new|n|install|i|latest|report-lifecycle|status|s|kill|k|tail|t|log|version|v|help|h) die 'Task cannot schedule lifecycle or utility modes' ;; esac
         fi
         case "$option" in
+            slicer) die 'Slicer management is Windows-only; native Linux does not acquire or run its private owner' ;;
             update|u) ;;
             force|f) FORCE=1 ;;
             preview|p) PREVIEW=1 ;;

@@ -76,7 +76,7 @@ printf '%s\n' '{"version":"2.0.29"}' >"$fixture/owning prefix/lib/node_modules/@
 rm "$fixture/calls"
 sh "$repo/linux/reparo-linux" --include Opencode >"$fixture/output"
 [ ! -e "$fixture/calls" ]
-grep -q 'mixed V1/V2' "$fixture/output"
+grep -q 'V1 owns the command but V2 is also installed' "$fixture/output"
 ln -sfn '../lib/node_modules/@opencode/cli/bin/opencode' "$fixture/owning prefix/bin/opencode"
 for status in 0 2; do
     rm -f "$fixture/calls"
@@ -104,7 +104,9 @@ sh "$repo/linux/reparo-linux" --include Npm >"$fixture/output"
 printf '%s\n' update -g -- @example/other other >"$fixture/expected"
 cmp "$fixture/expected" "$fixture/calls"
 rm "$fixture/calls"
-OC_INVENTORY_STATUS=1 sh "$repo/linux/reparo-linux" --include Npm >"$fixture/output" || true
+inventory_status=0
+OC_INVENTORY_STATUS=1 sh "$repo/linux/reparo-linux" --include Npm >"$fixture/output" || inventory_status=$?
+[ "$inventory_status" -ne 0 ]
 [ ! -e "$fixture/calls" ]
-grep -q 'cannot enumerate global npm packages' "$fixture/output"
+grep -q 'Reparo Linux FAILED' "$fixture/output"
 printf '%s\n' 'Native OpenCode V2 migration/rollback, ownership/coexistence, running/unknown process state, preview, standalone, failure, npm exclusion and inventory failure tests passed.'
