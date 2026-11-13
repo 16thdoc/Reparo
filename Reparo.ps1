@@ -25,6 +25,17 @@ param(
     [switch]$Ninja,
     [Alias('P')]
     [switch]$Preview,
+    [ValidateSet('Status','Check','Install','Update','Repair','SelfTest')]
+    [string]$Slicer,
+    [string]$SlicerInstallRoot = "$env:ProgramData\Slicer",
+    [string]$SlicerOwnerCacheRoot,
+    [string]$SlicerPackageZip,
+    [string]$SlicerPackagePath,
+    [string]$SlicerExpectedSHA256,
+    [string]$SlicerVersion = '0.2.4',
+    [switch]$SlicerUnattended,
+    [switch]$SlicerNoPathUpdate,
+    [switch]$SlicerJson,
     [Alias('WU')]
     [switch]$WindowsUpdate,
     [Alias('Win11', 'Windows11', 'UpgradeToWindows11', 'Windows11Upgrade', 'FeatureUpdate', 'FU')]
@@ -171,9 +182,29 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.9'
+$script:ReparoVersion = '1.4.5.0'
 $script:ReparoSourcePath = $PSCommandPath
 $script:ReparoBoundParameters = $PSBoundParameters
+function New-ReparoSlicerFailure {
+    param([string]$Action,[string]$Code,[string]$Message,[string]$State='NotStarted',$OwnerExitCode=$null,[switch]$PreviewPlan,$Capture=$null)
+    [pscustomobject]@{ExitCode=$(if($PreviewPlan){0}else{1});Capture=$Capture;Result=[pscustomobject][ordered]@{
+        AdapterSchema='reparo.slicer.adapter.v1';Component='Reparo.Slicer';Action=$Action
+        Outcome=$(if($PreviewPlan){'Preview'}elseif($State -eq 'NotStarted'){'Blocked'}else{'Failed'})
+        ErrorCode=$Code;Message=$Message;InvocationState=$State;OwnerExitCode=$OwnerExitCode
+    }}
+}
+if($Slicer){
+    $slicerAllowed=@('Slicer','SlicerInstallRoot','SlicerOwnerCacheRoot','SlicerPackageZip','SlicerPackagePath','SlicerExpectedSHA256','SlicerVersion','SlicerUnattended','SlicerNoPathUpdate','SlicerJson','Preview','Force','Verbose','Debug','ErrorAction','WarningAction','InformationAction','ErrorVariable','WarningVariable','InformationVariable','OutVariable','OutBuffer','PipelineVariable')
+    foreach($key in $PSBoundParameters.Keys){if($key -notin $slicerAllowed){
+        $failure=New-ReparoSlicerFailure $Slicer InvalidArguments "Explicit -Slicer cannot be combined with -$key; no acquisition or maintenance was started."
+        if($SlicerJson){$failure.Result|ConvertTo-Json -Compress}else{$failure.Result}
+        exit 1
+    }}
+}
+elseif($PSBoundParameters.ContainsKey('SlicerJson') -or $PSBoundParameters.ContainsKey('SlicerUnattended')){throw '-SlicerJson and -SlicerUnattended require explicit -Slicer; normal maintenance already invokes its owner unattended.'}
+elseif(@($PSBoundParameters.Keys|Where-Object {$_ -like 'Slicer*'}).Count -and -not ($Update -or $Force -or $Include -contains 'Slicer')){
+    throw 'Slicer-only options require explicit -Slicer, -Include Slicer, -Update or -Force; refusing accidental default maintenance.'
+}
 if ($Headless) {
     if ($Task -or $PSBoundParameters.ContainsKey('Time')) { throw '-Headless cannot be combined with -Task or -Time.' }
     if ($Preview -or $Help -or $Version -or $Install -or $New -or $Latest -or $Ninja -or $Status -or $Tail -or $Kill -or $Sweep -or $DeleteStale -or $Search -or $Msi -or $ReportLifecycle -or $AddVersionLock -or $ListVersionLocks -or $CheckApp -or $LockApp -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $WingetDiscover -or $WingetHealth) { throw '-Headless only supports maintenance runs. Run administrative and read-only commands normally.' }
@@ -182,6 +213,7 @@ if ($Headless) {
     $script:ReparoBoundParameters['Time'] = $Time
 }
 $script:ReparoTaskBlockedParameters = @('Headless','Time','New','Latest','Install','Ninja','Status','Tail','Kill','Sweep','DeleteStale','Search','AddVersionLock','ListVersionLocks','CheckApp','LockApp','MigrateChocoToWinget','FinalizeChocolateyRemoval','Syslog','SkipNinjaPublish','SourceUrl','NoBackup','ReportLifecycle','ReportingOutcome','ReportingPreviousVersion')
+$script:ReparoTaskBlockedParameters += @('Slicer','SlicerInstallRoot','SlicerOwnerCacheRoot','SlicerPackageZip','SlicerPackagePath','SlicerExpectedSHA256','SlicerVersion','SlicerUnattended','SlicerNoPathUpdate','SlicerJson')
 if (($ReportingOutcome -or $PSBoundParameters.ContainsKey('ReportingPreviousVersion')) -and -not $ReportLifecycle) { throw 'Reporting fields require -ReportLifecycle; refusing accidental maintenance.' }
 if ($ReportLifecycle -and (-not $ReportingOutcome -or $Install -or $New -or $Latest -or $Ninja -or $Update -or $Force -or $Task -or $Include)) { throw 'ReportLifecycle requires an explicit outcome and cannot run maintenance/lifecycle work.' }
 if ($ReportLifecycle) {
@@ -201,6 +233,7 @@ if ($ForceReboot -and $ForceShutdown) {
 }
 
 $script:ReparoIsWindows = if (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsWindows } else { $true }
+if(-not $script:ReparoIsWindows -and $Include -contains 'Slicer'){throw 'Slicer is Windows-only; native maintenance and private owner acquisition were not started.'}
 $script:ReparoIsLinux = if (Get-Variable -Name IsLinux -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsLinux } else { $false }
 $script:ReparoIsMacOS = if (Get-Variable -Name IsMacOS -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsMacOS } else { $false }
 $script:ReparoHostName = if (-not [string]::IsNullOrWhiteSpace($env:COMPUTERNAME)) { $env:COMPUTERNAME } elseif (-not [string]::IsNullOrWhiteSpace($env:HOSTNAME)) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
@@ -274,6 +307,7 @@ function Get-ReparoVersionFlavor {
     # On every runtime version bump, add a fresh Quote/Source pair here instead
     # of reusing the previous version's quote.
     $versionFlavors = @{
+        '1.4.5.0' = [pscustomobject]@{ Quote = 'Always in motion is the future.'; Source = 'Star Wars: The Empire Strikes Back (1980), Yoda'; Art = '  <(-_-)>  YODA ~ future in motion' }
         '1.4.4.9' = [pscustomobject]@{ Quote = 'Your overconfidence is your weakness.'; Source = 'Star Wars: Return of the Jedi (1983), Luke Skywalker'; Art = '  (o_o) /==|  LUKE' }
         '1.4.4.8' = [pscustomobject]@{ Quote = 'You must unlearn what you have learned.'; Source = 'Star Wars: The Empire Strikes Back (1980), Yoda'; Art = '  <(-_-)>  YODA -- judge outcomes by their receipts' }
         '1.0.8.1' = [pscustomobject]@{ Quote = 'Hotfix applied. The goblin has been relocated.'; Source = 'Reparo maintenance log'; Art = '  GOBLIN: evicted from version output' }
@@ -660,6 +694,483 @@ Log: $script:ReparoLogPath
     }
 }
 
+function Get-ReparoSlicerPins {
+    # Public protocol/provenance metadata only. Private implementation bytes are never embedded here.
+    [pscustomobject][ordered]@{
+        Schema='reparo.slicer.owner.v1'; Repository='16thdoc/Slicer'
+        Commit='8f363032e6837605e6c91ec866ccc06a45362506'; Version='0.2.4'; ReceiptSchemaVersion=1
+        Files=[ordered]@{
+            'Manage-Slicer.ps1'='35a257def78bb614a8a0ac8c7440958e8ea3827ef8be7b62ab19082ad4d6c48b'
+            'Slicer.Management.psm1'='e9e2995570bb9590c88dfc8058751d8094066693dd3eb656e4c1e2e0f80da0a8'
+            'Bootstrap-Slicer.ps1'='3a8efa8191f617e2955d6a1cc24b4bf691e72321ea96a00823e13e5189c0200d'
+        }
+    }
+}
+
+function Stop-ReparoSlicerFailure {
+    param([string]$Code,[string]$Message)
+    $failure=[InvalidOperationException]::new($Message)
+    $failure.Data['ReparoSlicerCode']=$Code
+    throw $failure
+}
+
+function Assert-ReparoSlicerPath {
+    param([string]$Path)
+    if($Path -notmatch '^[A-Za-z]:[\\/]' -or $Path.Substring(2).Contains(':')){
+        Stop-ReparoSlicerFailure InvalidPath 'Slicer paths must be fully qualified local Windows paths without alternate streams.'
+    }
+    foreach($component in ($Path.Substring(3) -split '[\\/]')){
+        if($component -match '[. ]$' -or $component -match '~[0-9]' -or $component -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)'){
+            Stop-ReparoSlicerFailure InvalidPath 'Win32 trailing-dot/space, short-name and device aliases are refused; use the full canonical path.'
+        }
+    }
+    $full=[IO.Path]::GetFullPath($Path)
+    if($full.TrimEnd('\','/') -eq [IO.Path]::GetPathRoot($full).TrimEnd('\','/')){
+        Stop-ReparoSlicerFailure InvalidPath 'A volume root is not a Slicer cache or runtime directory.'
+    }
+    for($part=$full;$part;$part=[IO.Path]::GetDirectoryName($part)){
+        try{$attributes=[IO.File]::GetAttributes($part)}
+        catch [IO.FileNotFoundException]{continue}
+        catch [IO.DirectoryNotFoundException]{continue}
+        if(($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
+            Stop-ReparoSlicerFailure LinkedPath 'Linked or placeholder path components are refused for private cache and runtime access.'
+        }
+    }
+    $full.TrimEnd('\','/')
+}
+
+function Test-ReparoSlicerPathWithin {
+    param([string]$Parent,[string]$Child)
+    $Child.Equals($Parent,[StringComparison]::OrdinalIgnoreCase) -or
+        $Child.StartsWith($Parent.TrimEnd('\','/')+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-ReparoSlicerCacheLocation {
+    param([string]$OwnerCacheRoot,[string]$RuntimeRoot)
+    $cache=Assert-ReparoSlicerPath $OwnerCacheRoot
+    for($part=$cache;$part;$part=[IO.Path]::GetDirectoryName($part)){
+        if([IO.File]::Exists((Join-Path $part '.git')) -or [IO.Directory]::Exists((Join-Path $part '.git'))){
+            Stop-ReparoSlicerFailure PublicWorktreeCache 'Private owner code cannot be cached inside a Git worktree.'
+        }
+    }
+    $roots=@(Assert-ReparoSlicerPath $RuntimeRoot)
+    $hostRoot=Get-Variable -Name InstallRoot -Scope Script -ErrorAction SilentlyContinue
+    if($hostRoot -and -not [string]::IsNullOrWhiteSpace([string]$hostRoot.Value)){$roots+=Assert-ReparoSlicerPath ([string]$hostRoot.Value)}
+    foreach($root in $roots){
+        if((Test-ReparoSlicerPathWithin $cache $root) -or (Test-ReparoSlicerPathWithin $root $cache)){
+            Stop-ReparoSlicerFailure OverlappingPaths 'The private owner cache must be outside Reparo and Slicer runtime directories.'
+        }
+    }
+    $cache
+}
+
+function Get-ReparoSlicerAllowedSids {
+    $current=[Security.Principal.WindowsIdentity]::GetCurrent()
+    try{@($current.User.Value,'S-1-5-18','S-1-5-32-544') | Select-Object -Unique}finally{$current.Dispose()}
+}
+
+function Set-ReparoSlicerPrivateDirectory {
+    param([string]$Path)
+    if([IO.Directory]::Exists($Path) -or [IO.File]::Exists($Path)){
+        Stop-ReparoSlicerFailure CacheConflict 'The new private staging directory already exists.'
+    }
+    [void][IO.Directory]::CreateDirectory($Path)
+    [void](Assert-ReparoSlicerPath $Path)
+    $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+    try{
+        $security=[Security.AccessControl.DirectorySecurity]::new()
+        $security.SetAccessRuleProtection($true,$false)
+        $security.SetOwner($identity.User)
+        foreach($sid in @(Get-ReparoSlicerAllowedSids)){
+            $rule=[Security.AccessControl.FileSystemAccessRule]::new(
+                [Security.Principal.SecurityIdentifier]::new($sid),[Security.AccessControl.FileSystemRights]::FullControl,
+                ([Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit),
+                [Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
+            $security.AddAccessRule($rule)
+        }
+        Set-Acl -LiteralPath $Path -AclObject $security -ErrorAction Stop
+    }finally{$identity.Dispose()}
+    [void](Test-ReparoSlicerPrivateAcl $Path -DirectoryRoot)
+}
+
+function Test-ReparoSlicerPrivateAcl {
+    param([string]$Path,[switch]$DirectoryRoot)
+    $allowed=@(Get-ReparoSlicerAllowedSids)
+    $security=Get-Acl -LiteralPath $Path -ErrorAction Stop
+    $owner=$security.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if(($DirectoryRoot -and ($owner -ne $allowed[0] -or -not $security.AreAccessRulesProtected)) -or $owner -notin $allowed){
+        Stop-ReparoSlicerFailure CachePermissions 'The owner cache must belong to this identity and have protected private permissions.'
+    }
+    $seen=@{}
+    foreach($rule in $security.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){
+        $sid=$rule.IdentityReference.Value
+        if($sid -notin $allowed -or $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow){
+            Stop-ReparoSlicerFailure CachePermissions 'The owner cache grants access outside its approved private identities.'
+        }
+        if(($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq [Security.AccessControl.FileSystemRights]::FullControl){$seen[$sid]=$true}
+    }
+    foreach($sid in $allowed){if(-not $seen.ContainsKey($sid)){Stop-ReparoSlicerFailure CachePermissions 'The private owner cache lacks its required access rules.'}}
+    $true
+}
+
+function Get-ReparoSlicerMutexName {
+    param([string]$OwnerCacheRoot)
+    $text=([IO.Path]::GetFullPath($OwnerCacheRoot).ToLowerInvariant())+'|'+@(Get-ReparoSlicerAllowedSids)[0]
+    $hash=[Security.Cryptography.SHA256]::Create()
+    try{'Local\Reparo.SlicerOwner.'+([BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($text)))).Replace('-','').ToLowerInvariant()}
+    finally{$hash.Dispose()}
+}
+
+function Open-ReparoSlicerOwnerCache {
+    param([string]$OwnerCacheRoot,$Pins)
+    $root=Assert-ReparoSlicerPath $OwnerCacheRoot
+    [void](Test-ReparoSlicerPrivateAcl $root -DirectoryRoot)
+    $names=@($Pins.Files.Keys)+@('provenance.json')
+    $entries=@(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)
+    if($entries.Count -ne 4 -or @($entries|Where-Object {$_.PSIsContainer -or $_.Name -cnotin $names}).Count){
+        Stop-ReparoSlicerFailure OwnerPayloadInvalid 'The owner cache is partial or contains unexpected entries.'
+    }
+    $handles=New-Object 'System.Collections.Generic.List[System.IO.FileStream]'
+    try{
+        foreach($name in $names){
+            $path=Assert-ReparoSlicerPath (Join-Path $root $name)
+            [void](Test-ReparoSlicerPrivateAcl $path)
+            # Read sharing permits the child, while denying replacement, writes and deletion throughout execution.
+            $stream=[IO.FileStream]::new($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+            $handles.Add($stream)
+            $maximum=if($name -eq 'provenance.json'){16KB}else{1MB}
+            if($stream.Length -gt $maximum){Stop-ReparoSlicerFailure OwnerPayloadInvalid 'A cached owner file exceeds its bounded size.'}
+            if($name -eq 'provenance.json'){
+                $reader=[IO.StreamReader]::new($stream,[Text.Encoding]::UTF8,$true,1024,$true)
+                try{$manifest=$reader.ReadToEnd()|ConvertFrom-Json -ErrorAction Stop}finally{$reader.Dispose()}
+                foreach($field in @('Schema','Repository','Commit','Version')){
+                    if($manifest.PSObject.Properties.Name -cnotcontains $field -or $manifest.$field -isnot [string] -or $manifest.$field -cne $Pins.$field){Stop-ReparoSlicerFailure OwnerPayloadInvalid 'Cache provenance differs from the compiled owner pin.'}
+                }
+                if(($manifest.ReceiptSchemaVersion -isnot [int] -and $manifest.ReceiptSchemaVersion -isnot [long]) -or $manifest.ReceiptSchemaVersion -ne $Pins.ReceiptSchemaVersion){Stop-ReparoSlicerFailure OwnerPayloadInvalid 'Cache provenance has an invalid receipt schema type or value.'}
+                if(@($manifest.Files.PSObject.Properties).Count -ne 3){Stop-ReparoSlicerFailure OwnerPayloadInvalid 'Cache provenance has an unexpected file list.'}
+                foreach($file in $Pins.Files.Keys){if($manifest.Files.PSObject.Properties.Name -cnotcontains $file -or $manifest.Files.$file -isnot [string] -or $manifest.Files.$file -cne $Pins.Files[$file]){Stop-ReparoSlicerFailure OwnerPayloadInvalid 'Cache provenance hashes differ from compiled pins.'}}
+            }else{
+                $sha=[Security.Cryptography.SHA256]::Create()
+                try{$actual=([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+                if($actual -cne $Pins.Files[$name]){Stop-ReparoSlicerFailure OwnerPayloadInvalid 'Cached owner bytes differ from the compiled pin.'}
+            }
+            $stream.Position=0
+        }
+        [pscustomobject]@{Root=$root;Handles=$handles}
+    }catch{foreach($handle in $handles){$handle.Dispose()};throw}
+}
+
+function Get-ReparoSlicerExistingToken {
+    if(-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN)){return $env:GH_TOKEN}
+    if(-not [string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)){return $env:GITHUB_TOKEN}
+    $command=Get-Command gh.exe -CommandType Application -ErrorAction SilentlyContinue|Select-Object -First 1
+    if(-not $command){return $null}
+    $start=[Diagnostics.ProcessStartInfo]::new();$start.FileName=$command.Source;$start.Arguments='auth token'
+    $start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+    $start.EnvironmentVariables['GH_PROMPT_DISABLED']='1'
+    $child=[Diagnostics.Process]::new();$child.StartInfo=$start
+    try{
+        [void]$child.Start();$stdout=$child.StandardOutput.ReadToEndAsync();$stderr=$child.StandardError.ReadToEndAsync()
+        if(-not $child.WaitForExit(5000)){$child.Kill();[void]$child.WaitForExit(5000);return $null}
+        if(-not $stdout.Wait(5000) -or -not $stderr.Wait(5000)){return $null}
+        if($child.ExitCode -eq 0 -and $stdout.Result.Length -le 64KB){return $stdout.Result.Trim()}
+        return $null
+    }catch{return $null}finally{$child.Dispose()}
+}
+
+function Invoke-ReparoSlicerOwnerDownload {
+    param([string]$Name,[string]$Destination,[string]$Token,$Pins)
+    if($Name -cnotin @('Manage-Slicer.ps1','Slicer.Management.psm1','Bootstrap-Slicer.ps1') -or $Pins.Files.Keys -cnotcontains $Name){
+        Stop-ReparoSlicerFailure OwnerAcquisitionFailed 'An unexpected private owner filename was requested.'
+    }
+    $response=$null;$responseStream=$null;$output=$null
+    try{
+        [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $uri='https://api.github.com/repos/'+$Pins.Repository+'/contents/'+$Name+'?ref='+$Pins.Commit
+        $request=[Net.HttpWebRequest]::Create($uri)
+        $request.Method='GET';$request.AllowAutoRedirect=$false;$request.Timeout=15000;$request.ReadWriteTimeout=15000
+        $request.UserAgent='Reparo-Slicer-Owner';$request.Accept='application/vnd.github.raw';$request.Headers['Authorization']='Bearer '+$Token
+        $response=$request.GetResponse()
+        if([int]$response.StatusCode -ne 200 -or $response.ContentLength -gt 1MB){throw 'Unexpected owner response.'}
+        $responseStream=$response.GetResponseStream()
+        $output=[IO.FileStream]::new($Destination,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        $clock=[Diagnostics.Stopwatch]::StartNew();$buffer=[byte[]]::new(64KB);$total=0L
+        while(($count=$responseStream.Read($buffer,0,$buffer.Length)) -gt 0){
+            $total+=$count
+            if($total -gt 1MB -or $clock.Elapsed.TotalSeconds -gt 60){throw 'Owner response exceeded its bound.'}
+            $output.Write($buffer,0,$count)
+        }
+        if($response.ContentLength -ge 0 -and $total -ne $response.ContentLength){throw 'Owner response was incomplete.'}
+        $output.Flush($true)
+    }catch{Stop-ReparoSlicerFailure OwnerAcquisitionFailed 'Private owner acquisition failed; check approved GitHub access and immutable source availability. No owner was executed.'}
+    finally{if($output){$output.Dispose()};if($responseStream){$responseStream.Dispose()};if($response){$response.Dispose()}}
+}
+
+function Resolve-ReparoSlicerOwner {
+    param([string]$OwnerCacheRoot,$Pins,[switch]$Acquire)
+    if([IO.Directory]::Exists($OwnerCacheRoot)){
+        $lease=Open-ReparoSlicerOwnerCache $OwnerCacheRoot $Pins
+        try{return $lease.Root}finally{foreach($handle in $lease.Handles){$handle.Dispose()}}
+    }
+    if([IO.File]::Exists($OwnerCacheRoot)){Stop-ReparoSlicerFailure OwnerPayloadInvalid 'The private cache path is not a directory.'}
+    if(-not $Acquire){Stop-ReparoSlicerFailure OwnerPayloadMissing 'The pinned private owner is not cached; offline Status and SelfTest do not acquire code.'}
+    $token=Get-ReparoSlicerExistingToken
+    if([string]::IsNullOrWhiteSpace($token)){Stop-ReparoSlicerFailure CredentialsMissing 'Private owner acquisition requires approved GH_TOKEN, GITHUB_TOKEN or existing noninteractive GitHub CLI access; no login or vault unlock was attempted.'}
+    $parent=[IO.Path]::GetDirectoryName($OwnerCacheRoot)
+    [void][IO.Directory]::CreateDirectory($parent)
+    [void](Assert-ReparoSlicerPath $parent)
+    $stage=Join-Path $parent ('.'+[IO.Path]::GetFileName($OwnerCacheRoot)+'-stage-'+[guid]::NewGuid().ToString('N'))
+    Set-ReparoSlicerPrivateDirectory $stage
+    try{
+        foreach($name in $Pins.Files.Keys){Invoke-ReparoSlicerOwnerDownload -Name $name -Destination (Join-Path $stage $name) -Token $token -Pins $Pins | Out-Null}
+        [IO.File]::WriteAllText((Join-Path $stage 'provenance.json'),($Pins|ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))
+        $lease=Open-ReparoSlicerOwnerCache $stage $Pins
+        try{}finally{foreach($handle in $lease.Handles){$handle.Dispose()}}
+        [IO.Directory]::Move($stage,$OwnerCacheRoot)
+        $OwnerCacheRoot
+    }catch{
+        $code=$_.Exception.Data['ReparoSlicerCode'];if(-not $code){$code='OwnerAcquisitionFailed'}
+        Stop-ReparoSlicerFailure $code 'Private owner acquisition did not publish a verified cache. Partial staging, if any, remains private; no owner was executed.'
+    }finally{$token=$null}
+}
+
+function Invoke-ReparoSlicerOwnerProcess {
+    param([string]$EntryPoint,[hashtable]$Parameters,[string]$OwnerRoot,$Pins)
+    $engineName=if($PSVersionTable.PSEdition -eq 'Desktop'){'powershell.exe'}else{'pwsh.exe'}
+    $engine=Assert-ReparoSlicerPath (Join-Path $PSHOME $engineName)
+    if(-not [IO.File]::Exists($engine)){Stop-ReparoSlicerFailure OwnerInvocationFailed 'The current trusted PowerShell installation has no CLI executable.'}
+    $request=@{EntryPoint=$EntryPoint;Parameters=$Parameters;OwnerRoot=$OwnerRoot;Pins=$Pins.Files}
+    $data=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($request|ConvertTo-Json -Depth 6 -Compress)))
+    # Encodes request DATA, never private owner implementation or credentials.
+    $code=@'
+$ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
+$request=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__REQUEST_DATA__'))|ConvertFrom-Json
+foreach($pin in $request.Pins.PSObject.Properties){
+    $path=Join-Path $request.OwnerRoot $pin.Name
+    $stream=[IO.File]::OpenRead($path);$sha=[Security.Cryptography.SHA256]::Create()
+    try{$hash=([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant()}finally{$stream.Dispose();$sha.Dispose()}
+    if($hash -cne $pin.Value){throw 'Owner changed before execution.'}
+}
+$parameters=@{}
+foreach($property in $request.Parameters.PSObject.Properties){$parameters[$property.Name]=$property.Value}
+& $request.EntryPoint @parameters
+exit $LASTEXITCODE
+'@
+    $code=$code.Replace('__REQUEST_DATA__',$data)
+    $start=[Diagnostics.ProcessStartInfo]::new();$start.FileName=$engine
+    $start.Arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand '+[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
+    $start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+    $start.EnvironmentVariables['PSModulePath']=(Join-Path $PSHOME 'Modules')+[IO.Path]::PathSeparator+$env:PSModulePath
+    $start.EnvironmentVariables['GH_PROMPT_DISABLED']='1'
+    $child=[Diagnostics.Process]::new();$child.StartInfo=$start
+    try{
+        [void]$child.Start();$stdout=$child.StandardOutput.ReadToEndAsync();$stderr=$child.StandardError.ReadToEndAsync()
+        # No timeout kills an active owner transaction. The owner bounds its HTTP and verification children.
+        $child.WaitForExit()
+        [pscustomobject]@{ExitCode=$child.ExitCode;Output=$stdout.GetAwaiter().GetResult();Error=$stderr.GetAwaiter().GetResult()}
+    }finally{$child.Dispose()}
+}
+
+function Get-ReparoSlicerCapture {
+    param($Process)
+    $names=@($Process.PSObject.Properties.Name)
+    $complete=$names -contains 'ExitCode' -and $names -contains 'Output' -and $names -contains 'Error' -and
+        ($Process.ExitCode -is [int] -or $Process.ExitCode -is [long]) -and $Process.Output -is [string] -and $Process.Error -is [string]
+    $code=$null;$stdoutBytes=$null;$stderrBytes=$null
+    if($names -contains 'ExitCode' -and ($Process.ExitCode -is [int] -or $Process.ExitCode -is [long])){$code=$Process.ExitCode}
+    if($names -contains 'Output' -and $Process.Output -is [string]){$stdoutBytes=[Text.Encoding]::UTF8.GetByteCount($Process.Output)}
+    if($names -contains 'Error' -and $Process.Error -is [string]){$stderrBytes=[Text.Encoding]::UTF8.GetByteCount($Process.Error)}
+    # Retain stream/exit facts, never untrusted diagnostic text or credential-bearing response bodies.
+    [pscustomobject]@{Schema='reparo.slicer.transport.v1';OwnerExitCode=$code;StdoutPresent=($null -ne $stdoutBytes -and $stdoutBytes -gt 0);StdoutBytes=$stdoutBytes;StderrPresent=($null -ne $stderrBytes -and $stderrBytes -gt 0);StderrBytes=$stderrBytes;CaptureHealth=$(if($complete){'complete'}else{'degraded'})}
+}
+
+function Test-ReparoSlicerReceipt {
+    param($Receipt,[string]$Action,[int]$ExitCode,[bool]$Preview)
+    if($null -eq $Receipt -or @($Receipt).Count -ne 1){return $false}
+    foreach($name in @('SchemaVersion','Action','Outcome','Changed','InstalledVersion','DesiredVersion','Currentness','Integrity','Trust','ArtifactSHA256','RequiresElevation','PlannedChanges','Rollback','ErrorCode','Message','LocalChecks')){
+        if($Receipt.PSObject.Properties.Name -cnotcontains $name){return $false}
+    }
+    if(($Receipt.SchemaVersion -isnot [int] -and $Receipt.SchemaVersion -isnot [long]) -or $Receipt.SchemaVersion -ne 1 -or
+        $Receipt.Action -cne $Action -or $Receipt.Changed -isnot [bool] -or $Receipt.RequiresElevation -isnot [bool]){return $false}
+    if($Receipt.Currentness -cnotin @('Unknown','NotInstalled','Outdated','Ahead','Drifted','Current') -or $Receipt.Integrity -cnotin @('Unknown','Drifted','Verified') -or $Receipt.Trust -cnotin @('None','ExplicitLocalSource','VerifiedZip')){return $false}
+    foreach($name in @('InstalledVersion','DesiredVersion')){if($null -ne $Receipt.$name -and ($Receipt.$name -isnot [string] -or $Receipt.$name -notmatch '^\d+\.\d+\.\d+$')){return $false}}
+    if($null -ne $Receipt.ArtifactSHA256 -and ($Receipt.ArtifactSHA256 -isnot [string] -or $Receipt.ArtifactSHA256 -notmatch '^[a-fA-F0-9]{64}$')){return $false}
+    if($null -eq $Receipt.PlannedChanges -or $Receipt.PlannedChanges -is [string] -or @($Receipt.PlannedChanges|Where-Object {$_ -isnot [string]}).Count){return $false}
+    if($null -eq $Receipt.Rollback){return $false}
+    foreach($name in @('Attempted','Succeeded','BackupPath','PathRestored')){if($Receipt.Rollback.PSObject.Properties.Name -cnotcontains $name){return $false}}
+    if($Receipt.Rollback.Attempted -isnot [bool]){return $false}
+    foreach($name in @('Succeeded','PathRestored')){if($null -ne $Receipt.Rollback.$name -and $Receipt.Rollback.$name -isnot [bool]){return $false}}
+    if($null -ne $Receipt.Rollback.BackupPath -and $Receipt.Rollback.BackupPath -isnot [string]){return $false}
+    foreach($name in @('ErrorCode','Message')){if($null -ne $Receipt.$name -and $Receipt.$name -isnot [string]){return $false}}
+    $success=@('Status','Current','Installed','Updated','Repaired','Preview','SelfTestPassed')
+    if($Receipt.Outcome -cnotin ($success+@('Blocked','Failed','FailedRolledBack','FailedRollback')) -or (($ExitCode -eq 0) -ne ($Receipt.Outcome -cin $success))){return $false}
+    if($Preview -and $Receipt.Outcome -cnotin @('Preview','Status','Blocked')){return $false}
+    if(-not $Preview -and $Receipt.Outcome -ceq 'Preview'){return $false}
+    if($Action -eq 'Status' -and $Receipt.Outcome -cnotin @('Status','Blocked')){return $false}
+    if($Action -eq 'SelfTest' -and $Receipt.Outcome -cnotin @('SelfTestPassed','Preview','Blocked')){return $false}
+    if($Action -cin @('Install','Update') -and $Receipt.Outcome -cnotin @('Current','Installed','Updated','Preview','Blocked','Failed','FailedRolledBack','FailedRollback')){return $false}
+    if($Action -ceq 'Repair' -and $Receipt.Outcome -cnotin @('Current','Repaired','Preview','Blocked','Failed','FailedRolledBack','FailedRollback')){return $false}
+    if($Action -cne 'Status' -and $Receipt.Outcome -ceq 'Status'){return $false}
+    if($Receipt.Outcome -cin @('Status','Current','Preview','SelfTestPassed','Blocked','FailedRolledBack') -and $Receipt.Changed){return $false}
+    if($Receipt.Outcome -cin @('Installed','Updated','Repaired','FailedRollback') -and -not $Receipt.Changed){return $false}
+    return $true
+}
+
+function Get-ReparoSlicerInstalledIdentity {
+    param([string]$InstallRoot)
+    try{
+        $root=Assert-ReparoSlicerPath $InstallRoot
+        if(-not [IO.Directory]::Exists($root)){
+            if([IO.File]::Exists($root)){throw 'Not a runtime directory.'}
+            return [pscustomobject]@{State='Absent';Version=$null;Reason='Optional Slicer runtime is absent; no installation requested.'}
+        }
+        foreach($name in @('Slicer.psd1','Slicer.psm1','Slicer.Release.json')){
+            $path=Assert-ReparoSlicerPath (Join-Path $root $name)
+            if(-not [IO.File]::Exists($path)){throw 'Required runtime identity files are missing.'}
+        }
+        $path=Join-Path $root 'Slicer.Release.json'
+        $stream=[IO.FileStream]::new($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        try{
+            if($stream.Length -gt 64KB){throw 'Runtime identity is oversized.'}
+            $reader=[IO.StreamReader]::new($stream,[Text.Encoding]::UTF8,$true)
+            try{$identity=$reader.ReadToEnd()|ConvertFrom-Json -ErrorAction Stop}finally{$reader.Dispose()}
+        }finally{$stream.Dispose()}
+        if($identity.Name -isnot [string] -or $identity.Name -cne 'Slicer' -or $identity.Version -isnot [string] -or $identity.Version -notmatch '^\d+\.\d+\.\d+$'){throw 'Runtime identity is invalid.'}
+        $manifestPath=Join-Path $root 'Slicer.psd1'
+        $manifestStream=[IO.FileStream]::new($manifestPath,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        try{
+            if($manifestStream.Length -gt 64KB){throw 'Runtime manifest is oversized.'}
+            $reader=[IO.StreamReader]::new($manifestStream,[Text.Encoding]::UTF8,$true)
+            try{$manifestText=$reader.ReadToEnd()}finally{$reader.Dispose()}
+        }finally{$manifestStream.Dispose()}
+        $tokens=$null;$errors=$null;$manifestAst=[Management.Automation.Language.Parser]::ParseInput($manifestText,[ref]$tokens,[ref]$errors)
+        $table=$manifestAst.Find({param($node)$node -is [Management.Automation.Language.HashtableAst]},$true)
+        if(@($errors).Count -or -not $table){throw 'Runtime manifest is not a safe literal.'}
+        $manifest=$table.SafeGetValue()
+        if($manifest.RootModule -isnot [string] -or $manifest.RootModule -cne 'Slicer.psm1' -or $manifest.ModuleVersion -isnot [string] -or $manifest.ModuleVersion -cne $identity.Version){throw 'Installed identity metadata disagrees.'}
+        [pscustomobject]@{State='Present';Version=[string]$identity.Version;Reason='Observed installed metadata only; integrity and currentness require the standalone owner.'}
+    }catch{[pscustomobject]@{State='Unverified';Version=$null;Reason='Slicer runtime identity is ambiguous or unreadable; inspect it before maintenance.'}}
+}
+
+function Invoke-ReparoSlicer {
+    [CmdletBinding()]
+    param([ValidateSet('Status','Check','Install','Update','Repair','SelfTest')][string]$Action='Status',
+        [string]$InstallRoot="$env:ProgramData\Slicer",[string]$OwnerCacheRoot,[string]$PackageZip,[string]$PackagePath,
+        [string]$ExpectedSHA256,[string]$Version='0.2.4',[switch]$Preview,[switch]$Force,[switch]$Unattended,[switch]$NoPathUpdate)
+    $Action=@{Status='Status';Check='Check';Install='Install';Update='Update';Repair='Repair';SelfTest='SelfTest'}[$Action]
+    $mutex=$null;$ownsMutex=$false;$lease=$null;$started=$false
+    try{
+        if([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT){Stop-ReparoSlicerFailure UnsupportedPlatform 'Standalone Slicer management is Windows-only.'}
+        foreach($name in @('InstallRoot','OwnerCacheRoot','PackageZip','PackagePath','ExpectedSHA256','Version')){
+            if($PSBoundParameters.ContainsKey($name) -and [string]::IsNullOrWhiteSpace([string]$PSBoundParameters[$name])){Stop-ReparoSlicerFailure InvalidArguments 'Explicit Slicer paths, version and hash cannot be empty.'}
+        }
+        if(($PackageZip -and $PackagePath) -or ($ExpectedSHA256 -and -not $PackageZip) -or
+            ($PackageZip -and ($ExpectedSHA256 -notmatch '^[a-fA-F0-9]{64}$' -or $Version -notmatch '^v?\d+\.\d+\.\d+$')) -or
+            ($Version -ne 'latest' -and $Version -notmatch '^v?\d+\.\d+\.\d+$') -or
+            ($Action -eq 'SelfTest' -and ($PackageZip -or $PackagePath -or $Version -ne '0.2.4')) -or
+            ($Action -eq 'Status' -and -not ($PackageZip -or $PackagePath) -and $Version -ne '0.2.4') -or
+            ($Force -and $Action -in @('Status','Check','SelfTest'))){Stop-ReparoSlicerFailure InvalidArguments 'Conflicting or unused Slicer arguments; a ZIP needs an exact version and SHA-256, and SelfTest is local only.'}
+        $pins=Get-ReparoSlicerPins
+        if(-not $OwnerCacheRoot){
+            if([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)){Stop-ReparoSlicerFailure InvalidPath 'LocalAppData is unavailable; no private owner cache fallback was selected.'}
+            $OwnerCacheRoot=Join-Path $env:LOCALAPPDATA ('Reparo\SlicerOwner\'+$pins.Commit)
+        }
+        $InstallRoot=Assert-ReparoSlicerPath $InstallRoot
+        $OwnerCacheRoot=Assert-ReparoSlicerCacheLocation $OwnerCacheRoot $InstallRoot
+        foreach($candidate in @($PackageZip,$PackagePath)|Where-Object {$_}){
+            $candidatePath=Assert-ReparoSlicerPath $candidate
+            if((Test-ReparoSlicerPathWithin $OwnerCacheRoot $candidatePath) -or (Test-ReparoSlicerPathWithin $candidatePath $OwnerCacheRoot)){
+                Stop-ReparoSlicerFailure OverlappingPaths 'Candidate inputs and the private owner cache must not overlap.'
+            }
+            if((Test-ReparoSlicerPathWithin $InstallRoot $candidatePath) -or ($PackagePath -and (Test-ReparoSlicerPathWithin $candidatePath $InstallRoot))){
+                Stop-ReparoSlicerFailure OverlappingPaths 'Candidate source and runtime directories must not overlap.'
+            }
+        }
+        if($Preview -and -not [IO.Directory]::Exists($OwnerCacheRoot) -and -not [IO.File]::Exists($OwnerCacheRoot)){
+            return New-ReparoSlicerFailure $Action OwnerAcquisitionPlanned 'Preview only: would acquire the exact pinned private owner if needed; desired runtime state is unverified. No credentials, network or cache changes occurred.' -PreviewPlan
+        }
+        $acquire=$Action -notin @('Status','SelfTest') -and -not $Preview
+        if($acquire){
+            $mutex=[Threading.Mutex]::new($false,(Get-ReparoSlicerMutexName $OwnerCacheRoot))
+            try{$ownsMutex=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$ownsMutex=$true}
+            if(-not $ownsMutex){Stop-ReparoSlicerFailure Busy 'Another invocation owns this private cache; no lock was stolen.'}
+        }
+        $owner=Resolve-ReparoSlicerOwner -OwnerCacheRoot $OwnerCacheRoot -Pins $pins -Acquire:$acquire
+        $lease=Open-ReparoSlicerOwnerCache $owner $pins
+        $ownerAction=if($Action -eq 'Check'){'Status'}else{$Action}
+        $local=[bool]($PackageZip -or $PackagePath)
+        $bootstrap=$Action -notin @('Status','SelfTest') -and -not $local
+        $entry=Join-Path $owner $(if($bootstrap){'Bootstrap-Slicer.ps1'}else{'Manage-Slicer.ps1'})
+        $parameters=@{Action=$ownerAction;InstallRoot=$InstallRoot;Preview=[bool]$Preview;Force=[bool]$Force;Unattended=[bool]$Unattended;NoPathUpdate=[bool]$NoPathUpdate;Format='Json'}
+        if($bootstrap){$parameters.Version=$Version}
+        elseif($local){
+            if($PackageZip){$parameters.PackageZip=$PackageZip;$parameters.ExpectedSHA256=$ExpectedSHA256}
+            else{$parameters.PackagePath=$PackagePath}
+            $parameters.ExpectedVersion=$Version -replace '^v',''
+        }
+        $started=$true
+        $process=Invoke-ReparoSlicerOwnerProcess -EntryPoint $entry -Parameters $parameters -OwnerRoot $owner -Pins $pins
+        $capture=Get-ReparoSlicerCapture $process
+        if($capture.CaptureHealth -ne 'complete'){
+            return New-ReparoSlicerFailure $Action InvalidOwnerReceipt 'The owner transport did not preserve a complete typed exit/stream result; inspect target state before retrying.' Unknown $capture.OwnerExitCode -Capture $capture
+        }
+        if(-not [string]::IsNullOrWhiteSpace($process.Error)){
+            return New-ReparoSlicerFailure $Action OwnerErrorStream 'The owner wrote unexpected diagnostic data; raw error text is withheld. Inspect retained target state before retrying.' Unknown $process.ExitCode -Capture $capture
+        }
+        try{
+            if([string]::IsNullOrWhiteSpace($process.Output) -or $process.Output.Length -gt 1MB){throw 'Missing or oversized receipt.'}
+            $receipt=$process.Output|ConvertFrom-Json -ErrorAction Stop
+            if(-not (Test-ReparoSlicerReceipt $receipt $ownerAction $process.ExitCode ([bool]$Preview))){throw 'Receipt mismatch.'}
+        }catch{return New-ReparoSlicerFailure $Action InvalidOwnerReceipt 'The owner returned missing, malformed or inconsistent data; inspect target state before retrying.' Unknown $process.ExitCode -Capture $capture}
+        [pscustomobject]@{ExitCode=[int]$process.ExitCode;Result=$receipt;Capture=$capture}
+    }catch{
+        $code=$_.Exception.Data['ReparoSlicerCode'];if(-not $code){$code=if($started){'OwnerInvocationFailed'}else{'OwnerPayloadInvalid'}}
+        $message=if($started){'Owner execution did not return a conclusive result; inspect target state before retrying.'}elseif($_.Exception.Data['ReparoSlicerCode']){$_.Exception.Message}else{'The private owner cache could not be verified; no owner was invoked.'}
+        New-ReparoSlicerFailure $Action $code $message $(if($started){'Unknown'}else{'NotStarted'})
+    }finally{
+        if($lease){foreach($handle in $lease.Handles){$handle.Dispose()}}
+        if($ownsMutex){$mutex.ReleaseMutex()};if($mutex){$mutex.Dispose()}
+    }
+}
+
+function Invoke-ReparoSlicerMaintenance {
+    if(-not (Test-ReparoSectionSelected 'Slicer')){return}
+    Write-Step 'Slicer';Write-ReparoLog '[STEP] Slicer (installed-only standalone owner)'
+    $identity=Get-ReparoSlicerInstalledIdentity $SlicerInstallRoot
+    if($identity.State -ne 'Present'){
+        $bucket=if($identity.State -eq 'Absent'){'Skipped'}else{'Failed'}
+        Add-ReparoSummaryRecord -Bucket $bucket -Software Slicer -Method Slicer -Reason $identity.Reason
+        if($identity.State -ne 'Absent'){Add-ReparoOutcome -Backend Slicer -Package Slicer -Outcome blocked -Reason $identity.Reason -Effect unknown}
+        return
+    }
+    if($Preview){
+        Write-ReparoLog '[DRY-RUN] Slicer installed-only maintenance; no owner acquisition, credentials, network, cache or runtime changes.'
+        Add-ReparoSummaryRecord -Bucket Skipped -Software Slicer -CurrentVersion $identity.Version -Version $identity.Version -Method Slicer -Reason 'preview only'
+        return
+    }
+    $arguments=@{Action='Update';InstallRoot=$SlicerInstallRoot;Version=$SlicerVersion;Unattended=$true;NoPathUpdate=[bool]$SlicerNoPathUpdate}
+    foreach($entry in @(@{Name='OwnerCacheRoot';Value=$SlicerOwnerCacheRoot},@{Name='PackageZip';Value=$SlicerPackageZip},@{Name='PackagePath';Value=$SlicerPackagePath},@{Name='ExpectedSHA256';Value=$SlicerExpectedSHA256})){
+        if(-not [string]::IsNullOrWhiteSpace([string]$entry.Value)){$arguments[$entry.Name]=$entry.Value}
+    }
+    # Reparo Force selects lanes, but only explicit -Slicer mode maps owner Force.
+    $invocation=Invoke-ReparoSlicer @arguments
+    $receipt=$invocation.Result
+    $saved=Save-ReparoReceipt -Name 'slicer-owner' -Value $receipt
+    $transport=$null
+    if($invocation.PSObject.Properties.Name -contains 'Capture' -and $invocation.Capture){$transport=Save-ReparoReceipt -Name 'slicer-transport' -Value $invocation.Capture}
+    $owner=$receipt.PSObject.Properties.Name -contains 'SchemaVersion'
+    $reason=if($owner){'Standalone owner '+$receipt.Outcome+'; currentness='+$receipt.Currentness+'; integrity='+$receipt.Integrity}else{$receipt.ErrorCode+': '+$receipt.Message}
+    $after=if($owner){$receipt.InstalledVersion}else{$null}
+    $changed=$owner -and $receipt.Changed -and $invocation.ExitCode -eq 0
+    $bucket=if($invocation.ExitCode -ne 0){'Failed'}elseif($changed){'Updated'}else{'Skipped'}
+    Add-ReparoSummaryRecord -Bucket $bucket -Software Slicer -CurrentVersion $identity.Version -Version $after -Method Slicer -Reason $reason
+    $outcome=if(-not $owner -and $receipt.InvocationState -eq 'Unknown'){'unknown'}elseif($invocation.ExitCode -ne 0){if($receipt.Outcome -eq 'Blocked'){'blocked'}else{'failed'}}elseif($changed){'changed'}else{'coverage'}
+    $effect=if($changed -and $identity.Version -and $after -and $identity.Version -ne $after){'version-change'}elseif($changed){'file-repair'}elseif($invocation.ExitCode -eq 0){'unchanged'}else{'unknown'}
+    $nativeCode=if($owner){$invocation.ExitCode}else{$receipt.OwnerExitCode}
+    Add-ReparoOutcome -Backend Slicer -Package Slicer -Outcome $outcome -Reason $reason -ExitCode $nativeCode -OldVersion $identity.Version -NewVersion $after -Effect $effect -Evidence @(@($saved,$transport)|Where-Object {$_})
+}
+
 function Show-ReparoHelp {
     $versionQuote = Get-ReparoVersionQuote
     $versionArt = Get-ReparoVersionArt
@@ -677,6 +1188,9 @@ Usage:
   reparo -Kill -KillUpdaterNames winget msiexec
   reparo -Update
   reparo -Install                 # offline self-install from this Reparo.ps1
+  reparo -Slicer Status -SlicerJson # offline standalone Slicer metadata; currentness is Unknown without a candidate
+  reparo -Slicer Check -SlicerJson  # compare reviewed private Slicer 0.2.4 without installing
+  reparo -Slicer Update -Preview    # no credentials, network or private-cache mutation
   reparo -New                     # reviewed manifest-pinned release
   reparo -N                       # newest main, intentionally unpinned
   reparo -Ninja                   # reviewed pinned refresh and Ninja field publish
@@ -718,6 +1232,7 @@ Scheduling: -Task consumes recurrence words independently of maintenance flags.
 Modes:
   Default              Run Windows Update only.
   -Update              Run the managed-client pass: Winget, Winget(msstore), Choco, PowerShell7, WindowsUpdate.
+                         Also includes installed-only Opencode and Slicer; absent optional applications stay absent.
                          Updated package rows show current version -> target version when available.
   -Ninja               Install the reviewed manifest-pinned release transactionally and publish
                          the installed version plus saved WinGet health to Ninja's Reparo field.
@@ -795,6 +1310,13 @@ Modes:
                        Default: winget, choco, chocolatey, scoop, pip, pipx, npm, pnpm,
                        yarn, dotnet, rustup, cargo, conda, mamba, gem, composer.
   -Preview             Show what would run without executing update commands.
+  -Slicer <action>     Windows-only Status, Check, Install, Update, Repair or SelfTest; separate from Reparo self-install.
+  -SlicerInstallRoot   Standalone runtime (default ProgramData/Slicer); -SlicerOwnerCacheRoot selects a private local cache.
+  -SlicerVersion       Reviewed runtime target (default 0.2.4). A local -SlicerPackageZip needs -SlicerExpectedSHA256.
+  -SlicerPackagePath   Explicitly trusted local runtime source; lifecycle remains owned by standalone Slicer.
+  -SlicerUnattended    Noninteractive owner invocation. -SlicerNoPathUpdate supports isolated writable roots.
+  -SlicerJson          One owner receipt or explicit adapter envelope. Offline Status/SelfTest never acquire missing code.
+                      Private code is acquired only into a verified private cache; Reparo Install stays single-script/offline.
   -Tail, -Log          Follow the active log when used alone, or print this run's log tail at the end.
   -TailLines           Number of log lines to show when tailing. Default: 400.
   -Time,-At <when>     Windows only. Schedule a one-shot SYSTEM Reparo run, then exit.
@@ -863,6 +1385,16 @@ if ($Version) {
     return
 }
 
+if($Slicer){
+    $slicerArguments=@{Action=$Slicer;InstallRoot=$SlicerInstallRoot;Version=$SlicerVersion;Preview=[bool]$Preview;Force=[bool]$Force;Unattended=[bool]$SlicerUnattended;NoPathUpdate=[bool]$SlicerNoPathUpdate}
+    foreach($pair in @(@{Public='SlicerOwnerCacheRoot';Private='OwnerCacheRoot'},@{Public='SlicerPackageZip';Private='PackageZip'},@{Public='SlicerPackagePath';Private='PackagePath'},@{Public='SlicerExpectedSHA256';Private='ExpectedSHA256'})){
+        if($PSBoundParameters.ContainsKey($pair.Public)){$slicerArguments[$pair.Private]=$PSBoundParameters[$pair.Public]}
+    }
+    $slicerResult=Invoke-ReparoSlicer @slicerArguments
+    if($SlicerJson){$slicerResult.Result|ConvertTo-Json -Depth 10 -Compress}else{$slicerResult.Result}
+    exit $slicerResult.ExitCode
+}
+
 if (-not $script:ReparoIsWindows) {
     $homeRoot = if (-not [string]::IsNullOrWhiteSpace($HOME)) { $HOME } else { [Environment]::GetFolderPath('UserProfile') }
     $stateRoot = if (-not [string]::IsNullOrWhiteSpace($env:XDG_STATE_HOME)) { $env:XDG_STATE_HOME } else { Join-Path $homeRoot '.local/state' }
@@ -905,6 +1437,7 @@ $linuxForceSections = @($linuxPackageSections + $linuxAppSections + @(
 ))
 
 $windowsForceSections = @(
+    'Slicer'
     'WindowsUpdate'
     'Winget'
     'Winget(msstore)'
@@ -929,6 +1462,7 @@ $windowsForceSections = @(
 
 $updateSections = if ($script:ReparoIsWindows) {
     @(
+        'Slicer'
         'WindowsUpdate'
         'Winget'
         'Winget(msstore)'
@@ -7632,7 +8166,7 @@ function Write-ReparoCapabilityPlan {
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $ledger = Get-ReparoOutcomeLedger
     $ledger['identity'] = @{ sid=$sid; session=$session; elevated=$elevated }
-    $ledger.coverage = @(@('WindowsUpdate','WindowsFeatureUpdate','PowerShell7','Winget','Winget(msstore)','Scoop','Choco','Pip','Pipx','Npm','Opencode','Pnpm','Yarn','DotNet','Rust','CargoBins','Conda','Gem','Composer','Wsl','WslApt','Steam') | ForEach-Object {
+    $ledger.coverage = @(@('WindowsUpdate','WindowsFeatureUpdate','PowerShell7','Winget','Winget(msstore)','Scoop','Choco','Pip','Pipx','Npm','Opencode','Slicer','Pnpm','Yarn','DotNet','Rust','CargoBins','Conda','Gem','Composer','Wsl','WslApt','Steam') | ForEach-Object {
         @{ backend=$_; state=$(if (Test-ReparoSectionSelected $_) { 'selected' } else { 'excluded' }) }
     })
 
@@ -9459,6 +9993,7 @@ else {
 }
 Invoke-ReparoCommandStep -Section 'Npm' -PresenceCmd 'npm' -Command $npmCommand
 Invoke-ReparoCommandStep -Section 'Opencode' -PresenceCmd '' -Command $opencodeCommand
+Invoke-ReparoSlicerMaintenance
 Invoke-ReparoCommandStep -Section 'Pnpm' -PresenceCmd 'pnpm' -Command 'pnpm add -g pnpm@latest; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; pnpm update -g'
 Invoke-ReparoCommandStep -Section 'Yarn' -PresenceCmd 'yarn' -Command 'yarn global upgrade'
 $lockedDotNetIds = @(Get-ReparoLockedPackageIds -Method 'dotnet')

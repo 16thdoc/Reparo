@@ -1,10 +1,17 @@
 # Reparo
 
-Release **1.4.4.9** adds durable outcomes, a compact human panel and a
-separate manual AI repair handoff. The production manifest pins immutable reviewed
-Windows/native artifacts; publishing a release does not install it on an endpoint.
-See [the reliability contract](docs/reliability-contract.md) and
-[release/pilot gates](docs/review-pilot.md) and [release notes](docs/release-1.4.4.9.md).
+Source **1.4.5.0** adds a Windows Slicer consumer that delegates to the private
+standalone owner. Public Reparo contains the loader and reviewed pins, never private
+Slicer payloads. Native Linux rejects Slicer selectors before operational work.
+See [Slicer management](docs/slicer-management.md) and
+[1.4.5.0 source notes](docs/release-1.4.5.0.md).
+
+The durable outcomes, compact human panel and separate manual repair handoff from
+1.4.4.9 remain. The production manifest is a separate immutable reviewed release
+pointer; preparing or publishing source does not promote that pin or install an
+endpoint. See [the reliability contract](docs/reliability-contract.md),
+[release/pilot gates](docs/review-pilot.md) and
+[1.4.4.9 release notes](docs/release-1.4.4.9.md).
 
 Reparo has separate native maintenance runners for Windows and Linux. Windows uses
 the PowerShell runner for RMM deployment; Linux uses a portable POSIX `sh`
@@ -89,7 +96,11 @@ Tail. Thus `-Version`, `version`, `-V`, and `v` are equivalent, as are mixed-cas
 forms such as `--VeRsIoN`. `New` and `Install` both run the native installer, so they
 update Reparo itself; `--update` updates the machine's installed packages and tools
 instead. Windows-only commands are identified plainly rather than pretending they
-work on Linux. The native and Windows runners share the Reparo release number and
+work on Linux. Slicer selectors (`--slicer`, `-Slicer`, or bare `Slicer`, in any
+casing) and `--include Slicer` reject with exit 2 before maintenance, authentication,
+logging or private-cache activity. This boundary also applies with Preview, Force,
+task or installation arguments; no native Slicer backend or PowerShell dependency
+is added. The native and Windows runners share the Reparo release number and
 the same CyberShell-style version quote/source flavor.
 
 As of 1.4.1.3, native New/Install verify both the installer and runtime against one
@@ -106,6 +117,38 @@ artifact URLs remain strictly GitHub/commit-bound. A clone's standalone installe
 is operator-trusted bootstrap code; an installed native runner verifies the downloaded
 bootstrap first. Windows Install remains offline and Windows Latest/N remains
 unpinned; native N retains its historical New meaning, with Latest spelled out.
+
+## Windows Slicer management - 1.4.5.0 source
+
+```powershell
+reparo -Slicer Status -SlicerJson                 # offline; never acquire missing owner code
+reparo -Slicer Check -SlicerUnattended -SlicerJson # explicit private release comparison
+reparo -Slicer Update -Preview -SlicerJson        # no Slicer auth/network/cache mutation
+reparo -Slicer SelfTest -SlicerJson               # cached owner, local checks only
+reparo -Preview -Include Slicer                  # normal installed-only section preview
+```
+
+Explicit `-Slicer` actions return before normal maintenance/logging and reject
+unrelated execution/selection flags. Normal `-Update`, `-Force` and
+`-Include Slicer` maintain only an already installed Slicer; absent installations
+remain absent without acquisition. No-mode invocation still selects Windows Update
+only. First installation requires explicit `-Slicer Install` and its applicable
+authorization/elevation. Normal Force does not forward an owner trust/downgrade
+bypass.
+
+The private three-file owner cache is protected for the current execution identity,
+SYSTEM and Administrators, outside source/runtime trees, and verified against fixed
+immutable commit/hash pins. Existing approved GitHub access stays in memory; no
+token parameter, login, vault unlock or credential provisioning is added. Offline
+Status/SelfTest never acquire missing code; explicit Preview returns a plan even
+when the cache is absent. Owner schema-1 receipts and exits remain authoritative;
+consumer failures/plans use a separate adapter schema. See the complete
+[actions, cache and acceptance contract](docs/slicer-management.md).
+
+Single-script offline Reparo `-Install` and `-Version` require no adjacent private
+files and do not acquire or install Slicer. Source publication, production-pin
+promotion, endpoint deployment and actual Slicer maintenance are separate results.
+Existing [release/pilot approval gates](docs/review-pilot.md) still apply.
 
 ## Unattended run repairs - 1.4.4.6
 
@@ -837,7 +880,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-Kill` | Stops running Reparo PowerShell processes, then sweeps known updater front-end processes such as `winget`, `choco`, `npm`, `pip`, and related package managers. |
 | `-KillUpdaterNames <names>` | Adds extra process base names to the `-Kill` updater sweep, for example `-Kill -KillUpdaterNames msiexec`. |
 | `-Preview` | Logs what would run without executing package manager commands. |
-| `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, `PowerShell7`, and `WindowsUpdate`. |
+| `-Update` | Runs the managed-client pass: `Winget`, `Winget(msstore)`, `Choco`, `PowerShell7`, `WindowsUpdate`, plus installed-only `Opencode` and `Slicer`; absent optional applications stay absent. |
 | `-FU` / `-FeatureUpdate` / `-11` / `-Win11` | Uses Microsoft's Windows 11 Installation Assistant to move Windows 10 or Windows 11 to the latest applicable Windows 11 feature release. Requires elevation. Automatic reboot is suppressed unless `-AllowReboot` is explicit. Use `-Preview -FU` first to inspect the signed-installer path and arguments without launching the upgrade goblin. |
 | `-7` / `-PowerShell7` | Runs only the machine-wide PowerShell 7 MSI section. It is intended to be launched from Windows PowerShell 5.1 and does not update the host process. |
 | `-Winget` | Runs a winget-focused pass that attempts repair/registration if needed, logs discovery output, and then runs the winget sections. In preview mode, discovery still runs so you can refresh the visible upgrade list. |

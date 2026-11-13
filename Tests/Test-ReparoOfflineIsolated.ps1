@@ -27,6 +27,9 @@ function Install-ReparoCommandShim {
         'Get-ReparoRunningProcessInfo'='function Get-ReparoRunningProcessInfo { param($ExcludeProcessIds) return @() }'
         'Get-ReparoPendingRebootEvidence'='function Get-ReparoPendingRebootEvidence { return @() }'
         'Get-ReparoStaleRunningLog'='function Get-ReparoStaleRunningLog { param($RunningProcessInfo) return @() }'
+        'Resolve-ReparoSlicerOwner'='function Resolve-ReparoSlicerOwner { throw ''Offline Reparo installation attempted private Slicer acquisition.'' }'
+        'Get-ReparoSlicerExistingToken'='function Get-ReparoSlicerExistingToken { throw ''Offline Reparo installation attempted credential lookup.'' }'
+        'Invoke-ReparoSlicerOwnerDownload'='function Invoke-ReparoSlicerOwnerDownload { throw ''Offline Reparo installation attempted private download.'' }'
     }
     $nodes=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)|Where-Object {$replacements.ContainsKey($_.Name)}|Sort-Object {$_.Extent.StartOffset} -Descending)
     foreach($node in $nodes){$source=$source.Substring(0,$node.Extent.StartOffset)+$replacements[$node.Name]+$source.Substring($node.Extent.EndOffset)}

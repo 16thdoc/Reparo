@@ -17,6 +17,11 @@ on:
       - 'Tests/Test-ReparoNativeNpmProbes.ps1'
       - 'Tests/Test-ReparoCleanupOutcomes.ps1'
       - 'Tests/Test-ReparoOfflineIsolated.ps1'
+      - 'Tests/Test-ReparoSlicer.ps1'
+      - 'Tests/Test-ReparoSlicerMaintenance.ps1'
+      - 'Tests/test-reparo-linux-slicer.sh'
+      - 'linux/reparo-linux'
+      - 'docs/slicer-management.md'
       - 'Tests/test-reparo-reliability.py'
       - 'deploy/reparo-candidate.json'
       - 'deploy/reparo-release.json'
@@ -123,6 +128,18 @@ jobs:
       - name: Windows command shim inherited module-path regression
         shell: pwsh
         run: .\Tests\Test-ReparoHostModulePath.ps1
+      - name: Slicer private-owner transport and maintenance regression (Windows PowerShell)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\Tests\Test-ReparoSlicer.ps1
+          .\Tests\Test-ReparoSlicerMaintenance.ps1
+      - name: Slicer private-owner transport and maintenance regression (PowerShell 7)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\Tests\Test-ReparoSlicer.ps1
+          .\Tests\Test-ReparoSlicerMaintenance.ps1
       - name: Steam pending summary replay and genuine failure regression
         shell: powershell
         run: .\Tests\Test-ReparoSteamPendingSummary.ps1
@@ -137,6 +154,7 @@ jobs:
           sh linux/reparo-linux --version
           sh Tests/test-reparo-linux-installer.sh
           sh Tests/test-reparo-linux-output.sh
+          sh Tests/test-reparo-linux-slicer.sh
           python3 Tests/test-reparo-reliability.py
           python3 Tests/test-reparo-wsl-guard.py
       - name: Pinned HTTPS install and self-update with isolated state and mocked cron
