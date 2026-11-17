@@ -171,7 +171,7 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.9'
+$script:ReparoVersion = '1.4.4.10'
 $script:ReparoSourcePath = $PSCommandPath
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($Headless) {
@@ -204,6 +204,24 @@ $script:ReparoIsWindows = if (Get-Variable -Name IsWindows -Scope Global -ErrorA
 $script:ReparoIsLinux = if (Get-Variable -Name IsLinux -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsLinux } else { $false }
 $script:ReparoIsMacOS = if (Get-Variable -Name IsMacOS -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsMacOS } else { $false }
 $script:ReparoHostName = if (-not [string]::IsNullOrWhiteSpace($env:COMPUTERNAME)) { $env:COMPUTERNAME } elseif (-not [string]::IsNullOrWhiteSpace($env:HOSTNAME)) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
+
+function Assert-ReparoWindowsPathHasNoReparsePoint {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not $script:ReparoIsWindows) { return }
+
+    $cursor = [IO.Path]::GetFullPath($Path)
+    while ($cursor) {
+        if (Test-Path -LiteralPath $cursor) {
+            $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Refusing a Reparo data or execution path through a reparse point: $cursor"
+            }
+        }
+        $parent = [IO.Path]::GetDirectoryName($cursor)
+        if ([string]::IsNullOrWhiteSpace($parent) -or [string]::Equals($parent, $cursor, [StringComparison]::OrdinalIgnoreCase)) { break }
+        $cursor = $parent
+    }
+}
 
 function Get-ReparoLinuxDistroInfo {
     $result = [ordered]@{
@@ -275,6 +293,7 @@ function Get-ReparoVersionFlavor {
     # of reusing the previous version's quote.
     $versionFlavors = @{
         '1.4.4.9' = [pscustomobject]@{ Quote = 'Your overconfidence is your weakness.'; Source = 'Star Wars: Return of the Jedi (1983), Luke Skywalker'; Art = '  (o_o) /==|  LUKE' }
+        '1.4.4.10' = [pscustomobject]@{ Quote = 'A small leak will sink a great ship.'; Source = "Benjamin Franklin, Poor Richard's Almanack (1735)"; Art = '  ~\___/  LEAK WATCH' }
         '1.4.4.8' = [pscustomobject]@{ Quote = 'You must unlearn what you have learned.'; Source = 'Star Wars: The Empire Strikes Back (1980), Yoda'; Art = '  <(-_-)>  YODA -- judge outcomes by their receipts' }
         '1.0.8.1' = [pscustomobject]@{ Quote = 'Hotfix applied. The goblin has been relocated.'; Source = 'Reparo maintenance log'; Art = '  GOBLIN: evicted from version output' }
         '1.0.8.2' = [pscustomobject]@{ Quote = 'New quote online. Old ghosts denied boarding.'; Source = 'Reparo maintenance log'; Art = '  QUOTE BAY: temporal lint removed' }
@@ -881,6 +900,16 @@ if (-not $script:ReparoIsWindows) {
         $VersionLockPath = Join-Path (Join-Path $configRoot 'reparo') 'version-locks.json'
     }
 }
+elseif (-not $PSBoundParameters.ContainsKey('LogRoot')) {
+    $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal($currentIdentity)
+    $isPrivilegedLogWriter = $currentIdentity.User.Value -eq 'S-1-5-18' -or $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isPrivilegedLogWriter) {
+        $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+        if ([string]::IsNullOrWhiteSpace($localAppData)) { throw 'Local application-data path is unavailable for non-elevated Reparo logging.' }
+        $LogRoot = Join-Path (Join-Path $localAppData 'Reparo') 'Logs'
+    }
+}
 
 $linuxPackageSections = @(Get-ReparoLinuxPackageSections)
 $linuxAppSections = @(
@@ -1000,12 +1029,8 @@ if (-not $script:ReparoIsWindows -and -not ($Update -or $Force -or $Include -or 
     $Include = $linuxPackageSections
 }
 
-if (-not (Test-Path -LiteralPath $LogRoot)) {
-    New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
-}
-
-$script:ReparoLogBaseName = "reparo_{0}_{1}_{2}" -f $script:ReparoHostName, $PID, (Get-Date -Format 'yyyy-MM-dd_HHmmss')
-$script:ReparoLogPath = Join-Path $LogRoot ($script:ReparoLogBaseName + '_RUNNING.log')
+$script:ReparoLogBaseName = $null
+$script:ReparoLogPath = $null
 $script:ReparoDebug = $PSBoundParameters.ContainsKey('Debug') -or ($DebugPreference -ne 'SilentlyContinue' -and $DebugPreference -ne 'Ignore')
 # Event IDs are scoped by LogName + Source. Reparo uses Application/Reparo with local ranges:
 # 1000-1099 run lifecycle, 1100-1199 install/update, 1200-1299 command/section,
@@ -1525,7 +1550,8 @@ function Test-ReparoScriptParse {
 function Test-ReparoInstalledRuntime {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$ExpectedHash
+        [Parameter(Mandatory)][string]$ExpectedHash,
+        [string]$ExpectedVersion
     )
 
     Test-ReparoScriptParse -Path $Path
@@ -1538,7 +1564,114 @@ function Test-ReparoInstalledRuntime {
     if ($LASTEXITCODE -notin @(0, $null) -or $versionOutput -notmatch '(?m)^Reparo \d+\.\d+\.\d+\.\d+\r?$') {
         throw "Installed Reparo.ps1 failed version self-test: $versionOutput"
     }
+    if ($ExpectedVersion -and $versionOutput -notmatch ('(?m)^Reparo {0}\r?$' -f [regex]::Escape($ExpectedVersion))) {
+        throw "Installed Reparo.ps1 version does not match the reviewed release $ExpectedVersion."
+    }
 }
+
+function Protect-ReparoWindowsInstallRoot {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$WhatIfOnly
+    )
+
+    if (-not $script:ReparoIsWindows) { return }
+
+    $fullPath = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $programData = [IO.Path]::GetFullPath($env:ProgramData).TrimEnd('\')
+    if (-not $fullPath.StartsWith($programData + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+
+    $cursor = $fullPath
+    while ($cursor -and $cursor.StartsWith($programData, [StringComparison]::OrdinalIgnoreCase)) {
+        if (Test-Path -LiteralPath $cursor) {
+            $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Refusing privileged installation through a reparse point: $cursor"
+            }
+            if (-not $item.PSIsContainer) {
+                throw "Reparo install root component is not a directory: $cursor"
+            }
+        }
+        if ([string]::Equals($cursor, $programData, [StringComparison]::OrdinalIgnoreCase)) { break }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+    }
+
+    if ($WhatIfOnly) { return }
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    if ($identity.User.Value -ne 'S-1-5-18' -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw 'Installing Reparo under ProgramData requires Administrator or SYSTEM so the runtime ACL can be secured.'
+    }
+
+    New-Item -ItemType Directory -Force -Path $fullPath | Out-Null
+    $acl = New-Object Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    $administrators = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+    $system = New-Object Security.Principal.SecurityIdentifier('S-1-5-18')
+    $users = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')
+    $inheritance = [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
+    $propagation = [Security.AccessControl.PropagationFlags]::None
+    foreach ($sid in @($system, $administrators)) {
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, [Security.AccessControl.FileSystemRights]::FullControl, $inheritance, $propagation, [Security.AccessControl.AccessControlType]::Allow)))
+    }
+    $readRights = [Security.AccessControl.FileSystemRights]'ReadAndExecute,Synchronize'
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($users, $readRights, $inheritance, $propagation, [Security.AccessControl.AccessControlType]::Allow)))
+    $acl.SetOwner($administrators)
+    Set-Acl -LiteralPath $fullPath -AclObject $acl -ErrorAction Stop
+
+    foreach ($securedChild in @(
+        (Join-Path $fullPath 'Reparo.ps1'),
+        (Join-Path $fullPath 'reparo-settings.json'),
+        (Join-Path $fullPath 'winget-health.json'),
+        (Join-Path $fullPath 'version-locks.json'),
+        (Join-Path $fullPath 'bin'),
+        (Join-Path $fullPath 'Logs'),
+        (Join-Path $fullPath 'Backups')
+    )) {
+        if (-not (Test-Path -LiteralPath $securedChild)) { continue }
+        Assert-ReparoWindowsPathHasNoReparsePoint -Path $securedChild
+        $childAcl = Get-Acl -LiteralPath $securedChild -ErrorAction Stop
+        foreach ($explicitRule in @($childAcl.Access | Where-Object { -not $_.IsInherited })) {
+            [void]$childAcl.RemoveAccessRuleSpecific($explicitRule)
+        }
+        $childAcl.SetAccessRuleProtection($false, $false)
+        $childAcl.SetOwner($administrators)
+        Set-Acl -LiteralPath $securedChild -AclObject $childAcl -ErrorAction Stop
+    }
+
+    $verified = Get-Acl -LiteralPath $fullPath -ErrorAction Stop
+    if (-not $verified.AreAccessRulesProtected) {
+        throw "Reparo install root ACL inheritance is still enabled: $fullPath"
+    }
+    $writeMask = [Security.AccessControl.FileSystemRights]::WriteData -bor
+        [Security.AccessControl.FileSystemRights]::AppendData -bor
+        [Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+        [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+        [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+        [Security.AccessControl.FileSystemRights]::Delete -bor
+        [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+        [Security.AccessControl.FileSystemRights]::TakeOwnership
+    foreach ($rule in @($verified.Access | Where-Object {
+        $_.AccessControlType -eq 'Allow' -and
+        $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -in @('S-1-1-0','S-1-5-11','S-1-5-32-545') -and
+        ($_.FileSystemRights -band $writeMask)
+    })) {
+        throw "Reparo install root remains writable by a broad principal: $($rule.IdentityReference)"
+    }
+}
+
+if ($script:ReparoIsWindows -and ($Install -or $New -or $Latest -or $Ninja)) {
+    Protect-ReparoWindowsInstallRoot -Path $InstallRoot -WhatIfOnly:$Preview
+}
+Assert-ReparoWindowsPathHasNoReparsePoint -Path $LogRoot
+if (-not (Test-Path -LiteralPath $LogRoot)) {
+    New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
+}
+$script:ReparoLogBaseName = "reparo_{0}_{1}_{2}" -f $script:ReparoHostName, $PID, (Get-Date -Format 'yyyy-MM-dd_HHmmss')
+$script:ReparoLogPath = Join-Path $LogRoot ($script:ReparoLogBaseName + '_RUNNING.log')
 
 function Get-ReparoFileHash {
     param([Parameter(Mandatory)][string]$Path)
@@ -1616,6 +1749,8 @@ exit /b %ERRORLEVEL%
     }
     else {
         New-Item -ItemType Directory -Force -Path $binRoot | Out-Null
+        Assert-ReparoWindowsPathHasNoReparsePoint -Path $shimPath
+        if (Test-Path -LiteralPath $shimPath) { Remove-Item -LiteralPath $shimPath -Force -ErrorAction Stop }
         Set-Content -LiteralPath $shimPath -Value $shimContent -Encoding ASCII
         Write-Info "Command shim installed: $shimPath"
     }
@@ -1732,6 +1867,9 @@ function Copy-ReparoFileWithRetry {
             if (Test-Path -LiteralPath $Destination -PathType Leaf) {
                 $destinationItem = Get-Item -LiteralPath $Destination -Force -ErrorAction Stop
                 if ($destinationItem.IsReadOnly) { $destinationItem.IsReadOnly = $false }
+                # Unlink the directory entry before replacement. Copying over an
+                # existing hard link could otherwise modify a different file.
+                Remove-Item -LiteralPath $Destination -Force -ErrorAction Stop
             }
             Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
             return
@@ -1868,6 +2006,8 @@ function Invoke-ReparoNew {
     param(
         [Parameter(Mandatory)][string]$TargetRoot,
         [Parameter(Mandatory)][string]$Url,
+        [string]$ExpectedHash,
+        [string]$ExpectedVersion,
         [switch]$SkipBackup,
         [switch]$WhatIfOnly
     )
@@ -1906,9 +2046,14 @@ Log: $script:ReparoLogPath
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         if (Test-Path -LiteralPath $Url) {
+            if (-not (Test-Path -LiteralPath $Url -PathType Leaf)) { throw "Local Reparo source is not a file: $Url" }
             Copy-Item -LiteralPath $Url -Destination $tempScript -Force
         }
         else {
+            $sourceUri = $null
+            if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$sourceUri) -or $sourceUri.Scheme -ne 'https' -or $sourceUri.UserInfo) {
+                throw 'Remote Reparo sources must use an absolute HTTPS URL without embedded credentials.'
+            }
             $downloadUrl = $Url
             $requestHeaders = @{}
             if ($downloadUrl -match '^https://api\.github\.com/repos/.+/contents/') {
@@ -1923,18 +2068,43 @@ Log: $script:ReparoLogPath
             }
             Invoke-WebRequest -Uri $downloadUrl -Headers $requestHeaders -OutFile $tempScript -UseBasicParsing
         }
+        $candidateItem = Get-Item -LiteralPath $tempScript -Force -ErrorAction Stop
+        if ($candidateItem.Length -lt 1 -or $candidateItem.Length -gt 2097152) {
+            throw "Candidate Reparo.ps1 size is outside the allowed 1-byte to 2-MiB range: $($candidateItem.Length) bytes."
+        }
         if ($script:ReparoIsWindows) {
             Unblock-File -LiteralPath $tempScript -ErrorAction SilentlyContinue
         }
         Test-ReparoScriptParse -Path $tempScript
 
         $newHash = Get-ReparoFileHash -Path $tempScript
+        if ($ExpectedHash) {
+            if ($ExpectedHash -cnotmatch '^[A-F0-9]{64}$') { throw 'Expected Reparo SHA-256 is invalid.' }
+            if ($newHash -cne $ExpectedHash) {
+                throw "Downloaded Reparo.ps1 SHA-256 mismatch. Expected $ExpectedHash, got $newHash."
+            }
+        }
+        if ($ExpectedVersion) {
+            $candidateText = [IO.File]::ReadAllText($tempScript)
+            $versionMatches = [regex]::Matches($candidateText, '(?m)^\$script:ReparoVersion\s*=\s*''(?<v>\d+\.\d+\.\d+\.\d+)''\s*\r?$')
+            if ($versionMatches.Count -ne 1 -or $versionMatches[0].Groups['v'].Value -ne $ExpectedVersion) {
+                throw "Downloaded Reparo.ps1 does not contain the reviewed release version $ExpectedVersion."
+            }
+        }
+        Protect-ReparoWindowsInstallRoot -Path $TargetRoot -WhatIfOnly:$WhatIfOnly
+        foreach ($protectedPath in @($TargetRoot, $scriptPath, $targetLogRoot, $backupRoot, (Join-Path $TargetRoot 'bin'))) {
+            Assert-ReparoWindowsPathHasNoReparsePoint -Path $protectedPath
+        }
         if (Test-Path -LiteralPath $scriptPath) {
             $currentHash = Get-ReparoFileHash -Path $scriptPath
             if ($currentHash -eq $newHash) {
-                Write-Skip "Reparo $script:ReparoVersion already matches the downloaded source (SHA-256: $newHash)."
-                Install-ReparoCommandShim -TargetRoot $TargetRoot -WhatIfOnly:$WhatIfOnly
-                Write-ReparoEventLog -EventId 1101 -EntryType Information -Message @"
+                $programDataRoot = if ($script:ReparoIsWindows) { [IO.Path]::GetFullPath($env:ProgramData).TrimEnd('\') } else { $null }
+                $targetFullPath = [IO.Path]::GetFullPath($TargetRoot).TrimEnd('\')
+                $requiresSecureRefresh = $script:ReparoIsWindows -and $targetFullPath.StartsWith($programDataRoot + '\', [StringComparison]::OrdinalIgnoreCase)
+                if (-not $requiresSecureRefresh) {
+                    Write-Skip "Reparo $script:ReparoVersion already matches the downloaded source (SHA-256: $newHash)."
+                    Install-ReparoCommandShim -TargetRoot $TargetRoot -WhatIfOnly:$WhatIfOnly
+                    Write-ReparoEventLog -EventId 1101 -EntryType Information -Message @"
 Reparo install/update skipped; installed runtime matches the downloaded Reparo $script:ReparoVersion source.
 
 Computer: $env:COMPUTERNAME
@@ -1943,7 +2113,9 @@ TargetRoot: $TargetRoot
 SHA256: $newHash
 Log: $script:ReparoLogPath
 "@
-                return
+                    return
+                }
+                Write-Info 'Installed bytes match; refreshing the protected ProgramData file entries and inherited ACLs.'
             }
         }
 
@@ -1978,7 +2150,7 @@ Log: $script:ReparoLogPath
 
         $deploymentStarted = $true
         Copy-ReparoFileWithRetry -Source $tempScript -Destination $scriptPath
-        Test-ReparoInstalledRuntime -Path $scriptPath -ExpectedHash $newHash
+        Test-ReparoInstalledRuntime -Path $scriptPath -ExpectedHash $newHash -ExpectedVersion $ExpectedVersion
         $script:ReparoDeploymentChanged = $true
         Write-Done "Installed Reparo.ps1 updated ($newHash)."
         Write-Info "Live script: $scriptPath"
@@ -2139,7 +2311,7 @@ function Set-ReparoPersistentSyslogTarget {
 
 function Clear-ReparoPersistentSyslogTarget {
     $settings = Read-ReparoSettings
-    if ($settings.PSObject.Properties.Name -contains 'Syslog') {
+    if (@($settings.PSObject.Properties | ForEach-Object { $_.Name }) -contains 'Syslog') {
         $settings.PSObject.Properties.Remove('Syslog')
         Write-ReparoSettings -Settings $settings
     }
@@ -2147,7 +2319,7 @@ function Clear-ReparoPersistentSyslogTarget {
 
 function Get-ReparoPersistentSyslogTarget {
     $settings = Read-ReparoSettings
-    if ($settings.PSObject.Properties.Name -contains 'Syslog') {
+    if (@($settings.PSObject.Properties | ForEach-Object { $_.Name }) -contains 'Syslog') {
         return [string]$settings.Syslog
     }
 
@@ -3706,9 +3878,12 @@ if ($Install -or $New -or $Latest) {
     try { $previousReportingVersion = Get-ReparoInstalledVersion -TargetRoot $InstallRoot } catch {}
     try {
     $installSource = $null
+    $installExpectedHash = $null
+    $installExpectedVersion = $null
     $installMode = if ($Install) { 'offline self-install' } elseif ($New) { 'reviewed pinned release' } else { 'latest main (unpinned)' }
     if ($Install) {
         $installSource = $PSCommandPath
+        $installExpectedVersion = $script:ReparoVersion
     }
     elseif ($New) {
         $manifestUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/refs/heads/main/deploy/reparo-release.json'
@@ -3719,10 +3894,19 @@ if ($Install -or $New -or $Latest) {
             $manifestSeparator = if ($manifestUrl.Contains('?')) { '&' } else { '?' }
             $manifestRequestUrl = '{0}{1}x={2}' -f $manifestUrl, $manifestSeparator, [Uri]::EscapeDataString((Get-Date -Format 'yyyyMMddHHmmss'))
             $manifest = Invoke-RestMethod -Uri $manifestRequestUrl -Headers @{ 'User-Agent' = 'Reparo'; 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' } -UseBasicParsing -ErrorAction Stop
-            if ($manifest.commit -notmatch '^[0-9a-f]{40}$' -or $manifest.reparoUrl -ne ('https://raw.githubusercontent.com/16thdoc/Reparo/{0}/Reparo.ps1' -f $manifest.commit)) {
+            $requiredManifestFields = @('version','commit','reparoUrl','sha256','linuxUrl','linuxSha256','linuxInstallerUrl','linuxInstallerSha256')
+            if ((@($manifest.PSObject.Properties.Name | Sort-Object) -join ',') -cne (@($requiredManifestFields | Sort-Object) -join ',')) {
+                throw 'Release manifest fields do not match the reviewed schema.'
+            }
+            if ($manifest.version -notmatch '^\d+\.\d+\.\d+\.\d+$' -or
+                $manifest.commit -notmatch '^[0-9a-f]{40}$' -or
+                $manifest.reparoUrl -cne ('https://raw.githubusercontent.com/16thdoc/Reparo/{0}/Reparo.ps1' -f $manifest.commit) -or
+                $manifest.sha256 -cnotmatch '^[A-F0-9]{64}$') {
                 throw 'Release manifest is not pinned to a valid immutable Reparo source commit.'
             }
             $installSource = [string]$manifest.reparoUrl
+            $installExpectedHash = [string]$manifest.sha256
+            $installExpectedVersion = [string]$manifest.version
         }
         catch { throw "Unable to resolve the reviewed Reparo release: $($_.Exception.Message)" }
     }
@@ -3731,7 +3915,7 @@ if ($Install -or $New -or $Latest) {
     }
 
     Write-Info "Reparo install mode: $installMode"
-    Invoke-ReparoNew -TargetRoot $InstallRoot -Url $installSource -SkipBackup:$NoBackup -WhatIfOnly:$Preview
+    Invoke-ReparoNew -TargetRoot $InstallRoot -Url $installSource -ExpectedHash $installExpectedHash -ExpectedVersion $installExpectedVersion -SkipBackup:$NoBackup -WhatIfOnly:$Preview
     if (-not $Preview -and -not $SkipNinjaPublish) {
         Publish-ReparoInstalledNinjaVersion -TargetRoot $InstallRoot | Out-Null
     }

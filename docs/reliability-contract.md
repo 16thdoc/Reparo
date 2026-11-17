@@ -1,6 +1,6 @@
-# Reliability contract 1.4.4.9
+# Reliability contract 1.4.4.10
 
-The production manifest pins reviewed 1.4.4.9 artifacts. Release publication does
+The production manifest pins reviewed 1.4.4.10 artifacts. Release publication does
 not itself update an installed runner or enroll its new hash with a controller.
 See [review-pilot.md](review-pilot.md) before deployment or maintenance.
 
@@ -169,3 +169,21 @@ signals. Syslog behavior and controller/exit interfaces are unchanged.
 
 1.4.4.9 flavor: Luke Skywalker, *Return of the Jedi* (1983), with matching text
 art. Attribution: [official StarWars.com quotes](https://www.starwars.com/news/jedi-at-40-star-wars-return-of-the-jedi-quotes).
+
+## 1.4.4.10 deployment security boundary
+
+Every default network deployment resolves the reviewed manifest, requires the
+canonical commit-pinned Reparo URL, and verifies SHA-256 plus release identity
+before executing downloaded PowerShell. Custom deployment sources require HTTPS
+and an explicit digest. `-Latest` remains a conspicuous, operator-selected test
+lane and is not a fleet release path.
+
+The Windows ProgramData transaction rejects reparse points before replacement and
+sets a protected ACL: SYSTEM and Administrators have full control; standard Users
+have read/execute only. A SYSTEM task is registered only after that transaction.
+Non-elevated runs write logs below LocalAppData so routine user-context maintenance
+does not require weakening the machine runtime ACL. Native Linux remains a private
+per-user install and retains its existing immutable URL/hash/version checks.
+
+1.4.4.10 flavor: Benjamin Franklin, *Poor Richard's Almanack* (1735), with matching
+leak-watch text art on Windows and native Linux.

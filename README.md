@@ -1,10 +1,12 @@
 # Reparo
 
-Release **1.4.4.9** adds durable outcomes, a compact human panel and a
-separate manual AI repair handoff. The production manifest pins immutable reviewed
+Release **1.4.4.10** hardens the privileged Windows install boundary, enforces
+release SHA-256/version pins on every network bootstrap, and removes direct
+network-to-shell execution from deployment helpers. The production manifest pins immutable reviewed
 Windows/native artifacts; publishing a release does not install it on an endpoint.
 See [the reliability contract](docs/reliability-contract.md) and
-[release/pilot gates](docs/review-pilot.md) and [release notes](docs/release-1.4.4.9.md).
+[release/pilot gates](docs/review-pilot.md), [security deployment guidance](docs/security-deployment.md),
+and [release notes](docs/release-1.4.4.10.md).
 
 Reparo has separate native maintenance runners for Windows and Linux. Windows uses
 the PowerShell runner for RMM deployment; Linux uses a portable POSIX `sh`
@@ -583,6 +585,10 @@ Recommended rollout pattern:
 Reparo's canonical deployment is the single `Reparo.ps1` source file followed by
 `-Install`; retired Ninja and ScreenConnect wrappers are intentionally absent. Follow
 `RELEASE.md` when publishing a pinned release for `-New`.
+The ProgramData install transaction rejects reparse points and replaces inherited
+permissions with an Administrators/SYSTEM-write, Users-read ACL before creating a
+SYSTEM self-update task. Network bootstraps require HTTPS and verify the manifest's
+immutable commit, SHA-256, and version before executing downloaded PowerShell.
 
 ### Ninja deployment options
 
@@ -638,27 +644,13 @@ When Ninja launches Reparo, Ninja captures the concise Reparo activity receipt f
 
 Reparo runs started by its own scheduled task do not inherit Ninja's script helpers and cannot create an arbitrary Ninja Activity without API credentials. Do not put Ninja API credentials in Reparo. For those autonomous maintenance runs, configure a Ninja Windows Event Log condition for `Application / Reparo`: event `1001` is complete, `1002` is failed, and `1003` is preview. Those events include the runtime version, mode, counts, failed-item summary, and final log path.
 
-Ninja script body:
+Ninja script body (upload or paste the reviewed `Reparo.ps1`; do not fetch a mutable
+bootstrap from `main`):
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-
-$installRoot = "$env:ProgramData\Reparo"
-$bootstrapUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1'
-$bootstrapPath = Join-Path $installRoot 'Reparo.bootstrap.ps1'
-
-if ([Net.ServicePointManager]::SecurityProtocol -notmatch 'Tls12') {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-}
-
-New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
-Invoke-WebRequest -Uri $bootstrapUrl -OutFile $bootstrapPath -UseBasicParsing
-
-if (Get-Command Unblock-File -ErrorAction SilentlyContinue) {
-    Unblock-File -Path $bootstrapPath
-}
-
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrapPath -Ninja -InstallRoot $installRoot
+$stagedReparo = Join-Path $PSScriptRoot 'Reparo.ps1'
+& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $stagedReparo -Ninja -InstallRoot "$env:ProgramData\Reparo"
 exit $LASTEXITCODE
 ```
 
@@ -765,7 +757,9 @@ systemd lingering need changes.
 Preview a batch first:
 
 ```powershell
-./deploy/Install-MoshiRemote.ps1 -ComputerName devbox,vps01 -Preview
+$moshiInstallerSha256 = '<SHA-256 recorded after reviewing https://getmoshi.app/install.sh>'
+./deploy/Install-MoshiRemote.ps1 -ComputerName devbox,vps01 `
+    -MoshiHookInstallSha256 $moshiInstallerSha256 -Preview
 ```
 
 The QR-free path is manual key provisioning. In Moshi, create an Ed25519 key
@@ -774,7 +768,8 @@ saved connection in Moshi with the same host, SSH user, and private key:
 
 ```powershell
 $moshiPublicKey = Get-Clipboard
-./deploy/Install-MoshiRemote.ps1 -ComputerName devbox -AuthorizedKey $moshiPublicKey
+./deploy/Install-MoshiRemote.ps1 -ComputerName devbox -AuthorizedKey $moshiPublicKey `
+    -MoshiHookInstallSha256 $moshiInstallerSha256
 ```
 
 This helper does not create the saved phone-side connection, so create that
@@ -794,8 +789,13 @@ $key = Get-Clipboard # Moshi-generated public key, not the private key
     -InstallAgentHooks `
     -AgentProjectPath /home/trenton/projects/example `
     -ConfigureService `
-    -EnableLinger
+    -EnableLinger `
+    -MoshiHookInstallSha256 $moshiInstallerSha256
 ```
+
+The helper downloads the installer to a private temporary file, requires the
+operator-supplied SHA-256 to match, validates shell syntax, and only then executes
+it. Re-review and update the digest when upstream intentionally changes the script.
 
 `-InstallAgentHooks` modifies supported agent configuration. For OpenCode its
 plugin is project-local, so use `-AgentProjectPath` for the intended repository
@@ -1169,6 +1169,9 @@ Logs are written to:
 ```text
 C:\ProgramData\Reparo\Logs
 ```
+
+Non-elevated Windows runs use `%LOCALAPPDATA%\Reparo\Logs`; the machine install
+root is intentionally not writable by standard users.
 
 Each run creates a timestamped log file that includes the computer name, process ID, selected mode, commands invoked, command output, skipped sections, errors, and the final run summary.
 While Reparo is running, the log is named with a `_RUNNING.log` suffix. After completion, it is renamed to `_COMPLETE.log`, `_FAILED.log`, or `_PREVIEW.log` so the final artifact is obvious.

@@ -11,13 +11,15 @@ The helper configures the host side only. Without Easy Pair, create a connection
 in Moshi manually and use the private key whose public key is passed here.
 
 .EXAMPLE
-./deploy/Install-MoshiRemote.ps1 -ComputerName devbox -Preview
+./deploy/Install-MoshiRemote.ps1 -ComputerName devbox `
+    -MoshiHookInstallSha256 '<reviewed 64-character SHA-256>' -Preview
 
 .EXAMPLE
 $token = Read-Host 'Moshi hook pairing token' -AsSecureString
 $key = Get-Clipboard # Moshi-generated public key, not the private key
 ./deploy/Install-MoshiRemote.ps1 -ComputerName devbox -AuthorizedKey $key `
-    -PairingToken $token -InstallAgentHooks -ConfigureService -EnableLinger
+    -PairingToken $token -InstallAgentHooks -ConfigureService -EnableLinger `
+    -MoshiHookInstallSha256 '<reviewed 64-character SHA-256>'
 #>
 [CmdletBinding()]
 param(
@@ -45,6 +47,9 @@ param(
 
     [ValidatePattern('^https://')]
     [string]$MoshiHookInstallUrl = 'https://getmoshi.app/install.sh',
+
+    [ValidatePattern('^[A-Fa-f0-9]{64}$')]
+    [string]$MoshiHookInstallSha256,
 
     [switch]$Preview
 )
@@ -78,7 +83,8 @@ function New-MoshiRemoteSetupScript {
         [bool]$ShouldConfigureService,
         [bool]$ShouldEnableLinger,
         [bool]$ShouldOpenFirewall,
-        [string]$HookInstallUrl
+        [string]$HookInstallUrl,
+        [string]$HookInstallSha256
     )
 
     $template = @'
@@ -89,6 +95,7 @@ authorized_key_b64='__AUTHORIZED_KEY_B64__'
 pairing_token_b64='__PAIRING_TOKEN_B64__'
 agent_project_path_b64='__AGENT_PROJECT_PATH_B64__'
 hook_install_url_b64='__HOOK_INSTALL_URL_B64__'
+hook_install_sha256='__HOOK_INSTALL_SHA256__'
 install_agent_hooks=__INSTALL_AGENT_HOOKS__
 configure_service=__CONFIGURE_SERVICE__
 enable_linger=__ENABLE_LINGER__
@@ -109,7 +116,7 @@ else
 fi
 
 missing_packages=0
-for command_name in curl mosh-server tmux tar base64; do
+for command_name in curl mosh-server tmux tar base64 sha256sum; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     missing_packages=1
   fi
@@ -132,12 +139,19 @@ if [ "$missing_packages" -eq 1 ]; then
   fi
 fi
 
-for command_name in curl mosh-server tmux tar base64; do
+for command_name in curl mosh-server tmux tar base64 sha256sum; do
   command -v "$command_name" >/dev/null 2>&1 || die "$command_name is still unavailable after package setup"
 done
 
 hook_install_url="$(decode "$hook_install_url_b64")"
-curl -fsSL "$hook_install_url" | INSTALL_DIR="$HOME/.local/bin" sh
+hook_installer=$(mktemp "${TMPDIR:-/tmp}/moshi-hook-install.XXXXXX")
+trap 'rm -f -- "$hook_installer"' EXIT
+curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL "$hook_install_url" -o "$hook_installer"
+actual_hook_hash=$(sha256sum "$hook_installer" | cut -d ' ' -f 1 | tr '[:lower:]' '[:upper:]')
+[ "$actual_hook_hash" = "$hook_install_sha256" ] || die 'moshi-hook installer SHA-256 mismatch; refusing execution'
+[ -s "$hook_installer" ] && sh -n "$hook_installer" || die 'moshi-hook installer is empty or fails shell syntax validation'
+INSTALL_DIR="$HOME/.local/bin" sh "$hook_installer"
+rm -f -- "$hook_installer"
 command -v moshi-hook >/dev/null 2>&1 || die 'moshi-hook was installed but is not available on PATH'
 
 key_status='Skipped'
@@ -246,6 +260,7 @@ printf 'MOSHI_DEPLOY|Host=%s|User=%s|Mosh=%s|Tmux=%s|Hook=%s|Key=%s|Pair=%s|Hook
         Replace('__PAIRING_TOKEN_B64__', (ConvertTo-Utf8Base64 $HookToken)).
         Replace('__AGENT_PROJECT_PATH_B64__', (ConvertTo-Utf8Base64 $ProjectPath)).
         Replace('__HOOK_INSTALL_URL_B64__', (ConvertTo-Utf8Base64 $HookInstallUrl)).
+        Replace('__HOOK_INSTALL_SHA256__', $HookInstallSha256.ToUpperInvariant()).
         Replace('__INSTALL_AGENT_HOOKS__', [int]$ShouldInstallAgentHooks).
         Replace('__CONFIGURE_SERVICE__', [int]$ShouldConfigureService).
         Replace('__ENABLE_LINGER__', [int]$ShouldEnableLinger).
@@ -261,6 +276,10 @@ if ($AuthorizedKey) {
 
 if ($EnableLinger) {
     $ConfigureService = $true
+}
+
+if ($MoshiHookInstallSha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+    throw 'MoshiHookInstallSha256 is required so the downloaded installer is verified before execution.'
 }
 
 $plainPairingToken = ''
@@ -279,7 +298,8 @@ $remoteScript = New-MoshiRemoteSetupScript `
     -ShouldConfigureService ([bool]$ConfigureService) `
     -ShouldEnableLinger ([bool]$EnableLinger) `
     -ShouldOpenFirewall ([bool]$OpenMoshFirewall) `
-    -HookInstallUrl $MoshiHookInstallUrl
+    -HookInstallUrl $MoshiHookInstallUrl `
+    -HookInstallSha256 $MoshiHookInstallSha256
 $plainPairingToken = $null
 
 $results = New-Object System.Collections.Generic.List[object]

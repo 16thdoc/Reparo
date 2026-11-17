@@ -12,9 +12,16 @@ param(
     [Parameter(Mandatory, Position = 0)]
     [string[]]$ComputerName,
 
-    [string]$SourceUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/Reparo.ps1',
+    [ValidatePattern('^$|^https://')]
+    [string]$SourceUrl = '',
 
-    [string]$InstallRoot = '$env:ProgramData\Reparo',
+    [ValidatePattern('^$|^[A-Fa-f0-9]{64}$')]
+    [string]$SourceSha256 = '',
+
+    [ValidatePattern('^https://')]
+    [string]$ReleaseManifestUrl = 'https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json',
+
+    [string]$InstallRoot = 'C:\ProgramData\Reparo',
 
     [string]$SshCommand = 'ssh',
 
@@ -25,26 +32,69 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function ConvertTo-ReparoPowerShellLiteral {
+    param([AllowEmptyString()][string]$Value)
+    return "'" + $Value.Replace("'", "''") + "'"
+}
+
 function New-ReparoRemoteInstallScript {
     param(
-        [Parameter(Mandatory)]
         [string]$RemoteSourceUrl,
+
+        [string]$RemoteSourceSha256,
+
+        [Parameter(Mandatory)]
+        [string]$RemoteManifestUrl,
 
         [Parameter(Mandatory)]
         [string]$RemoteInstallRoot
     )
 
-@"
+    $template = @"
 `$ErrorActionPreference = 'Stop'
-`$installRoot = "$RemoteInstallRoot"
-`$bootstrapUrl = "$RemoteSourceUrl"
+`$installRoot = __INSTALL_ROOT__
+`$bootstrapUrl = __SOURCE_URL__
+`$bootstrapSha256 = __SOURCE_SHA256__
+`$manifestUrl = __MANIFEST_URL__
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-New-Item -ItemType Directory -Force -Path `$installRoot | Out-Null
-`$bootstrapPath = Join-Path `$installRoot 'Reparo.bootstrap.ps1'
+`$stageRoot = Join-Path ([IO.Path]::GetTempPath()) ('ReparoRemote-' + [guid]::NewGuid().ToString('N'))
+`$bootstrapPath = Join-Path `$stageRoot 'Reparo.ps1'
+`$manifestPath = Join-Path `$stageRoot 'release.json'
+New-Item -ItemType Directory -Path `$stageRoot -ErrorAction Stop | Out-Null
+try {
+    if ([string]::IsNullOrWhiteSpace(`$bootstrapUrl)) {
+        `$manifestUri = `$null
+        if (-not [Uri]::TryCreate(`$manifestUrl, [UriKind]::Absolute, [ref]`$manifestUri) -or `$manifestUri.Scheme -ne 'https' -or `$manifestUri.UserInfo) { throw 'Release manifest URL must be absolute HTTPS without credentials.' }
+        Invoke-WebRequest -Uri `$manifestUri -Headers @{'User-Agent'='Reparo';'Cache-Control'='no-cache';'Pragma'='no-cache'} -OutFile `$manifestPath -UseBasicParsing
+        if ((Get-Item -LiteralPath `$manifestPath).Length -gt 16384) { throw 'Release manifest exceeds 16 KiB.' }
+        `$manifest = Get-Content -LiteralPath `$manifestPath -Raw | ConvertFrom-Json -ErrorAction Stop
+        `$fields = @('version','commit','reparoUrl','sha256','linuxUrl','linuxSha256','linuxInstallerUrl','linuxInstallerSha256')
+        if ((@(`$manifest.PSObject.Properties.Name | Sort-Object) -join ',') -cne (@(`$fields | Sort-Object) -join ',')) { throw 'Release manifest schema is invalid.' }
+        if (`$manifest.version -notmatch '^\d+\.\d+\.\d+\.\d+$' -or `$manifest.commit -notmatch '^[0-9a-f]{40}$' -or `$manifest.reparoUrl -cne ('https://raw.githubusercontent.com/16thdoc/Reparo/{0}/Reparo.ps1' -f `$manifest.commit) -or `$manifest.sha256 -cnotmatch '^[A-F0-9]{64}$') { throw 'Release manifest pin is invalid.' }
+        `$bootstrapUrl = [string]`$manifest.reparoUrl
+        `$bootstrapSha256 = [string]`$manifest.sha256
+        `$expectedVersion = [string]`$manifest.version
+    }
+    elseif (`$bootstrapSha256 -cnotmatch '^[A-F0-9]{64}$') { throw 'A custom SourceUrl requires SourceSha256.' }
 
-Invoke-WebRequest -Uri `$bootstrapUrl -OutFile `$bootstrapPath -UseBasicParsing
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File `$bootstrapPath -Install -InstallRoot `$installRoot -SourceUrl `$bootstrapUrl
+    `$sourceUri = `$null
+    if (-not [Uri]::TryCreate(`$bootstrapUrl, [UriKind]::Absolute, [ref]`$sourceUri) -or `$sourceUri.Scheme -ne 'https' -or `$sourceUri.UserInfo) { throw 'Reparo source URL must be absolute HTTPS without credentials.' }
+    Invoke-WebRequest -Uri `$sourceUri -Headers @{'User-Agent'='Reparo';'Cache-Control'='no-cache';'Pragma'='no-cache'} -OutFile `$bootstrapPath -UseBasicParsing
+    `$item = Get-Item -LiteralPath `$bootstrapPath
+    if (`$item.Length -lt 1 -or `$item.Length -gt 2097152) { throw 'Downloaded Reparo.ps1 size is outside the 1-byte to 2-MiB limit.' }
+    `$actualHash = (Get-FileHash -LiteralPath `$bootstrapPath -Algorithm SHA256).Hash
+    if (`$actualHash -cne `$bootstrapSha256) { throw "Reparo SHA-256 mismatch. Expected `$bootstrapSha256, got `$actualHash." }
+    `$text = [IO.File]::ReadAllText(`$bootstrapPath)
+    `$versions = [regex]::Matches(`$text, '(?m)^\`$script:ReparoVersion\s*=\s*''(?<v>\d+\.\d+\.\d+\.\d+)''\s*\r?`$')
+    if (`$versions.Count -ne 1 -or (`$expectedVersion -and `$versions[0].Groups['v'].Value -ne `$expectedVersion)) { throw 'Downloaded Reparo.ps1 version identity is invalid.' }
+    Unblock-File -LiteralPath `$bootstrapPath -ErrorAction SilentlyContinue
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `$bootstrapPath -Install -InstallRoot `$installRoot
+    if (`$LASTEXITCODE -ne 0) { throw "Reparo install exited with code `$LASTEXITCODE." }
+}
+finally {
+    Remove-Item -LiteralPath `$stageRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 `$scriptPath = Join-Path `$installRoot 'Reparo.ps1'
 `$shimPath = Join-Path `$installRoot 'bin\reparo.cmd'
@@ -52,6 +102,19 @@ Write-Output "REPARO_DEPLOY|Computer=`$env:COMPUTERNAME|Script=`$scriptPath|Shim
 
 & `$shimPath -Help
 "@
+
+    return $template.
+        Replace('__INSTALL_ROOT__', (ConvertTo-ReparoPowerShellLiteral $RemoteInstallRoot)).
+        Replace('__SOURCE_URL__', (ConvertTo-ReparoPowerShellLiteral $RemoteSourceUrl)).
+        Replace('__SOURCE_SHA256__', (ConvertTo-ReparoPowerShellLiteral $RemoteSourceSha256.ToUpperInvariant())).
+        Replace('__MANIFEST_URL__', (ConvertTo-ReparoPowerShellLiteral $RemoteManifestUrl))
+}
+
+if ([string]::IsNullOrWhiteSpace($SourceUrl) -xor [string]::IsNullOrWhiteSpace($SourceSha256)) {
+    throw 'SourceUrl and SourceSha256 must be supplied together; omit both to use the reviewed release manifest.'
+}
+if ($InstallRoot -notmatch '^[A-Za-z]:\\' -or $InstallRoot -match '[\x00-\x1F\x7F]') {
+    throw 'InstallRoot must be an absolute Windows drive path without control characters.'
 }
 
 $results = New-Object System.Collections.Generic.List[object]
@@ -61,10 +124,14 @@ foreach ($target in $ComputerName) {
     Write-Host "========== $target ==========" -ForegroundColor Cyan
 
     try {
-        $remoteScript = New-ReparoRemoteInstallScript -RemoteSourceUrl $SourceUrl -RemoteInstallRoot $InstallRoot
+        if ([string]::IsNullOrWhiteSpace($target) -or $target -match '^-|[\x00-\x1F\x7F]') {
+            throw "Invalid SSH target: '$target'"
+        }
+        $remoteScript = New-ReparoRemoteInstallScript -RemoteSourceUrl $SourceUrl -RemoteSourceSha256 $SourceSha256 -RemoteManifestUrl $ReleaseManifestUrl -RemoteInstallRoot $InstallRoot
         $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($remoteScript))
         $sshArgs = @(
             '-o', "ConnectTimeout=$ConnectTimeoutSeconds",
+            '--',
             $target,
             'powershell.exe',
             '-NoProfile',

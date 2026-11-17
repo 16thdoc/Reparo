@@ -32,7 +32,7 @@ if ($tlsEnable -lt $newBlockStart -or $tlsEnable -gt $manifestRequest) {
 
 $remoteSource = Get-Content -LiteralPath $remoteDeployPath -Raw
 $remoteTlsEnable = $remoteSource.IndexOf('[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12', [StringComparison]::Ordinal)
-$remoteDownload = $remoteSource.IndexOf('Invoke-WebRequest -Uri `$bootstrapUrl', [StringComparison]::Ordinal)
+$remoteDownload = $remoteSource.IndexOf('Invoke-WebRequest -Uri `$sourceUri', [StringComparison]::Ordinal)
 
 if ($remoteTlsEnable -lt 0 -or $remoteDownload -lt 0 -or $remoteTlsEnable -gt $remoteDownload) {
     throw 'The remote Windows installer must enable TLS 1.2 before downloading its bootstrap.'
