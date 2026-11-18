@@ -6,7 +6,7 @@ $sourcePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'Reparo.ps1'
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($sourcePath, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Registry source does not parse.' }
-foreach ($name in @('Assert-ReparoRegistryPrivatePath','Initialize-ReparoRegistryDirectory','Write-ReparoRegistryState','Get-ReparoRegistryFacts','Send-ReparoRegistryReceipt','Invoke-ReparoRegistryWorker','Invoke-ReparoRegistryProcess','Invoke-ReparoRegistry','Get-ReparoRegistryMaintenance','Invoke-ReparoLifecycleReporting')) {
+foreach ($name in @('Assert-ReparoRegistryPrivatePath','Initialize-ReparoRegistryDirectory','Initialize-ReparoRegistryCreatedFileOwner','Write-ReparoRegistryState','Get-ReparoRegistryFacts','Send-ReparoRegistryReceipt','Invoke-ReparoRegistryWorker','Invoke-ReparoRegistryProcess','Invoke-ReparoRegistry','Get-ReparoRegistryMaintenance','Invoke-ReparoLifecycleReporting')) {
     $node = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
     if (-not $node) { throw "Missing registry function: $name" }
     Invoke-Expression $node.Extent.Text
@@ -19,6 +19,30 @@ $oldSkip = $env:REPARO_REPORT_SKIP; $oldDisable = $env:REPARO_REGISTRY_DISABLE
 [void][IO.Directory]::CreateDirectory($testBase)
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $script:RegistrySent = @(); $script:RegistryFailSend = $true
+$script:RegistryOwnerInjected = @{}; $script:RegistryOwnerSet = @{}; $script:RegistryUnsafeOwnerPath = $null
+# Reproduce an elevated token's Administrators default owner without requiring
+# elevation on the developer host. Real files/ACLs are used; only the first read
+# of each newly-created file's owner is supplied as the elevated default. The
+# production setter must explicitly select the current user's owner and persist
+# it before the subsequent real ACL verification can succeed.
+function Get-Acl {
+    [CmdletBinding()]param([string]$LiteralPath)
+    $acl = Microsoft.PowerShell.Security\Get-Acl -LiteralPath $LiteralPath -ErrorAction Stop
+    $newFile = $LiteralPath -like '*.tmp' -or $LiteralPath -like '*\state.lock'
+    if (($newFile -and -not $script:RegistryOwnerInjected.ContainsKey($LiteralPath)) -or $LiteralPath -eq $script:RegistryUnsafeOwnerPath) {
+        $script:RegistryOwnerInjected[$LiteralPath] = $true
+        $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+    }
+    return $acl
+}
+function Set-Acl {
+    [CmdletBinding()]param([string]$LiteralPath, [object]$AclObject)
+    if ($LiteralPath -like '*.tmp' -or $LiteralPath -like '*\state.lock') {
+        Assert-Fixture ($AclObject.GetOwner([Security.Principal.SecurityIdentifier]).Value -eq $sid) 'New user-state file did not explicitly select its owner.'
+        $script:RegistryOwnerSet[$LiteralPath] = $true
+    }
+    Microsoft.PowerShell.Security\Set-Acl -LiteralPath $LiteralPath -AclObject $AclObject -ErrorAction Stop
+}
 function Send-ReparoRegistryReceipt {
     param($Receipt, $Secret, $TimeoutMilliseconds)
     Assert-Fixture ($Secret -cmatch '^[0-9a-f]{64}$') 'Per-install credential is not 256 random bits.'
@@ -50,6 +74,7 @@ try {
     Assert-Fixture (@($state.queue).Count -eq 1 -and $state.retry_count -eq 1) 'Outage lost the durable receipt.'
     Assert-ReparoRegistryPrivatePath -Path $inputData.state_root -AllowedSids @($sid) -Directory
     Assert-ReparoRegistryPrivatePath -Path $path -AllowedSids @($sid)
+    Assert-Fixture ($script:RegistryOwnerSet.ContainsKey((Join-Path $inputData.state_root 'state.lock')) -and $script:RegistryOwnerSet.Count -ge 2) 'New lock/atomic state files relied on the token default owner.'
     $id = $state.installation_id; $secret = $state.secret; $event = $state.queue[0].event_id
     Invoke-ReparoRegistryWorker -InputData $inputData
     $state = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
@@ -70,6 +95,14 @@ try {
     Invoke-ReparoRegistryWorker -InputData $inputData
     $state = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     Assert-Fixture (@($state.queue | Where-Object { $_.event_id -eq $expired }).Count -eq 0) 'Expired queued receipt was retained.'
+    # The new-file owner setter must never become an existing-state ACL repair.
+    foreach ($existing in @($path, (Join-Path $inputData.state_root 'state.lock'))) {
+        $script:RegistryUnsafeOwnerPath = $existing
+        $setCount = $script:RegistryOwnerSet.Count; $before = (Get-FileHash -LiteralPath $path).Hash
+        Assert-Rejected { Invoke-ReparoRegistryWorker -InputData $inputData } 'Existing unsafe registry owner was accepted.'
+        Assert-Fixture ($script:RegistryOwnerSet.Count -eq $setCount -and (Get-FileHash -LiteralPath $path).Hash -eq $before) 'Existing unsafe owner was silently repaired or state changed.'
+        $script:RegistryUnsafeOwnerPath = $null
+    }
     # Successful fresh installation records the completion time once. Repeated
     # updates or a mistaken future fresh flag cannot reset that recorded date.
     $inputData.state_root = Join-Path $testBase 'fresh'
@@ -165,7 +198,7 @@ try {
     # without letting the test discover this host or open a network connection.
     $inputData.state_root = Join-Path $testBase 'child'; $inputData.fresh_successful_install = $false
     $inputData.client_time = [DateTime]::UtcNow.ToString('o')
-    $names = @('Assert-ReparoRegistryPrivatePath','Initialize-ReparoRegistryDirectory','Write-ReparoRegistryState','Get-ReparoRegistryFacts','Invoke-ReparoRegistryWorker')
+    $names = @('Assert-ReparoRegistryPrivatePath','Initialize-ReparoRegistryDirectory','Initialize-ReparoRegistryCreatedFileOwner','Write-ReparoRegistryState','Get-ReparoRegistryFacts','Invoke-ReparoRegistryWorker')
     $defs = @($names | ForEach-Object { 'function ' + $_ + ' {' + (Get-Item ('Function:\' + $_)).Definition + "`n}" }) -join "`n"
     $encodedInput = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($inputData | ConvertTo-Json -Depth 14 -Compress)))
     $worker = "`$env:PSModulePath=([Environment]::GetEnvironmentVariable('PSModulePath','Machine')+';'+(Join-Path `$PSHOME 'Modules'))`n" + $defs + "`nfunction Send-ReparoRegistryReceipt { param(`$Receipt,`$Secret) throw 'fixture_no_network' }`nInvoke-ReparoRegistryWorker -InputData ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$encodedInput')) | ConvertFrom-Json)"

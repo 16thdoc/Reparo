@@ -2019,6 +2019,20 @@ function Initialize-ReparoRegistryDirectory {
     Assert-ReparoRegistryPrivatePath -Path $Root -AllowedSids $AllowedSids -Directory
 }
 
+function Initialize-ReparoRegistryCreatedFileOwner {
+    param([string]$Path, [string[]]$AllowedSids)
+    # Call only for a file this invocation just created inside the verified
+    # private directory. Elevated Windows tokens can otherwise default its owner
+    # to Administrators, even when the directory explicitly belongs to the user.
+    # Existing files are validated separately and never repaired by this helper.
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unsafe new registry file.' }
+    $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier($AllowedSids[0])))
+    Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+    Assert-ReparoRegistryPrivatePath -Path $Path -AllowedSids $AllowedSids
+}
+
 function Write-ReparoRegistryState {
     param([string]$Path, [object]$State, [string[]]$AllowedSids)
     $json = $State | ConvertTo-Json -Depth 14 -Compress
@@ -2027,7 +2041,10 @@ function Write-ReparoRegistryState {
     try {
         $bytes = [Text.UTF8Encoding]::new($false).GetBytes($json)
         $stream = [IO.File]::Open($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-        try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+        try {
+            Initialize-ReparoRegistryCreatedFileOwner -Path $temporary -AllowedSids $AllowedSids
+            $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true)
+        } finally { $stream.Dispose() }
         Assert-ReparoRegistryPrivatePath -Path $temporary -AllowedSids $AllowedSids
         if (Test-Path -LiteralPath $Path) {
             Assert-ReparoRegistryPrivatePath -Path $Path -AllowedSids $AllowedSids
@@ -2174,8 +2191,13 @@ function Invoke-ReparoRegistryWorker {
     Initialize-ReparoRegistryDirectory -Root $root -AllowedSids $allowed -PolicyRoot $InputData.policy_root
     $lockPath = Join-Path $root 'state.lock'; $lock = $null
     try {
-        if (Test-Path -LiteralPath $lockPath) { Assert-ReparoRegistryPrivatePath -Path $lockPath -AllowedSids $allowed }
-        $lock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+        if (Test-Path -LiteralPath $lockPath) {
+            Assert-ReparoRegistryPrivatePath -Path $lockPath -AllowedSids $allowed
+            $lock = [IO.File]::Open($lockPath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+        } else {
+            $lock = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+            Initialize-ReparoRegistryCreatedFileOwner -Path $lockPath -AllowedSids $allowed
+        }
         Assert-ReparoRegistryPrivatePath -Path $lockPath -AllowedSids $allowed
         $path = Join-Path $root 'state.json'
         if (Test-Path -LiteralPath $path) {
@@ -2292,7 +2314,7 @@ function Invoke-ReparoRegistry {
         $inputData = [ordered]@{ state_root = $root; policy_root = $policyRoot; machine = $machine; install_root = $InstallRoot; executed_version = $script:ReparoVersion
             client_time = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ'); event_type = $EventType; operation = $Operation
             fresh_successful_install = [bool]$FreshSuccessfulInstall; source_commit = $SourceCommit; source_sha256 = $SourceHash }
-        $names = @('Assert-ReparoRegistryPrivatePath','Initialize-ReparoRegistryDirectory','Write-ReparoRegistryState','Get-ReparoRegistryFacts','Send-ReparoRegistryReceipt','Invoke-ReparoRegistryWorker')
+        $names = @('Assert-ReparoRegistryPrivatePath','Initialize-ReparoRegistryDirectory','Initialize-ReparoRegistryCreatedFileOwner','Write-ReparoRegistryState','Get-ReparoRegistryFacts','Send-ReparoRegistryReceipt','Invoke-ReparoRegistryWorker')
         $definitions = @($names | ForEach-Object { 'function ' + $_ + ' {' + (Get-Item ('Function:\' + $_)).Definition + "`n}" }) -join "`n"
         $encodedInput = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($inputData | ConvertTo-Json -Depth 14 -Compress)))
         $worker = "`$ErrorActionPreference='Stop'`n`$env:PSModulePath=([Environment]::GetEnvironmentVariable('PSModulePath','Machine')+';'+(Join-Path `$PSHOME 'Modules'))`n" + $definitions + "`ntry { Invoke-ReparoRegistryWorker -InputData ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$encodedInput')) | ConvertFrom-Json) } catch { }"
