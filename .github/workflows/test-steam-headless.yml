@@ -131,6 +131,9 @@ jobs:
           .\Tests\Test-ReparoReportingContracts.ps1
           .\Tests\Test-ReparoWslLifecycle.ps1
           .\Tests\Test-ReparoGracefulSkip.ps1
+          # Assertions throw under Stop; intentional nonzero native fixtures
+          # must not become the successful test group's final process status.
+          exit 0
       - name: Windows command shim inherited module-path regression
         shell: pwsh
         run: .\Tests\Test-ReparoHostModulePath.ps1
