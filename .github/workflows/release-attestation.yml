@@ -1,0 +1,117 @@
+name: Release provenance
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-provenance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  attest-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate reviewed production manifest
+        id: release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./Tests/Test-ReparoReleaseParity.ps1
+          ./Tests/Test-ReparoReleaseManifest.ps1
+          $manifest = Get-Content deploy/reparo-release.json -Raw | ConvertFrom-Json
+          if ('${{ github.ref_name }}' -ne ('v' + $manifest.version)) {
+            throw "Tag ${{ github.ref_name }} does not match reviewed release v$($manifest.version)."
+          }
+          git cat-file -e ($manifest.commit + '^{commit}')
+          if ($LASTEXITCODE -ne 0) { throw "Reviewed source commit is unavailable: $($manifest.commit)" }
+          $created = (git show -s --format=%cI $manifest.commit).Trim()
+          if (-not $created) { throw 'Cannot read the reviewed source commit time.' }
+          "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
+          "source_commit=$($manifest.commit)" >> $env:GITHUB_OUTPUT
+          "created_utc=$created" >> $env:GITHUB_OUTPUT
+
+      - name: Assemble release evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '${{ steps.release.outputs.version }}'
+          $sourceCommit = '${{ steps.release.outputs.source_commit }}'
+          $sourceRoot = Join-Path $env:RUNNER_TEMP "reparo-source-$sourceCommit"
+          $sourceArchive = $sourceRoot + '.zip'
+          $stage = Join-Path $PWD ("dist/reparo-$version")
+          $releasePaths = @(
+            'Reparo.ps1',
+            'linux/reparo-linux',
+            'deploy/install-reparo-linux.sh',
+            'deploy/install-reparo-windows.cmd',
+            'deploy/Install-ReparoRemote.ps1',
+            'deploy/Install-MoshiRemote.ps1'
+          )
+          git archive --format=zip "--output=$sourceArchive" $sourceCommit @releasePaths
+          if ($LASTEXITCODE -ne 0) { throw "Cannot stage reviewed source commit $sourceCommit." }
+          Expand-Archive -LiteralPath $sourceArchive -DestinationPath $sourceRoot
+
+          New-Item -ItemType Directory -Path (Join-Path $stage 'linux'), (Join-Path $stage 'deploy') -Force | Out-Null
+          foreach ($path in $releasePaths) {
+            $destination = Join-Path $stage $path
+            Copy-Item -LiteralPath (Join-Path $sourceRoot $path) -Destination $destination -Force
+          }
+          Copy-Item -LiteralPath deploy/reparo-release.json -Destination (Join-Path $stage 'reparo-release.json') -Force
+          ./scripts/New-ReparoSbom.ps1 `
+            -SourceRoot $sourceRoot `
+            -ManifestPath deploy/reparo-release.json `
+            -OutputPath (Join-Path $PWD "dist/reparo-$version.spdx.json") `
+            -CreatedUtc '${{ steps.release.outputs.created_utc }}'
+
+          $entries = foreach ($file in @(Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName)) {
+            $relative = [IO.Path]::GetRelativePath($stage, $file.FullName).Replace('\', '/')
+            '{0}  {1}' -f (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $relative
+          }
+          [IO.File]::WriteAllLines((Join-Path $stage 'SHA256SUMS'), $entries, (New-Object Text.UTF8Encoding($false)))
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $PWD "dist/reparo-$version.zip") -CompressionLevel Optimal
+
+          $topLevel = foreach ($file in @(
+            "dist/reparo-$version.zip",
+            "dist/reparo-$version.spdx.json"
+          )) {
+            '{0}  {1}' -f (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant(), (Split-Path -Leaf $file)
+          }
+          [IO.File]::WriteAllLines((Join-Path $PWD 'dist/SHA256SUMS'), $topLevel, (New-Object Text.UTF8Encoding($false)))
+
+      - name: Attest release provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            dist/reparo-${{ steps.release.outputs.version }}.zip
+            dist/reparo-${{ steps.release.outputs.version }}.spdx.json
+            dist/SHA256SUMS
+
+      - name: Attest release SBOM
+        uses: actions/attest-sbom@bd218ad0dbcb3e146bd073d1d9c6d78e08aa8a0b # v2
+        with:
+          subject-path: dist/reparo-${{ steps.release.outputs.version }}.zip
+          sbom-path: dist/reparo-${{ steps.release.outputs.version }}.spdx.json
+
+      - name: Upload release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: reparo-${{ steps.release.outputs.version }}-provenance
+          path: dist/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
