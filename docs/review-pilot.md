@@ -1,8 +1,8 @@
 # Review, release and rollback gates
 
-Release 1.4.4.10 promotes reviewed source to `deploy/reparo-release.json` in a
+Release 1.4.4.12 promotes reviewed source to `deploy/reparo-release.json` in a
 separate immutable pin transaction. `deploy/reparo-candidate.json` retains the
-earlier review pin. Ordinary installed `-New` uses the production manifest;
+reviewed 1.4.4.12 source pin. Ordinary installed `-New` uses the production manifest;
 publication does not itself run an installer or maintenance. Review and test
 future source/pin transactions using the same sequence below. Endpoint deployment,
 controller reenrollment and maintenance remain separate scoped actions.
@@ -38,7 +38,8 @@ For runner rollback, retain and select the previously reviewed immutable manifes
 and use the supported installation transaction after reconciling newer settings.
 Keep new-schema evidence and worker receipts even if the reader is rolled back.
 Do not reset a controller or restore somebody else's lock. The rollback artifact
-for 1.4.4.10 is the retained published 1.4.4.9 manifest/source pair.
+for 1.4.4.12 is the retained published 1.4.4.11 manifest/source pair at immutable
+source `88683359c0b311f17b831938daca3e5e0e51c02b`.
 Do not confuse the current production pin with that previous rollback anchor.
 
 Runner rollback does **not** undo installed OS/driver/npm/apt changes or Steam
