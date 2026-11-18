@@ -18,6 +18,11 @@ on:
       - 'Tests/Test-ReparoCleanupOutcomes.ps1'
       - 'Tests/Test-ReparoOfflineIsolated.ps1'
       - 'Tests/Test-ReparoSecurity.ps1'
+      - 'Tests/Test-ReparoArtifactMirror.ps1'
+      - 'Tests/test-reparo-artifact-mirror.sh'
+      - 'Tests/test-reparo-linux-pinning.sh'
+      - 'linux/reparo-linux'
+      - 'deploy/install-reparo-linux.sh'
       - 'Tests/test-reparo-reliability.py'
       - 'deploy/reparo-candidate.json'
       - 'deploy/reparo-release.json'
@@ -125,6 +130,7 @@ jobs:
           .\Tests\Test-ReparoCleanupOutcomes.ps1
           .\Tests\Test-ReparoOfflineIsolated.ps1
           .\Tests\Test-ReparoSecurity.ps1
+          .\Tests\Test-ReparoArtifactMirror.ps1
           .\Tests\Test-ReparoPipRecovery.ps1
           .\Tests\Test-ReparoForcePreview.ps1
           .\Tests\Test-ReparoSignOut.ps1
@@ -150,6 +156,8 @@ jobs:
           sh -n deploy/install-reparo-linux.sh
           sh linux/reparo-linux --version
           sh Tests/test-reparo-linux-installer.sh
+          sh Tests/test-reparo-linux-pinning.sh
+          sh Tests/test-reparo-artifact-mirror.sh
           sh Tests/test-reparo-linux-output.sh
           sh Tests/test-reparo-linux-signout.sh
           python3 Tests/test-reparo-reliability.py

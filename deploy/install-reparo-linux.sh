@@ -70,6 +70,7 @@ runtime_download="$tmp_dir/reparo-linux"
 runtime_rollback="$tmp_dir/reparo-linux.rollback"
 release_version=''
 release_hash=''
+release_commit=''
 if [ -n "$REPARO_URL" ] || [ "$latest" -eq 1 ]; then
     REPARO_URL="${REPARO_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/linux/reparo-linux}"
     printf '%s\n' 'WARNING: Explicit latest/custom source is unpinned.'
@@ -97,7 +98,7 @@ try:
     base = 'https://raw.githubusercontent.com/16thdoc/Reparo/' + m['commit'] + '/'
     for url, digest, path in [('linuxUrl', 'linuxSha256', 'linux/reparo-linux'), ('linuxInstallerUrl', 'linuxInstallerSha256', 'deploy/install-reparo-linux.sh')]:
         if m[url] != base + path or not re.fullmatch(r'[A-F0-9]{64}', m[digest]): raise ValueError()
-    print(m['version']); print(m['linuxUrl']); print(m['linuxSha256'])
+    print(m['version']); print(m['linuxUrl']); print(m['linuxSha256']); print(m['commit'])
 except (ValueError, TypeError, KeyError, OSError):
     sys.exit('ERROR: Invalid immutable Linux release manifest.')
 PY
@@ -105,6 +106,7 @@ PY
     release_version=$(printf '%s\n' "$release_values" | sed -n '1p')
     REPARO_URL=$(printf '%s\n' "$release_values" | sed -n '2p')
     release_hash=$(printf '%s\n' "$release_values" | sed -n '3p')
+    release_commit=$(printf '%s\n' "$release_values" | sed -n '4p')
 fi
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/reparo"
 runtime_path="$install_root/reparo-linux"
@@ -128,14 +130,31 @@ printf '%s\n' '=== Reparo Linux installer ==='
 printf '%s\n' "Source:  $REPARO_URL"
 printf '%s\n' "Runtime: $runtime_path"
 printf '%s\n' 'Downloading native runtime...'
-download_url="$REPARO_URL"
-case "$download_url" in
-    https://raw.githubusercontent.com/*)
-        case "$download_url" in *\?*) separator='&' ;; *) separator='?' ;; esac
-        download_url="${download_url}${separator}x=$(date +%s)"
-        ;;
-esac
-curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$download_url" -o "$runtime_download"
+if [ -n "$release_commit" ]; then
+    # The reviewed manifest remains the trust anchor. Only its validated commit
+    # selects our fixed mirror path; never accept a mirror URL from the manifest.
+    mirror_url="https://file.thetechnologist.io/reparo/$release_commit/reparo-linux"
+    printf '%s\n' "Public artifact mirror: $mirror_url"
+    if curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -A 'Reparo-Download/Linux/Install' -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$mirror_url" -o "$runtime_download"; then :
+    else
+        mirror_status=$?
+        case "$mirror_status" in
+            5|6|7|16|18|22|28|35|47|52|55|56|60|92|95|96) ;;
+            *) exit "$mirror_status" ;;
+        esac
+        printf '%s\n' 'WARNING: Public artifact mirror unavailable; using the reviewed immutable GitHub runtime (download observation omitted).' >&2
+        curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -A 'Reparo-Download/Linux/Install' -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$REPARO_URL" -o "$runtime_download"
+    fi
+else
+    download_url="$REPARO_URL"
+    case "$download_url" in
+        https://raw.githubusercontent.com/*)
+            case "$download_url" in *\?*) separator='&' ;; *) separator='?' ;; esac
+            download_url="${download_url}${separator}x=$(date +%s)"
+            ;;
+    esac
+    curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -A 'Reparo-Download/Linux/Install' -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$download_url" -o "$runtime_download"
+fi
 if [ -n "$release_hash" ]; then
     actual_hash=$(sha256sum "$runtime_download" | cut -d ' ' -f 1 | tr '[:lower:]' '[:upper:]')
     [ "$actual_hash" = "$release_hash" ] || { printf '%s\n' 'ERROR: Native runtime SHA-256 does not match release pin; nothing installed.' >&2; exit 1; }

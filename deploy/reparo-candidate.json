@@ -1,10 +1,10 @@
 {
-  "version": "1.4.4.11",
-  "commit": "88683359c0b311f17b831938daca3e5e0e51c02b",
-  "reparoUrl": "https://raw.githubusercontent.com/16thdoc/Reparo/88683359c0b311f17b831938daca3e5e0e51c02b/Reparo.ps1",
-  "sha256": "D53A889440E6114B55A624EB0FB43F5D0B35A5CD22DE02B550182D98C15AC832",
-  "linuxUrl": "https://raw.githubusercontent.com/16thdoc/Reparo/88683359c0b311f17b831938daca3e5e0e51c02b/linux/reparo-linux",
-  "linuxSha256": "B721AB0264595D26847730A0A5C9F56DAA8CF1C442C5B8CDEF8CC359D4A2F976",
-  "linuxInstallerUrl": "https://raw.githubusercontent.com/16thdoc/Reparo/88683359c0b311f17b831938daca3e5e0e51c02b/deploy/install-reparo-linux.sh",
-  "linuxInstallerSha256": "2FFFE07FB1AFE3717CB7995C822BAD43D56ED1A17C447F0A0A13D666D563D207"
+  "version": "1.4.4.12",
+  "commit": "a20b1ac5e06802591a7b4f10fa7a10b50f674ca0",
+  "reparoUrl": "https://raw.githubusercontent.com/16thdoc/Reparo/a20b1ac5e06802591a7b4f10fa7a10b50f674ca0/Reparo.ps1",
+  "sha256": "ACEFC99AD34EAEECD52EB588FE541A862B6B41A2DDEB124C7DE6336CEACE9741",
+  "linuxUrl": "https://raw.githubusercontent.com/16thdoc/Reparo/a20b1ac5e06802591a7b4f10fa7a10b50f674ca0/linux/reparo-linux",
+  "linuxSha256": "A29421B17C954463734EFBC3E1C55ACA0E063F152C8A5C3BEC00F68AD8AF9AD4",
+  "linuxInstallerUrl": "https://raw.githubusercontent.com/16thdoc/Reparo/a20b1ac5e06802591a7b4f10fa7a10b50f674ca0/deploy/install-reparo-linux.sh",
+  "linuxInstallerSha256": "323C1ABC2E2760BF10829938BAE3ED08FDA1278D1FEADEA050CA825B59221578"
 }

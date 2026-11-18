@@ -4,7 +4,8 @@ Installs or updates standalone Reparo on one or more SSH-reachable Windows hosts
 
 .DESCRIPTION
 Uses OpenSSH to run a no-profile encoded PowerShell command on each target. The
-remote command downloads the current Reparo.ps1 from GitHub, installs it into
+remote command validates GitHub's reviewed release manifest, downloads its pinned
+artifact through the public file mirror (with a GitHub transport fallback), installs it into
 C:\ProgramData\Reparo, verifies the shim, and prints Reparo help.
 #>
 [CmdletBinding()]
@@ -56,6 +57,8 @@ function New-ReparoRemoteInstallScript {
 `$bootstrapUrl = __SOURCE_URL__
 `$bootstrapSha256 = __SOURCE_SHA256__
 `$manifestUrl = __MANIFEST_URL__
+`$bootstrapFallbackUrl = `$null
+`$expectedVersion = `$null
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 `$stageRoot = Join-Path ([IO.Path]::GetTempPath()) ('ReparoRemote-' + [guid]::NewGuid().ToString('N'))
@@ -71,8 +74,9 @@ try {
         `$manifest = Get-Content -LiteralPath `$manifestPath -Raw | ConvertFrom-Json -ErrorAction Stop
         `$fields = @('version','commit','reparoUrl','sha256','linuxUrl','linuxSha256','linuxInstallerUrl','linuxInstallerSha256')
         if ((@(`$manifest.PSObject.Properties.Name | Sort-Object) -join ',') -cne (@(`$fields | Sort-Object) -join ',')) { throw 'Release manifest schema is invalid.' }
-        if (`$manifest.version -notmatch '^\d+\.\d+\.\d+\.\d+$' -or `$manifest.commit -notmatch '^[0-9a-f]{40}$' -or `$manifest.reparoUrl -cne ('https://raw.githubusercontent.com/16thdoc/Reparo/{0}/Reparo.ps1' -f `$manifest.commit) -or `$manifest.sha256 -cnotmatch '^[A-F0-9]{64}$') { throw 'Release manifest pin is invalid.' }
-        `$bootstrapUrl = [string]`$manifest.reparoUrl
+        if (`$manifest.version -notmatch '^\d+\.\d+\.\d+\.\d+$' -or `$manifest.commit -cnotmatch '^[0-9a-f]{40}$' -or `$manifest.reparoUrl -cne ('https://raw.githubusercontent.com/16thdoc/Reparo/{0}/Reparo.ps1' -f `$manifest.commit) -or `$manifest.sha256 -cnotmatch '^[A-F0-9]{64}$') { throw 'Release manifest pin is invalid.' }
+        `$bootstrapFallbackUrl = [string]`$manifest.reparoUrl
+        `$bootstrapUrl = 'https://file.thetechnologist.io/reparo/{0}/Reparo.ps1' -f `$manifest.commit
         `$bootstrapSha256 = [string]`$manifest.sha256
         `$expectedVersion = [string]`$manifest.version
     }
@@ -80,7 +84,18 @@ try {
 
     `$sourceUri = `$null
     if (-not [Uri]::TryCreate(`$bootstrapUrl, [UriKind]::Absolute, [ref]`$sourceUri) -or `$sourceUri.Scheme -ne 'https' -or `$sourceUri.UserInfo) { throw 'Reparo source URL must be absolute HTTPS without credentials.' }
-    Invoke-WebRequest -Uri `$sourceUri -Headers @{'User-Agent'='Reparo';'Cache-Control'='no-cache';'Pragma'='no-cache'} -OutFile `$bootstrapPath -UseBasicParsing
+    `$downloadHeaders = @{'User-Agent'='Reparo';'Cache-Control'='no-cache';'Pragma'='no-cache'}
+    `$downloadOptions = @{}
+    if (`$bootstrapFallbackUrl) { `$downloadHeaders['User-Agent'] = 'Reparo-Download/Windows/Install'; `$downloadOptions['TimeoutSec'] = 60 }
+    try {
+        Invoke-WebRequest -Uri `$sourceUri -Headers `$downloadHeaders -OutFile `$bootstrapPath -UseBasicParsing -ErrorAction Stop @downloadOptions
+    }
+    catch {
+        if (-not `$bootstrapFallbackUrl) { throw }
+        if (-not (`$_.Exception -is [Net.WebException]) -and `$_.Exception.GetType().FullName -notin @('System.Net.Http.HttpRequestException','Microsoft.PowerShell.Commands.HttpResponseException','System.Threading.Tasks.TaskCanceledException','System.TimeoutException')) { throw }
+        Write-Warning 'Reparo download mirror unavailable; using the reviewed GitHub artifact. This download is omitted from mirror analytics.'
+        Invoke-WebRequest -Uri `$bootstrapFallbackUrl -Headers `$downloadHeaders -OutFile `$bootstrapPath -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+    }
     `$item = Get-Item -LiteralPath `$bootstrapPath
     if (`$item.Length -lt 1 -or `$item.Length -gt 2097152) { throw 'Downloaded Reparo.ps1 size is outside the 1-byte to 2-MiB limit.' }
     `$actualHash = (Get-FileHash -LiteralPath `$bootstrapPath -Algorithm SHA256).Hash
