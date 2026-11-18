@@ -7532,7 +7532,14 @@ public sealed class ReparoRawCaptureV1448 {
         Remove-Item -LiteralPath $skipRequestPath -Force -ErrorAction SilentlyContinue
     }
     foreach ($line in $output) {
-        try { Write-Host $line; Write-ReparoLog ("[CMD-OUT] {0}: {1}" -f $Section, $line) }
+        # Child output is untrusted. Keep the complete bytes in the raw capture and
+        # return value, but bound each rendered line so a package manager cannot
+        # exhaust or disconnect a console/log transport with one pathological line.
+        $renderedLine = if ($line.Length -gt 4096) {
+            $line.Substring(0, 4096) + '... [display truncated; full raw capture retained]'
+        }
+        else { $line }
+        try { Write-Host $renderedLine; Write-ReparoLog ("[CMD-OUT] {0}: {1}" -f $Section, $renderedLine) }
         catch { $receipt.capture_health = 'degraded'; $receipt.capture_errors += $_.Exception.Message }
     }
     try { Write-ReparoLog ("[CMD-END] {0} exit={1} elapsed={2}" -f $Section, $exitCode, $watch.Elapsed) } catch { $receipt.capture_health = 'degraded'; $receipt.capture_errors += $_.Exception.Message }

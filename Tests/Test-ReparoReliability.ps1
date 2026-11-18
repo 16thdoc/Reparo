@@ -79,11 +79,12 @@ try {
         @{Command="exit 37";Exit=37;Pattern=''},
         @{Command="[Console]::Error.WriteLine('benign warning'); exit 0";Exit=0;Pattern='benign warning'},
         @{Command="if (";Exit=1;Pattern='ParserError'},
-        @{Command="[Console]::Out.WriteLine(('x' * 100000)); [Console]::Error.WriteLine('drained'); exit 3";Exit=3;Pattern='drained'}
+        @{Command="[Console]::Out.WriteLine(('x' * 100000)); [Console]::Error.WriteLine('drained'); exit 3";Exit=3;Pattern='drained';LongLine=100000}
     )) {
         $result=Invoke-ReparoTimedCommand -ShellPath $shell -Command $case.Command -Section fixture
         Assert ($result.ExitCode -eq $case.Exit) "Known exit was lost: $($case.Command) -> $($result.ExitCode)"
         if($case.Pattern){Assert (($result.Output -join "`n") -match $case.Pattern) ("Child diagnostic missing for " + $case.Command + ": " + ($result.Output -join "`n"))}
+        if($case['LongLine']){Assert (@($result.Output | Where-Object Length -EQ $case['LongLine']).Count -eq 1) 'Bounded rendering discarded the complete raw output line.'}
         Assert (Test-Path -LiteralPath $result.Receipt.stdout) 'Successful raw stdout was deleted.'
         Assert (Test-Path -LiteralPath $result.Receipt.stderr) 'Raw stderr was deleted.'
     }
@@ -195,7 +196,8 @@ try {
     Write-Host 'Reliability: partial receipts, eventual workers, round trips, summaries, capture, native exits, fallback, decoding and status passed.'
 } finally {
     $resolved=[IO.Path]::GetFullPath($root)
-    $temp=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'
-    if(-not $resolved.StartsWith($temp,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($resolved) -notlike 'reparo-reliability-*'){throw 'Unsafe fixture cleanup.'}
+    $temp=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
+    $parent=[IO.Path]::GetDirectoryName($resolved).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
+    if(-not [string]::Equals($parent,$temp,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($resolved) -notlike 'reparo-reliability-*'){throw 'Unsafe fixture cleanup.'}
     Remove-Item -LiteralPath $resolved -Recurse -Force -ErrorAction SilentlyContinue
 }

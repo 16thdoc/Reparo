@@ -119,6 +119,13 @@ jobs:
           .\Tests\Test-ReparoReleaseManifest.ps1 -SourceRoot $pinnedRoot
           .\Tests\Test-ReparoReleaseManifest.ps1 -ManifestPath deploy/reparo-candidate.json
           .\Tests\Test-ReparoInstallSelfUpdateTask.ps1
+      - name: Security, Windows ACL and supply-chain regression
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\Tests\Test-ReparoSecurity.ps1
+          .\Tests\Test-ReparoWindowsAclIntegration.ps1
+          .\Tests\Test-ReparoSupplyChain.ps1
       - name: Worker diagnostics, Windows Update bootstrap and pip regression
         shell: powershell
         run: |
@@ -132,9 +139,6 @@ jobs:
           .\Tests\Test-ReparoNativeNpmProbes.ps1
           .\Tests\Test-ReparoCleanupOutcomes.ps1
           .\Tests\Test-ReparoOfflineIsolated.ps1
-          .\Tests\Test-ReparoSecurity.ps1
-          .\Tests\Test-ReparoWindowsAclIntegration.ps1
-          .\Tests\Test-ReparoSupplyChain.ps1
           .\Tests\Test-ReparoPipRecovery.ps1
           .\Tests\Test-ReparoForcePreview.ps1
           .\Tests\Test-ReparoWslLifecycle.ps1
