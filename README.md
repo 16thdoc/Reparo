@@ -1,5 +1,12 @@
 # Reparo
 
+Release **1.4.4.13** adds automatic device/update reporting during installation,
+self-update and normal runs. No manual enrollment or Node dependency is required.
+Unknown facts stay unknown, and reporting failures preserve Reparo's outcome.
+See [the30field reference, privacy/opt-out and trust limits](docs/automatic-registry.md).
+GitHub retains the downloadable release while payload updates prefer the public
+file-server mirror with the existing immutable commit/hash/version checks.
+
 Release **1.4.4.12** moves reviewed update/bootstrap payload downloads to the
 public `file.thetechnologist.io` mirror. GitHub retains the reviewed manifest and
 exact immutable commit/hash authority. The production channel pins source

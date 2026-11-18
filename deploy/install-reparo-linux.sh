@@ -48,6 +48,12 @@ read_crontab_state() {
 }
 
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/reparo-install-linux.XXXXXX")
+REPARO_REGISTRY_ATTEMPTED_AT="${REPARO_REGISTRY_ATTEMPTED_AT:-$(date -u "+%Y-%m-%dT%H:%M:%SZ")}"; export REPARO_REGISTRY_ATTEMPTED_AT
+registry_started=$(date +%s)
+registry_fresh=0
+if [ ! -e "$DATA_ROOT/reparo-linux" ] && [ ! -L "$DATA_ROOT/reparo-linux" ]; then registry_fresh=1; fi
+registry_source=''
+registry_failure_stage=manifest
 reporting_previous_version=$(sed -n "s/^REPARO_LINUX_VERSION='\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)'$/\1/p" "$DATA_ROOT/reparo-linux" 2>/dev/null || true)
 # The validated downloaded runtime contains the same report utility. Use it even
 # if replacement/rollback failed; never execute an unverified downloaded file.
@@ -57,7 +63,14 @@ installer_finalization() {
     if [ "${REPARO_REPORT_SKIP:-0}" != 1 ] && [ "${reporting_runtime_verified:-0}" -eq 1 ]; then
         reporting_outcome=failed
         [ "$result" -ne 0 ] || reporting_outcome=succeeded
-        REPARO_REPORT_PREVIOUS_VERSION="$reporting_previous_version" REPARO_REPORT_OUTCOME="$reporting_outcome" sh "$runtime_download" --report-lifecycle >/dev/null 2>&1 || true
+        registry_event_type=update
+        [ "$registry_fresh" -eq 0 ] || registry_event_type=install
+        registry_duration=$(( ($(date +%s)-registry_started)*1000 ))
+        REPARO_REPORT_PREVIOUS_VERSION="$reporting_previous_version" REPARO_REPORT_OUTCOME="$reporting_outcome" \
+          REPARO_REGISTRY_EVENT_TYPE="$registry_event_type" REPARO_REGISTRY_SOURCE="$registry_source" \
+          REPARO_REGISTRY_DURATION_MS="$registry_duration" REPARO_REGISTRY_FAILURE_STAGE="$registry_failure_stage" \
+          REPARO_REGISTRY_FRESH_INSTALL="$registry_fresh" REPARO_REGISTRY_COMMIT="$release_commit" \
+          sh "$runtime_download" --report-lifecycle >/dev/null || true
     fi
     rm -rf "$tmp_dir"
     exit "$result"
@@ -130,7 +143,9 @@ printf '%s\n' '=== Reparo Linux installer ==='
 printf '%s\n' "Source:  $REPARO_URL"
 printf '%s\n' "Runtime: $runtime_path"
 printf '%s\n' 'Downloading native runtime...'
+registry_failure_stage=runtime-download
 if [ -n "$release_commit" ]; then
+    registry_source=mirror
     # The reviewed manifest remains the trust anchor. Only its validated commit
     # selects our fixed mirror path; never accept a mirror URL from the manifest.
     mirror_url="https://file.thetechnologist.io/reparo/$release_commit/reparo-linux"
@@ -142,10 +157,13 @@ if [ -n "$release_commit" ]; then
             5|6|7|16|18|22|28|35|47|52|55|56|60|92|95|96) ;;
             *) exit "$mirror_status" ;;
         esac
+        registry_source=github-fallback
         printf '%s\n' 'WARNING: Public artifact mirror unavailable; using the reviewed immutable GitHub runtime (download observation omitted).' >&2
         curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -A 'Reparo-Download/Linux/Install' -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$REPARO_URL" -o "$runtime_download"
     fi
 else
+    registry_source=custom
+    [ "$latest" -eq 0 ] || registry_source=latest
     download_url="$REPARO_URL"
     case "$download_url" in
         https://raw.githubusercontent.com/*)
@@ -155,11 +173,13 @@ else
     esac
     curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -A 'Reparo-Download/Linux/Install' -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$download_url" -o "$runtime_download"
 fi
+registry_failure_stage=runtime-integrity
 if [ -n "$release_hash" ]; then
     actual_hash=$(sha256sum "$runtime_download" | cut -d ' ' -f 1 | tr '[:lower:]' '[:upper:]')
     [ "$actual_hash" = "$release_hash" ] || { printf '%s\n' 'ERROR: Native runtime SHA-256 does not match release pin; nothing installed.' >&2; exit 1; }
 fi
 
+registry_failure_stage=runtime-validation
 if [ ! -s "$runtime_download" ] || ! sh -n "$runtime_download"; then
     printf '%s\n' 'ERROR: Downloaded runtime is empty or fails POSIX shell syntax validation.' >&2
     exit 1
@@ -170,6 +190,7 @@ case "$expected_version" in ''|*'
 [ -z "$release_version" ] || [ "$expected_version" = "$release_version" ] || { printf '%s\n' 'ERROR: Native runtime version does not match release pin.' >&2; exit 1; }
 reporting_runtime_verified=1
 
+registry_failure_stage=runtime-write
 install -d -m 700 "$install_root"
 mkdir -p "$shim_dir"
 if [ -f "$runtime_path" ]; then
@@ -179,6 +200,7 @@ if ! install -m 755 "$runtime_download" "$runtime_path"; then
     printf '%s\n' 'ERROR: Failed to stage the native Reparo runtime.' >&2
     exit 1
 fi
+registry_failure_stage=runtime-activation
 installed_hash_valid=1
 if [ -n "$release_hash" ]; then
     installed_hash=$(sha256sum "$runtime_path" | cut -d ' ' -f 1 | tr '[:lower:]' '[:upper:]')
@@ -202,6 +224,7 @@ fi
 printf '#!/usr/bin/env sh\nexec %s "$@"\n' "$(quote_shell "$runtime_path")" >"$shim_path"
 chmod 755 "$shim_path"
 
+registry_failure_stage=schedule
 # Keep the native runner on the reviewed immutable release channel weekly.
 # A user crontab entry is used because Linux has no universal machine scheduler.
 if command -v crontab >/dev/null 2>&1; then
@@ -237,6 +260,7 @@ case ":$PATH:" in
         ;;
 esac
 
+registry_failure_stage=''
 printf '%s\n' 'Reparo Linux is installed/updated.'
 "$shim_path" --version
 printf '%s\n' 'You can now run: reparo --preview, reparo --update, reparo --status, or reparo --tail.'

@@ -172,7 +172,7 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.12'
+$script:ReparoVersion = '1.4.4.13'
 $script:ReparoSourcePath = $PSCommandPath
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($SignOut) {
@@ -351,6 +351,7 @@ function Get-ReparoVersionFlavor {
     # On every runtime version bump, add a fresh Quote/Source pair here instead
     # of reusing the previous version's quote.
     $versionFlavors = @{
+        '1.4.4.13' = [pscustomobject]@{ Quote = 'I can bring you in warm, or I can bring you in cold.'; Source = 'The Mandalorian (2019), Season 1 Chapter 1, Din Djarin'; Art = '  [|T|]  DIN DJARIN' }
         '1.4.4.12' = [pscustomobject]@{ Quote = 'Sorry about the mess.'; Source = 'Star Wars: A New Hope (1977), Han Solo'; Art = '  --[ DL-44 ]-->  HAN SOLO' }
         '1.4.4.11' = [pscustomobject]@{ Quote = 'Parting is such sweet sorrow.'; Source = 'Star Trek VI: The Undiscovered Country (1991), General Chang'; Art = '  <==[ KLINGON ]==>  CHANG' }
         '1.4.4.9' = [pscustomobject]@{ Quote = 'Your overconfidence is your weakness.'; Source = 'Star Wars: Return of the Jedi (1983), Luke Skywalker'; Art = '  (o_o) /==|  LUKE' }
@@ -1105,6 +1106,14 @@ $script:ReparoDebug = $PSBoundParameters.ContainsKey('Debug') -or ($DebugPrefere
 $script:ReparoEventLogSource = 'Reparo'
 $script:ReparoEventLogReady = $null
 $script:ReparoPendingRebootDetected = $false
+$script:ReparoRegistryOperationStartedAt = $null
+$script:ReparoRegistryOperationClock = $null
+$script:ReparoRegistryWasFreshInstall = $false
+$script:ReparoRegistryUpdateSource = 'unknown'
+$script:ReparoRegistrySourceCommit = $null
+$script:ReparoRegistrySourceHash = $null
+$script:ReparoRegistryFailureStage = 'unknown'
+$script:ReparoRegistryRunClock = $null
 $script:ReparoLogFinalized = $false
 $script:ReparoSyslogEnabled = $false
 $script:ReparoSyslogTarget = $Syslog
@@ -1952,6 +1961,353 @@ function Copy-ReparoFileWithRetry {
     throw "Unable to replace '$Destination' after $Attempts attempts: $($lastError.Message)"
 }
 
+function Assert-ReparoRegistryPrivatePath {
+    param([string]$Path, [string[]]$AllowedSids, [switch]$Directory)
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $item.PSIsContainer -ne [bool]$Directory) { throw 'Unsafe registry state path.' }
+    $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    if (-not $acl.AreAccessRulesProtected -and $Directory) { throw 'Registry state directory inherits access.' }
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $AllowedSids) { throw 'Unsafe registry state owner.' }
+    $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    if ($rules.Count -ne $AllowedSids.Count) { throw 'Unsafe registry state access.' }
+    foreach ($sid in $AllowedSids) {
+        $matching = @($rules | Where-Object { $_.IdentityReference.Value -eq $sid })
+        if ($matching.Count -ne 1 -or $matching[0].AccessControlType -ne 'Allow' -or $matching[0].FileSystemRights -ne 'FullControl') { throw 'Unsafe registry state access.' }
+    }
+}
+
+function Initialize-ReparoRegistryDirectory {
+    param([string]$Root, [string[]]$AllowedSids, [string]$PolicyRoot)
+    # Never follow links in any existing ancestor, including an operator-chosen
+    # install directory. Do not silently repair an existing unsafe state tree.
+    $cursor = [IO.Path]::GetFullPath($Root)
+    while ($cursor) {
+        if (Test-Path -LiteralPath $cursor) {
+            $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+            if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unsafe registry ancestor.' }
+        }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+    }
+    $boundary = [IO.Path]::GetFullPath($PolicyRoot).TrimEnd('\')
+    if (-not [IO.Path]::GetFullPath($Root).StartsWith($boundary + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Registry state escaped its storage root.' }
+    $cursor = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Root))
+    $trusted = @($AllowedSids) + @('S-1-5-18','S-1-5-32-544')
+    $writeMask = [Security.AccessControl.FileSystemRights]'WriteData,AppendData,WriteAttributes,WriteExtendedAttributes,DeleteSubdirectoriesAndFiles,Delete,ChangePermissions,TakeOwnership'
+    while ($cursor -and -not [string]::Equals($cursor, $boundary, [StringComparison]::OrdinalIgnoreCase)) {
+        if (Test-Path -LiteralPath $cursor) {
+            $parentAcl = Get-Acl -LiteralPath $cursor -ErrorAction Stop
+            if ($parentAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trusted) { throw 'Unsafe registry ancestor owner.' }
+            foreach ($rule in $parentAcl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+                if ($rule.AccessControlType -eq 'Allow' -and ($rule.FileSystemRights -band $writeMask) -and $rule.IdentityReference.Value -notin ($trusted + @('S-1-3-0'))) { throw 'Registry ancestor permits untrusted writes.' }
+            }
+        }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+    }
+    if (-not (Test-Path -LiteralPath $Root)) {
+        # The directory contains no identity until its private ACL is verified.
+        [void][IO.Directory]::CreateDirectory($Root)
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
+        foreach ($sid in $AllowedSids) {
+            $principal = New-Object Security.Principal.SecurityIdentifier($sid)
+            $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($principal, 'FullControl', $inherit, 'None', 'Allow')))
+        }
+        $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier($AllowedSids[0])))
+        Set-Acl -LiteralPath $Root -AclObject $acl -ErrorAction Stop
+    }
+    Assert-ReparoRegistryPrivatePath -Path $Root -AllowedSids $AllowedSids -Directory
+}
+
+function Write-ReparoRegistryState {
+    param([string]$Path, [object]$State, [string[]]$AllowedSids)
+    $json = $State | ConvertTo-Json -Depth 14 -Compress
+    if ([Text.Encoding]::UTF8.GetByteCount($json) -gt 262144) { throw 'Registry queue bound reached.' }
+    $temporary = Join-Path ([IO.Path]::GetDirectoryName($Path)) ([guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($json)
+        $stream = [IO.File]::Open($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+        Assert-ReparoRegistryPrivatePath -Path $temporary -AllowedSids $AllowedSids
+        if (Test-Path -LiteralPath $Path) {
+            Assert-ReparoRegistryPrivatePath -Path $Path -AllowedSids $AllowedSids
+            [IO.File]::Replace($temporary, $Path, [System.Management.Automation.Language.NullString]::Value)
+        } else { [IO.File]::Move($temporary, $Path) }
+    } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue } }
+}
+
+function Get-ReparoRegistryFacts {
+    param([object]$InputData, [object]$State)
+    $facts = [ordered]@{
+        machine_name = [Environment]::MachineName; fqdn = $null
+        organization = $null; site = $null; asset_label = $null
+        first_install_at = $State.first_install_at; first_install_source = $State.first_install_source
+        installed_version = $null; executed_version = $InputData.executed_version
+        source_sha256 = $null; source_commit = $null
+        os_family = 'windows'; os_edition = $null; os_version = [Environment]::OSVersion.Version.ToString(); os_build = $null
+        architecture = switch ($env:PROCESSOR_ARCHITECTURE) { 'AMD64' { 'x64' }; 'ARM64' { 'arm64' }; 'x86' { 'x86' }; default { $null } }
+        domain_joined = $null; domain_name = $null; workgroup = $null; entra_joined = $null
+        last_boot_at = $null; uptime_seconds = $null; pending_reboot = $null
+        schedule = [ordered]@{ supported = $true; enabled = $null; next_due = $null; last_result = $null }
+        reporting = [ordered]@{ status = 'automatic'; identity_scope = $(if ($InputData.machine) { 'machine' } else { 'user' }); queued = @($State.queue).Count; retry_count = $State.retry_count; last_success_at = $State.last_success_at }
+        volume = [ordered]@{ free_bytes = $null; total_bytes = $null }; package_managers = @()
+    }
+    $runtime = Join-Path $InputData.install_root 'Reparo.ps1'
+    try {
+        if ((Test-Path -LiteralPath $runtime -PathType Leaf) -and (Get-Item -LiteralPath $runtime).Length -le 2097152) {
+            $found = [regex]::Matches([IO.File]::ReadAllText($runtime), '(?m)^\$script:ReparoVersion\s*=\s*''(?<v>\d+\.\d+\.\d+\.\d+)''\s*\r?$')
+            if ($found.Count -eq 1) { $facts.installed_version = $found[0].Groups['v'].Value }
+            $facts.source_sha256 = (Get-FileHash -LiteralPath $runtime -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+            if ($facts.source_sha256 -eq $State.source_sha256) { $facts.source_commit = $State.source_commit }
+        }
+    } catch {}
+    try {
+        # Select only device fields: no users, serials, MACs or arbitrary WMI dump.
+        $computer = Get-CimInstance -ClassName Win32_ComputerSystem -Property DNSHostName,Domain,PartOfDomain,Workgroup -OperationTimeoutSec 1 -ErrorAction Stop
+        if ($computer.DNSHostName) { $facts.machine_name = [string]$computer.DNSHostName }
+        if ($computer.PartOfDomain -is [bool]) { $facts.domain_joined = $computer.PartOfDomain }
+        if ($computer.PartOfDomain -eq $true -and $computer.Domain) { $facts.domain_name = [string]$computer.Domain; $facts.fqdn = '{0}.{1}' -f $computer.DNSHostName, $computer.Domain }
+        elseif ($computer.PartOfDomain -eq $false -and $computer.Workgroup) { $facts.workgroup = [string]$computer.Workgroup }
+    } catch {}
+    try {
+        $os = Get-CimInstance -ClassName Win32_OperatingSystem -Property Caption,Version,BuildNumber,LastBootUpTime -OperationTimeoutSec 1 -ErrorAction Stop
+        $facts.os_edition = [string]$os.Caption; $facts.os_version = [string]$os.Version; $facts.os_build = [string]$os.BuildNumber
+        if ($os.LastBootUpTime) {
+            $boot = ([datetime]$os.LastBootUpTime).ToUniversalTime()
+            $facts.last_boot_at = $boot.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            $facts.uptime_seconds = [Math]::Max(0, [long]([DateTime]::UtcNow - $boot).TotalSeconds)
+        }
+    } catch {}
+    try {
+        $dns = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties()
+        if (-not $facts.fqdn -and $dns.HostName -and $dns.DomainName) { $facts.fqdn = '{0}.{1}' -f $dns.HostName, $dns.DomainName }
+    } catch {}
+    try {
+        $facts.pending_reboot = (Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending' -ErrorAction Stop) -or (Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired' -ErrorAction Stop)
+    } catch {}
+    try {
+        $drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($InputData.install_root)))
+        if ($drive.IsReady) { $facts.volume.free_bytes = $drive.AvailableFreeSpace; $facts.volume.total_bytes = $drive.TotalSize }
+    } catch {}
+    try {
+        $task = Get-ScheduledTask -TaskName 'Reparo-SelfUpdate-Tuesday-1000' -ErrorAction Stop
+        $info = Get-ScheduledTaskInfo -InputObject $task -ErrorAction Stop
+        $facts.schedule.enabled = [bool]$task.Settings.Enabled
+        if ($info.NextRunTime -and $info.NextRunTime.Year -gt 2000) { $facts.schedule.next_due = $info.NextRunTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ') }
+        $facts.schedule.last_result = [long]$info.LastTaskResult
+    } catch [Microsoft.Management.Infrastructure.CimException] {
+        # Failure may mean access denied or unavailable provider, not disabled.
+    } catch {}
+    # dsregcmd user/SSO sections are never retained. A timeout is unknown.
+    $dsreg = $null
+    try {
+        $dsregPath = Join-Path $env:SystemRoot 'System32\dsregcmd.exe'
+        if (Test-Path -LiteralPath $dsregPath -PathType Leaf) {
+            $start = New-Object Diagnostics.ProcessStartInfo
+            $start.FileName = $dsregPath; $start.Arguments = '/status'; $start.UseShellExecute = $false; $start.CreateNoWindow = $true
+            $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+            $dsreg = New-Object Diagnostics.Process; $dsreg.StartInfo = $start
+            [void]$dsreg.Start(); $outputTask = $dsreg.StandardOutput.ReadToEndAsync(); $errorTask = $dsreg.StandardError.ReadToEndAsync()
+            if ($dsreg.WaitForExit(1000) -and $dsreg.ExitCode -eq 0) {
+                $text = $outputTask.GetAwaiter().GetResult()
+                if ($text.Length -le 65536 -and $text -match '(?m)^\s*AzureAdJoined\s*:\s*(YES|NO)\s*$') { $facts.entra_joined = $matches[1] -eq 'YES' }
+            }
+        }
+    } catch {} finally { if ($dsreg) { try { if (-not $dsreg.HasExited) { $dsreg.Kill() }; $dsreg.Dispose() } catch {} } }
+    $managers = @('winget','choco','scoop','npm','pnpm','yarn','dotnet','pip','pipx','cargo','rustup','gem','composer','conda')
+    $facts.package_managers = @($managers | Where-Object { Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue })
+    return $facts
+}
+
+function Send-ReparoRegistryReceipt {
+    param([object]$Receipt, [string]$Secret, [ValidateRange(50,2500)][int]$TimeoutMilliseconds = 2500)
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($Receipt | ConvertTo-Json -Depth 14 -Compress))
+    if ($bytes.Length -gt 32768) { throw 'Registry receipt bound reached.' }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $request = [Net.HttpWebRequest]::Create('https://file.thetechnologist.io/api/reparo/v1/report')
+    $request.Method = 'POST'; $request.ContentType = 'application/json'; $request.ContentLength = $bytes.Length
+    $request.AllowAutoRedirect = $false; $request.Timeout = $TimeoutMilliseconds; $request.ReadWriteTimeout = $TimeoutMilliseconds; $request.Proxy = $null
+    $request.UserAgent = 'Reparo-Registry/Windows/1'; $request.Headers['Authorization'] = 'Bearer ' + $Secret
+    $request.KeepAlive = $false
+    $response = $null
+    try {
+        $pendingStream = $request.BeginGetRequestStream($null, $null)
+        try {
+            if (-not $pendingStream.AsyncWaitHandle.WaitOne([Math]::Max(1, $TimeoutMilliseconds - [int]$clock.ElapsedMilliseconds))) { throw 'Registry request deadline.' }
+            $stream = $request.EndGetRequestStream($pendingStream)
+        } finally { $pendingStream.AsyncWaitHandle.Close() }
+        try {
+            if ($clock.ElapsedMilliseconds -ge $TimeoutMilliseconds) { throw 'Registry request deadline.' }
+            if ($stream.CanTimeout) { $stream.WriteTimeout = [Math]::Max(1, $TimeoutMilliseconds - [int]$clock.ElapsedMilliseconds) }
+            $stream.Write($bytes, 0, $bytes.Length)
+        } finally { $stream.Dispose() }
+        if ($clock.ElapsedMilliseconds -ge $TimeoutMilliseconds) { throw 'Registry request deadline.' }
+        $pendingResponse = $request.BeginGetResponse($null, $null)
+        try {
+            if (-not $pendingResponse.AsyncWaitHandle.WaitOne([Math]::Max(1, $TimeoutMilliseconds - [int]$clock.ElapsedMilliseconds))) { throw 'Registry response deadline.' }
+            $response = $request.EndGetResponse($pendingResponse)
+        } finally { $pendingResponse.AsyncWaitHandle.Close() }
+        if ([int]$response.StatusCode -ne 200) { throw 'Registry receipt not acknowledged.' }
+        # Read a bounded acknowledgement; the server never supplies commands.
+        if ($clock.ElapsedMilliseconds -ge $TimeoutMilliseconds) { throw 'Registry response deadline.' }
+        $responseStream = $response.GetResponseStream()
+        if ($responseStream.CanTimeout) { $responseStream.ReadTimeout = [Math]::Max(1, $TimeoutMilliseconds - [int]$clock.ElapsedMilliseconds) }
+        $reader = New-Object IO.StreamReader($responseStream)
+        try {
+            $buffer = New-Object char[] 2049; $count = $reader.ReadBlock($buffer, 0, 2049)
+            if ($count -gt 2048) { throw 'Registry response bound reached.' }
+            $ack = (-join $buffer[0..([Math]::Max(0, $count - 1))]) | ConvertFrom-Json -ErrorAction Stop
+            if ($ack.accepted -ne $true -or $ack.event_id -ne $Receipt.event_id) { throw 'Registry receipt not acknowledged.' }
+        } finally { $reader.Dispose() }
+    } finally { if ($response) { $response.Dispose() }; $request.Abort() }
+}
+
+function Invoke-ReparoRegistryWorker {
+    param([object]$InputData)
+    $ErrorActionPreference = 'Stop'
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $isMachine = [bool]$InputData.machine
+    $allowed = if ($isMachine) { @('S-1-5-32-544','S-1-5-18') } else { @($identity.User.Value) }
+    $root = [string]$InputData.state_root
+    if ($root -match '(?i)[\\/](Proton|Dropbox|GitHub|\.git)([\\/]|$)') { return }
+    Initialize-ReparoRegistryDirectory -Root $root -AllowedSids $allowed -PolicyRoot $InputData.policy_root
+    $lockPath = Join-Path $root 'state.lock'; $lock = $null
+    try {
+        if (Test-Path -LiteralPath $lockPath) { Assert-ReparoRegistryPrivatePath -Path $lockPath -AllowedSids $allowed }
+        $lock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+        Assert-ReparoRegistryPrivatePath -Path $lockPath -AllowedSids $allowed
+        $path = Join-Path $root 'state.json'
+        if (Test-Path -LiteralPath $path) {
+            Assert-ReparoRegistryPrivatePath -Path $path -AllowedSids $allowed
+            if ((Get-Item -LiteralPath $path).Length -gt 262144) { return }
+            $state = [IO.File]::ReadAllText($path) | ConvertFrom-Json -ErrorAction Stop
+            if ($state.schema -ne 'reparo-registry-state-1' -or $state.installation_id -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' -or $state.secret -cnotmatch '^[0-9a-f]{64}$' -or @($state.queue).Count -gt 8) { return }
+        } else {
+            $random = New-Object byte[] 32; $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+            try { $rng.GetBytes($random) } finally { $rng.Dispose() }
+            $state = [pscustomobject]@{ schema = 'reparo-registry-state-1'; installation_id = [guid]::NewGuid().ToString(); secret = (($random | ForEach-Object { $_.ToString('x2') }) -join '')
+                first_install_at = $null; first_install_source = $null; source_commit = $null; source_sha256 = $null
+                queue = @(); retry_count = 0; last_success_at = $null; notice_shown = $false }
+        }
+        if ($InputData.fresh_successful_install -and -not $state.first_install_at) {
+            $state.first_install_at = $InputData.client_time; $state.first_install_source = 'recorded-install'
+        }
+        if ($InputData.source_sha256 -match '^[0-9a-f]{64}$') {
+            $state.source_sha256 = $InputData.source_sha256
+            $state.source_commit = if ($InputData.source_commit -cmatch '^[0-9a-f]{40}$') { $InputData.source_commit } else { $null }
+        }
+        # Preserve successful fresh-install metadata before optional discovery,
+        # so a slow WMI provider or timeout cannot turn the date into a guess.
+        Write-ReparoRegistryState -Path $path -State $state -AllowedSids $allowed
+        $facts = Get-ReparoRegistryFacts -InputData $InputData -State $state
+        $receipt = [ordered]@{ schema = 'reparo-registry-1'; installation_id = $state.installation_id; event_id = [guid]::NewGuid().ToString()
+            client_time = $InputData.client_time; event_type = $InputData.event_type; facts = $facts; operation = $InputData.operation }
+        $queue = @($state.queue | Where-Object { try { [DateTimeOffset]::Parse($_.client_time) -gt [DateTimeOffset]::UtcNow.AddDays(-7) } catch { $false } })
+        if ($queue.Count -ge 8) { $queue = @($queue | Select-Object -Last 7) }
+        $state.queue = @($queue) + @($receipt)
+        # Commit identity and original event IDs before network I/O. A crash or
+        # outage retries the same event; it never manufactures successful installs.
+        Write-ReparoRegistryState -Path $path -State $state -AllowedSids $allowed
+        $networkClock = [Diagnostics.Stopwatch]::StartNew()
+        for ($sent = 0; $sent -lt 2 -and @($state.queue).Count -gt 0; $sent++) {
+            $remaining = 2500 - [int]$networkClock.ElapsedMilliseconds
+            if ($remaining -lt 100) { break }
+            try {
+                Send-ReparoRegistryReceipt -Receipt $state.queue[0] -Secret $state.secret -TimeoutMilliseconds $remaining
+                $state.queue = @($state.queue | Select-Object -Skip 1); $state.retry_count = 0
+                $state.last_success_at = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+                Write-ReparoRegistryState -Path $path -State $state -AllowedSids $allowed
+            } catch { $state.retry_count = [Math]::Min(1000000, [int]$state.retry_count + 1); break }
+        }
+        $state.notice_shown = $true
+        Write-ReparoRegistryState -Path $path -State $state -AllowedSids $allowed
+    } finally { if ($lock) { $lock.Dispose() } }
+}
+
+function Invoke-ReparoRegistryProcess {
+    param([Diagnostics.ProcessStartInfo]$StartInfo, [string]$Worker, [ValidateRange(100,10000)][int]$TimeoutMilliseconds = 10000)
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $process = New-Object Diagnostics.Process; $process.StartInfo = $StartInfo
+    $started = $false
+    try {
+        [void]$process.Start(); $started = $true
+        $process.BeginOutputReadLine(); $process.BeginErrorReadLine()
+        $process.StandardInput.AutoFlush = $true
+        $write = $process.StandardInput.WriteAsync($Worker)
+        if (-not $write.Wait([Math]::Max(1, $TimeoutMilliseconds - [int]$clock.ElapsedMilliseconds))) { throw 'Registry worker input deadline.' }
+        $write.GetAwaiter().GetResult()
+        $process.StandardInput.Close()
+        if (-not $process.WaitForExit([Math]::Max(1, $TimeoutMilliseconds - [int]$clock.ElapsedMilliseconds))) { throw 'Registry worker deadline.' }
+    } finally {
+        # Include stdin delivery in the same deadline. A child which never reads
+        # cannot strand maintenance before WaitForExit is reached.
+        if ($started) {
+            $cleanupClock = [Diagnostics.Stopwatch]::StartNew()
+            try {
+                if (-not $process.HasExited) {
+                    $killStart = New-Object Diagnostics.ProcessStartInfo
+                    $killStart.FileName = Join-Path $env:SystemRoot 'System32\taskkill.exe'; $killStart.Arguments = '/PID ' + $process.Id + ' /T /F'
+                    $killStart.UseShellExecute = $false; $killStart.CreateNoWindow = $true
+                    $killStart.RedirectStandardOutput = $true; $killStart.RedirectStandardError = $true
+                    $killer = New-Object Diagnostics.Process; $killer.StartInfo = $killStart
+                    try {
+                        [void]$killer.Start(); $killer.BeginOutputReadLine(); $killer.BeginErrorReadLine()
+                        # A successful taskkill exit is not proof that the target
+                        # process has finished exiting. Reserve time to observe
+                        # the owned handle and use the direct fallback if needed.
+                        if (-not $killer.WaitForExit(750)) { try { $killer.Kill() } catch {} }
+                    } finally { $killer.Dispose() }
+                }
+            } catch { } # Still attempt the direct owned-process fallback below.
+            try {
+                if (-not $process.HasExited) { $process.Kill() }
+                if (-not $process.WaitForExit([Math]::Max(1, 1500 - [int]$cleanupClock.ElapsedMilliseconds))) { throw 'Registry worker cleanup deadline.' }
+            } finally { $process.Dispose() }
+        } else {
+            $process.Dispose()
+        }
+    }
+}
+
+function Invoke-ReparoRegistry {
+    param([ValidateSet('install','update','run','maintenance')][string]$EventType, [hashtable]$Operation,
+        [switch]$FreshSuccessfulInstall, [AllowNull()][string]$SourceCommit, [AllowNull()][string]$SourceHash)
+    if (-not $script:ReparoIsWindows -or $Preview -or $env:REPARO_REPORT_SKIP -eq '1' -or $env:REPARO_REGISTRY_DISABLE -eq '1') { return }
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $machine = $identity.User.Value -eq 'S-1-5-18' -or (New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        $installFull = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+        $machine = $machine -and $installFull.StartsWith([IO.Path]::GetFullPath($env:ProgramData).TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $installFull -PathType Container)
+        if ($machine) { $root = Join-Path $installFull 'Registry'; $policyRoot = $env:ProgramData }
+        else {
+            $sha = [Security.Cryptography.SHA256]::Create()
+            try { $key = (($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($installFull.ToLowerInvariant())) | ForEach-Object { $_.ToString('x2') }) -join '').Substring(0, 16) } finally { $sha.Dispose() }
+            $policyRoot = [Environment]::GetFolderPath('LocalApplicationData')
+            $root = Join-Path $policyRoot ('Reparo\Registry\' + $key)
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $root 'state.json'))) {
+            Write-Info 'Reparo reports device/update facts automatically. Details: https://file.thetechnologist.io/privacy.html ; disable with REPARO_REGISTRY_DISABLE=1.'
+        }
+        $inputData = [ordered]@{ state_root = $root; policy_root = $policyRoot; machine = $machine; install_root = $InstallRoot; executed_version = $script:ReparoVersion
+            client_time = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ'); event_type = $EventType; operation = $Operation
+            fresh_successful_install = [bool]$FreshSuccessfulInstall; source_commit = $SourceCommit; source_sha256 = $SourceHash }
+        $names = @('Assert-ReparoRegistryPrivatePath','Initialize-ReparoRegistryDirectory','Write-ReparoRegistryState','Get-ReparoRegistryFacts','Send-ReparoRegistryReceipt','Invoke-ReparoRegistryWorker')
+        $definitions = @($names | ForEach-Object { 'function ' + $_ + ' {' + (Get-Item ('Function:\' + $_)).Definition + "`n}" }) -join "`n"
+        $encodedInput = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($inputData | ConvertTo-Json -Depth 14 -Compress)))
+        $worker = "`$ErrorActionPreference='Stop'`n`$env:PSModulePath=([Environment]::GetEnvironmentVariable('PSModulePath','Machine')+';'+(Join-Path `$PSHOME 'Modules'))`n" + $definitions + "`ntry { Invoke-ReparoRegistryWorker -InputData ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$encodedInput')) | ConvertFrom-Json) } catch { }"
+        # The small bootstrap reads the self-contained worker over stdin. Long
+        # functions and receipt facts never enter the Windows command line.
+        $bootstrap = '$code=[Console]::In.ReadToEnd(); & ([scriptblock]::Create($code))'
+        $start = New-Object Diagnostics.ProcessStartInfo
+        $start.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $start.Arguments = '-NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+        $start.UseShellExecute = $false; $start.CreateNoWindow = $true
+        $start.RedirectStandardInput = $true; $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+        Invoke-ReparoRegistryProcess -StartInfo $start -Worker $worker
+    } catch { } # Observation cannot alter installation or maintenance results.
+}
+
 function Invoke-ReparoReporting {
     param([ValidateSet('lifecycle_result','maintenance_summary')][string]$EventType, [hashtable]$Data)
     # Optional, operator-installed client only. Never install Node, discover a
@@ -2062,11 +2418,43 @@ try {
 
 function Invoke-ReparoLifecycleReporting {
     param([string]$Method, [string]$Outcome, [AllowNull()][string]$PreviousVersion)
+    $registryDuration = if ($script:ReparoRegistryOperationClock) { [long]$script:ReparoRegistryOperationClock.ElapsedMilliseconds } else { $null }
     try {
         if ($PreviousVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') { $PreviousVersion = $null }
         $code = if ($Outcome -eq 'failed') { 'LIFECYCLE_FAILED' } else { $null }
         Invoke-ReparoReporting -EventType lifecycle_result -Data @{ method=$Method; previous_version=$PreviousVersion; current_version=$null; outcome=$Outcome; duration_ms=$null; failure_code=$code }
     } catch { } # An observer must never replace the original deployment error.
+    try {
+        $current = Get-ReparoInstalledVersion -TargetRoot $InstallRoot
+        $operation = @{ previous_version = $PreviousVersion; current_version = $current; outcome = $Outcome
+            attempted_at = $script:ReparoRegistryOperationStartedAt; duration_ms = $registryDuration
+            failure_stage = $(if ($Outcome -eq 'failed') { $script:ReparoRegistryFailureStage } else { $null })
+            source = $script:ReparoRegistryUpdateSource; maintenance = $null }
+        $type = if ($script:ReparoRegistryWasFreshInstall) { 'install' } else { 'update' }
+        $freshSucceeded = $script:ReparoRegistryWasFreshInstall -and $Outcome -eq 'succeeded'
+        $hash = if ($Outcome -in @('succeeded','unchanged')) { $script:ReparoRegistrySourceHash } else { $null }
+        Invoke-ReparoRegistry -EventType $type -Operation $operation -FreshSuccessfulInstall:$freshSucceeded -SourceCommit $script:ReparoRegistrySourceCommit -SourceHash $hash
+    } catch { }
+}
+
+function Get-ReparoRegistryMaintenance {
+    param([System.Collections.IDictionary]$Summary)
+    $totals = @{ updated = 0; skipped = 0; failed = 0; unknown = 0; managers = @() }
+    $managers = @{}
+    foreach ($entry in @(@('Updated','updated'),@('Skipped','skipped'),@('Failed','failed'),@('Pending','unknown'))) {
+        # PowerShell's array binder can throw on List[object] inside @(...).
+        # Enumerate the actual summary list through the pipeline instead.
+        $records = @($Summary[$entry[0]] | ForEach-Object { $_ })
+        $totals[$entry[1]] = $records.Count
+        foreach ($record in $records) {
+            $name = 'other'
+            if ([string]$record.Method -match '^(?i)(winget|choco|scoop|npm|pnpm|yarn|dotnet|pipx?|cargo|rust|gem|composer|conda|apt|dnf|pacman|zypper|flatpak|snap|fwupd|powershell|windowsupdate|windowsfeatureupdate|wsl|steam)') { $name = $matches[1].ToLowerInvariant() }
+            if (-not $managers.ContainsKey($name)) { $managers[$name] = @{ name = $name; updated = 0; skipped = 0; failed = 0; unknown = 0 } }
+            $managers[$name][$entry[1]]++
+        }
+    }
+    $totals.managers = @($managers.Keys | Sort-Object | ForEach-Object { $managers[$_] })
+    return $totals
 }
 
 function Get-ReparoWindowsArtifactMirrorUrl {
@@ -2103,6 +2491,7 @@ function Invoke-ReparoNew {
     $rollbackPath = Join-Path $tempRoot 'Reparo.rollback.ps1'
     $deploymentStarted = $false
     $script:ReparoDeploymentChanged = $false
+    $script:ReparoRegistryFailureStage = 'download'
 
     Write-Info "Install root: $TargetRoot"
     Write-Info "Source: $Url"
@@ -2129,6 +2518,7 @@ Log: $script:ReparoLogPath
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         if (Test-Path -LiteralPath $Url) {
+            $script:ReparoRegistryUpdateSource = 'offline'
             if (-not (Test-Path -LiteralPath $Url -PathType Leaf)) { throw "Local Reparo source is not a file: $Url" }
             Copy-Item -LiteralPath $Url -Destination $tempScript -Force
         }
@@ -2142,6 +2532,7 @@ Log: $script:ReparoLogPath
                     throw 'Reviewed artifact mirror downloads require the release hash and version.'
                 }
                 $downloadUrl = Get-ReparoWindowsArtifactMirrorUrl -Commit $ReviewedCommit -SourceUrl $Url
+                $script:ReparoRegistryUpdateSource = 'mirror'
                 $requestHeaders = @{ 'User-Agent' = 'Reparo-Download/Windows/Update'; 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' }
                 Write-Info "Downloading reviewed artifact from $downloadUrl"
                 try {
@@ -2153,6 +2544,7 @@ Log: $script:ReparoLogPath
                     if (-not ($_.Exception -is [Net.WebException]) -and
                         $_.Exception.GetType().FullName -notin @('System.Net.Http.HttpRequestException','Microsoft.PowerShell.Commands.HttpResponseException','System.Threading.Tasks.TaskCanceledException','System.TimeoutException')) { throw }
                     Write-Warning 'Reparo download mirror unavailable; using the reviewed GitHub artifact. This download is omitted from mirror analytics.'
+                    $script:ReparoRegistryUpdateSource = 'github-fallback'
                     Invoke-WebRequest -Uri $Url -Headers $requestHeaders -OutFile $tempScript -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
                 }
             }
@@ -2173,6 +2565,7 @@ Log: $script:ReparoLogPath
                 Invoke-WebRequest -Uri $downloadUrl -Headers $requestHeaders -OutFile $tempScript -UseBasicParsing
             }
         }
+        $script:ReparoRegistryFailureStage = 'validate'
         $candidateItem = Get-Item -LiteralPath $tempScript -Force -ErrorAction Stop
         if ($candidateItem.Length -lt 1 -or $candidateItem.Length -gt 2097152) {
             throw "Candidate Reparo.ps1 size is outside the allowed 1-byte to 2-MiB range: $($candidateItem.Length) bytes."
@@ -2196,6 +2589,9 @@ Log: $script:ReparoLogPath
                 throw "Downloaded Reparo.ps1 does not contain the reviewed release version $ExpectedVersion."
             }
         }
+        $script:ReparoRegistrySourceHash = $newHash.ToLowerInvariant()
+        $script:ReparoRegistrySourceCommit = if ($ReviewedCommit) { $ReviewedCommit } else { $null }
+        $script:ReparoRegistryFailureStage = 'deploy'
         Protect-ReparoWindowsInstallRoot -Path $TargetRoot -WhatIfOnly:$WhatIfOnly
         foreach ($protectedPath in @($TargetRoot, $scriptPath, $targetLogRoot, $backupRoot, (Join-Path $TargetRoot 'bin'))) {
             Assert-ReparoWindowsPathHasNoReparsePoint -Path $protectedPath
@@ -3966,6 +4362,10 @@ if ($ReportLifecycle) {
 }
 
 if ($Ninja) {
+    $script:ReparoRegistryOperationStartedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    $script:ReparoRegistryOperationClock = [Diagnostics.Stopwatch]::StartNew()
+    $script:ReparoRegistryWasFreshInstall = -not (Test-Path -LiteralPath (Join-Path $InstallRoot 'Reparo.ps1'))
+    $script:ReparoRegistryFailureStage = 'ninja-bootstrap'
     $ninjaBootstrapRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ReparoNinja_{0}_{1}" -f $PID, (Get-Date -Format 'yyyyMMddHHmmss'))
     $ninjaBootstrapPath = Join-Path $ninjaBootstrapRoot 'Reparo.bootstrap.ps1'
     $ninjaInstallArguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $ninjaBootstrapPath, '-New', '-SkipNinjaPublish', '-InstallRoot', $InstallRoot)
@@ -4014,6 +4414,11 @@ if ($Ninja) {
 }
 
 if ($Install -or $New -or $Latest) {
+    $script:ReparoRegistryOperationStartedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    $script:ReparoRegistryOperationClock = [Diagnostics.Stopwatch]::StartNew()
+    $script:ReparoRegistryWasFreshInstall = -not (Test-Path -LiteralPath (Join-Path $InstallRoot 'Reparo.ps1'))
+    $script:ReparoRegistryFailureStage = 'resolve-source'
+    $script:ReparoRegistryUpdateSource = if ($Install) { 'offline' } elseif ($Latest) { 'latest' } else { 'mirror' }
     $installReportingOutcome = 'failed'
     $previousReportingVersion = $null
     try { $previousReportingVersion = Get-ReparoInstalledVersion -TargetRoot $InstallRoot } catch {}
@@ -4059,6 +4464,7 @@ if ($Install -or $New -or $Latest) {
 
     Write-Info "Reparo install mode: $installMode"
     Invoke-ReparoNew -TargetRoot $InstallRoot -Url $installSource -ExpectedHash $installExpectedHash -ExpectedVersion $installExpectedVersion -ReviewedCommit $installReviewedCommit -SkipBackup:$NoBackup -WhatIfOnly:$Preview
+    $script:ReparoRegistryFailureStage = 'finalize'
     if (-not $Preview -and -not $SkipNinjaPublish) {
         Publish-ReparoInstalledNinjaVersion -TargetRoot $InstallRoot | Out-Null
     }
@@ -8900,6 +9306,8 @@ Write-ReparoCapabilityPlan -Sections $Include
 $rebootBefore = [bool](Test-ReparoPendingReboot)
 
 Write-ReparoConsole ("REPARO starting on {0} [{1}]" -f $script:ReparoHostName, $mode) Magenta
+$script:ReparoRegistryRunClock = [Diagnostics.Stopwatch]::StartNew()
+Invoke-ReparoRegistry -EventType run -Operation @{ previous_version = $null; current_version = $script:ReparoVersion; outcome = 'running'; attempted_at = $null; duration_ms = $null; failure_stage = $null; source = 'unknown'; maintenance = $null }
 Write-ReparoLog ("=== reparo start: {0} on {1} (PID {2}) ===" -f (Get-Date), $script:ReparoHostName, $PID)
 Write-ReparoLog ("[FLAGS] Bound parameters: {0}" -f ((($PSBoundParameters.Keys | Sort-Object) -join ', ')))
 Write-ReparoParameterBlock
@@ -9968,6 +10376,17 @@ if ($Tail) {
     }
 }
 
+try {
+    if (-not $Preview -and $env:REPARO_REPORT_SKIP -ne '1' -and $env:REPARO_REGISTRY_DISABLE -ne '1') {
+        $registryMaintenanceOutcome = if ($script:ReparoFinalStatus -eq 'FAILED') { 'failed' } elseif ($script:ReparoSummary['Pending'].Count -gt 0) { 'unknown' } elseif ($script:ReparoSummary['Updated'].Count -gt 0) { 'succeeded' } else { 'unchanged' }
+        Invoke-ReparoRegistry -EventType maintenance -Operation @{
+            previous_version = $null; current_version = $script:ReparoVersion; outcome = $registryMaintenanceOutcome
+            attempted_at = $null; duration_ms = $(if ($script:ReparoRegistryRunClock) { [long]$script:ReparoRegistryRunClock.ElapsedMilliseconds } else { $null })
+            failure_stage = $(if ($script:ReparoFinalStatus -eq 'FAILED') { 'maintenance' } else { $null }); source = 'unknown'
+            maintenance = (Get-ReparoRegistryMaintenance -Summary $script:ReparoSummary)
+        }
+    }
+} catch { } # Collection/serialization itself is optional, not just delivery.
 Invoke-ReparoReporting -EventType maintenance_summary -Data @{
     outcome = $(if ($script:ReparoFinalStatus -eq 'FAILED') { 'failed' } elseif ($Preview) { 'preview' } elseif ($script:ReparoSummary['Pending'].Count -gt 0) { 'unknown' } elseif ($script:ReparoSummary['Updated'].Count -gt 0) { 'succeeded' } else { 'unchanged' })
     updated = $script:ReparoSummary['Updated'].Count; skipped = $script:ReparoSummary['Skipped'].Count; failed = $script:ReparoSummary['Failed'].Count; duration_ms = $null
