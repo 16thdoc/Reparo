@@ -9,10 +9,10 @@ umask 077
 # Interactive Esc cancellation is Windows-only: this POSIX runner does not own
 # a portable cooperative-cancel API for native package managers. No fake skip,
 # keyboard polling, or wrapper kill is substituted for installer completion.
-REPARO_LINUX_VERSION='1.4.4.10'
-REPARO_VERSION_QUOTE='A small leak will sink a great ship.'
-REPARO_VERSION_SOURCE="Benjamin Franklin, Poor Richard's Almanack (1735)"
-REPARO_VERSION_ART='  ~\___/  LEAK WATCH'
+REPARO_LINUX_VERSION='1.4.4.11'
+REPARO_VERSION_QUOTE='Parting is such sweet sorrow.'
+REPARO_VERSION_SOURCE='Star Trek VI: The Undiscovered Country (1991), General Chang'
+REPARO_VERSION_ART='  <==[ KLINGON ]==>  CHANG'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-}"
 REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
 LATEST=0
@@ -88,9 +88,11 @@ Native --new requires python3 for strict JSON validation and sha256sum for diges
 Both platforms validate immutable release artifacts before installation. Native
 Install shares New's download behavior; Windows Install remains offline.
 
-Windows-only: staged Windows Update details and interactive Esc safe-boundary
-skip requests. Native package managers have no portable cooperative-cancel API;
-this runner does not poll keys or kill a wrapper to pretend its installer stopped.
+Windows-only: post-run SignOut, staged Windows Update details and interactive
+Esc safe-boundary skip requests. SignOut is rejected before maintenance or
+scheduling; native Linux does not choose or terminate a desktop login session.
+Native package managers have no portable cooperative-cancel API; this runner
+does not poll keys or kill a wrapper to pretend its installer stopped.
 EOF
 }
 
@@ -162,7 +164,7 @@ normalize_option() {
 
 windows_only_option() {
     case "$1" in
-        windowsupdate|wu|windows11upgrade|win11|windows11|upgradetowindows11|powershell7only|7|powershell7|sevenzip|7zip|7z|wslapt|wsl|winget|wg|wingetdiscover|wd|search|list|versionlock|vl|addversionlock|saveversionlock|avl|versionlockpath|vlp|listversionlocks|lvl|migratechocotowinget|mcw|chocoderegisteronly|cdo|forcewingetreinstall|fwr|allowruntimederegister|ard|allowportablederegister|apd|finalizechocolateyremoval|fcr|allowremainingchocopackages|nochocolateybackup|migrationreportpath|chocowingetmappath|cwm|migratechocoexclude|mce|checkapp|lockapp|lockversion|packagemanager|ignoretimeouts|it|wingettimeoutseconds|wts|wingetdiscoverytimeoutseconds|wdts|windowsupdatetimeoutseconds|wuts|wslapttimeoutseconds|wats|snaptimeoutseconds|sts|installnugetprovider|inp|allowreboot|allowrestart|ar|forcereboot|reboot|restart|r|forcerestart|fr|fs|frst|forceshutdown|shutdown|poweroff|forcepoweroff|fsh|s|logroot|lr|syslog|installroot|ir|sourceurl|su|nobackup|nb|sweep|sweepstale|clean|prune|sw|deletestale|ds|time|at)
+        windowsupdate|wu|windows11upgrade|win11|windows11|upgradetowindows11|powershell7only|7|powershell7|sevenzip|7zip|7z|wslapt|wsl|winget|wg|wingetdiscover|wd|search|list|versionlock|vl|addversionlock|saveversionlock|avl|versionlockpath|vlp|listversionlocks|lvl|migratechocotowinget|mcw|chocoderegisteronly|cdo|forcewingetreinstall|fwr|allowruntimederegister|ard|allowportablederegister|apd|finalizechocolateyremoval|fcr|allowremainingchocopackages|nochocolateybackup|migrationreportpath|chocowingetmappath|cwm|migratechocoexclude|mce|checkapp|lockapp|lockversion|packagemanager|ignoretimeouts|it|wingettimeoutseconds|wts|wingetdiscoverytimeoutseconds|wdts|windowsupdatetimeoutseconds|wuts|wslapttimeoutseconds|wats|snaptimeoutseconds|sts|installnugetprovider|inp|allowreboot|allowrestart|ar|forcereboot|reboot|restart|r|forcerestart|fr|fs|frst|forceshutdown|shutdown|poweroff|forcepoweroff|fsh|s|signout|logroot|lr|syslog|installroot|ir|sourceurl|su|nobackup|nb|sweep|sweepstale|clean|prune|sw|deletestale|ds|time|at)
             return 0
             ;;
         *) return 1 ;;
@@ -1104,6 +1106,11 @@ parse_args() {
     while [ "$#" -gt 0 ]; do
         original_option=$1
         option=$(normalize_option "$original_option")
+        # Reject this Windows user-session action before a task can treat its
+        # bare spelling as recurrence text. No Linux desktop session is selected.
+        if [ "$option" = signout ]; then
+            die "$original_option is currently Windows-only; Linux does not pretend otherwise"
+        fi
         if [ "$ACTION" = task ]; then
             case "$option" in new|n|install|i|latest|report-lifecycle|status|s|kill|k|tail|t|log|version|v|help|h) die 'Task cannot schedule lifecycle or utility modes' ;; esac
         fi

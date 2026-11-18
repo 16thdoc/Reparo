@@ -1,6 +1,11 @@
 # Reparo
 
-Release **1.4.4.10** hardens the privileged Windows install boundary, enforces
+Release **1.4.4.11** adds Windows `-SignOut`: finish maintenance and reporting,
+then request sign-out of the user session that launched Reparo. Preview makes
+no sign-out request. Background and scheduled runs cannot select another user.
+
+The preceding **1.4.4.10** security release hardens the privileged Windows install
+boundary, enforces
 release SHA-256/version pins on every network bootstrap, and removes direct
 network-to-shell execution from deployment helpers. The production manifest pins immutable reviewed
 Windows/native artifacts; publishing a release does not install it on an endpoint.
@@ -871,6 +876,7 @@ For client endpoints, a public repo or Ninja-hosted script copy is usually clean
 | `-AllowReboot` / `-AllowRestart` | Allows `WindowsUpdate` to pass `-AutoReboot`. The disabled feature-update transport never stages or reboots. |
 | `-Reboot` / `-Restart` / `-R` | Restarts the computer 30 seconds after Reparo completes. |
 | `-Shutdown` / `-S` | Shuts down the computer 30 seconds after Reparo completes. Cannot be combined with `-Reboot`; `-S` is **not** a silent-mode switch. |
+| `-SignOut` | Windows only. Requests sign-out of the invoking user's verified desktop session after maintenance, logs and reporting finish. Honors `-Preview`; rejects scheduled/background modes and reboot/shutdown flags. Does not force-close applications. |
 | `-InstallNuGetProvider` | Bootstraps the NuGet provider before PSGallery installs when `true` (default). Set it to `false` only if you want to suppress that bootstrap attempt. |
 | `-Include <sections>` | Runs only the named sections, such as `Winget Choco`. |
 | `-Force` | Runs the full local-dev-tool pass and enables Windows Update, the guarded Windows feature-update lane, and WSL apt handling. It deliberately excludes PowerShell 7; run `-7` explicitly for that MSI update. Use carefully. |
@@ -1186,6 +1192,30 @@ Use `-WingetDiscover` when you want to refresh the winget discovery list without
 Use `-Kill` when a run is stuck; it stops matched Reparo process trees and then sweeps known updater front ends so orphaned `winget.exe` or similar package-manager processes are not left running. Reparo does not kill generic shells or installer engines by default; add extra process base names with `-KillUpdaterNames` when you intentionally want that broader cleanup.
 Use `-IgnoreTimeouts` when you explicitly want to suppress timeout enforcement even if timeout values are supplied.
 Use `-AllowReboot` only when Windows Update may auto-reboot before the rest of the Reparo run finishes. Use `-Reboot` to restart, or `-Shutdown` / `-S` to power off, 30 seconds after Reparo completes. Both post-run power actions honor `-Preview`; `-Reboot` and `-Shutdown` cannot be combined.
+
+To finish a Windows maintenance run and sign out of the current account:
+
+```powershell
+reparo -Force -SignOut
+```
+
+Add `-Preview` to inspect the run without requesting sign-out. Reparo finishes
+its maintenance results, logs, summary and reporting before requesting sign-out
+with Windows' current-user action. `-Force` selects maintenance sections; it does
+not force applications closed. Unsaved applications or Windows can block or
+cancel sign-out, so a successful request is not proof that sign-out completed.
+
+`-SignOut` requires a verified desktop session owned by the invoking account.
+Normal console, same-user UAC elevation and RDP sessions are supported, including
+a desktop that locks during maintenance. SYSTEM/service/SSH runs, session zero,
+different-user elevation and an unverifiable desktop owner are rejected before
+maintenance. Reparo never selects another logged-in user. Run it locally in the
+account you intend to sign out.
+
+`-SignOut` cannot be combined with `-Headless`, `-Task`, `-Time`, installation or
+utility modes, `-Reboot`, `-Shutdown`, or `-AllowReboot`. Native Linux recognizes
+the option and rejects it as Windows-only before maintenance or scheduling.
+
 Winget upgrades default to `-WingetTimeoutSeconds 1800`; set it to `0` or use `-IgnoreTimeouts` only when indefinite execution is intentional. Discovery and Windows Update deadlines remain opt-in; Windows Update waits for a safe boundary rather than killing servicing, and an interactive Esc request never escalates to a timeout kill. `WslApt` defaults to `-WslAptTimeoutSeconds 1800` because unattended sudo/apt sessions can otherwise wait forever.
 Use `-InstallNuGetProvider:$false` if a managed environment wants to block NuGet provider bootstrapping, or leave it at the default `true` so Reparo can install it before PSGallery module installs.
 

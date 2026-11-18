@@ -112,6 +112,7 @@ param(
     [switch]$ForceReboot,
     [Alias('Shutdown', 'PowerOff', 'ForcePowerOff', 'FSH', 'S')]
     [switch]$ForceShutdown,
+    [switch]$SignOut,
     [Alias('LR')]
     [string]$LogRoot = "$env:ProgramData\Reparo\Logs",
     [string]$Syslog,
@@ -171,9 +172,20 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.10'
+$script:ReparoVersion = '1.4.4.11'
 $script:ReparoSourcePath = $PSCommandPath
 $script:ReparoBoundParameters = $PSBoundParameters
+if ($SignOut) {
+    if ($Headless -or $Task -or $PSBoundParameters.ContainsKey('Time')) {
+        throw '-SignOut requires the invoking Windows desktop session; it cannot be combined with -Headless, -Task or -Time.'
+    }
+    if ($ForceReboot -or $ForceShutdown -or $AllowReboot) {
+        throw '-SignOut cannot be combined with -Reboot, -Shutdown or -AllowReboot. Choose one post-run action.'
+    }
+    if ($Install -or $New -or $Latest -or $Ninja -or $Status -or $Kill -or $Sweep -or $DeleteStale -or $Search -or $Msi -or $ReportLifecycle -or $AddVersionLock -or $ListVersionLocks -or $CheckApp -or $LockApp -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $WingetDiscover -or $WingetHealth) {
+        throw '-SignOut is a post-maintenance action. Run administrative, read-only and install modes separately.'
+    }
+}
 if ($Headless) {
     if ($Task -or $PSBoundParameters.ContainsKey('Time')) { throw '-Headless cannot be combined with -Task or -Time.' }
     if ($Preview -or $Help -or $Version -or $Install -or $New -or $Latest -or $Ninja -or $Status -or $Tail -or $Kill -or $Sweep -or $DeleteStale -or $Search -or $Msi -or $ReportLifecycle -or $AddVersionLock -or $ListVersionLocks -or $CheckApp -or $LockApp -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $WingetDiscover -or $WingetHealth) { throw '-Headless only supports maintenance runs. Run administrative and read-only commands normally.' }
@@ -181,7 +193,7 @@ if ($Headless) {
     $Time = '5s'
     $script:ReparoBoundParameters['Time'] = $Time
 }
-$script:ReparoTaskBlockedParameters = @('Headless','Time','New','Latest','Install','Ninja','Status','Tail','Kill','Sweep','DeleteStale','Search','AddVersionLock','ListVersionLocks','CheckApp','LockApp','MigrateChocoToWinget','FinalizeChocolateyRemoval','Syslog','SkipNinjaPublish','SourceUrl','NoBackup','ReportLifecycle','ReportingOutcome','ReportingPreviousVersion')
+$script:ReparoTaskBlockedParameters = @('Headless','Time','SignOut','New','Latest','Install','Ninja','Status','Tail','Kill','Sweep','DeleteStale','Search','AddVersionLock','ListVersionLocks','CheckApp','LockApp','MigrateChocoToWinget','FinalizeChocolateyRemoval','Syslog','SkipNinjaPublish','SourceUrl','NoBackup','ReportLifecycle','ReportingOutcome','ReportingPreviousVersion')
 if (($ReportingOutcome -or $PSBoundParameters.ContainsKey('ReportingPreviousVersion')) -and -not $ReportLifecycle) { throw 'Reporting fields require -ReportLifecycle; refusing accidental maintenance.' }
 if ($ReportLifecycle -and (-not $ReportingOutcome -or $Install -or $New -or $Latest -or $Ninja -or $Update -or $Force -or $Task -or $Include)) { throw 'ReportLifecycle requires an explicit outcome and cannot run maintenance/lifecycle work.' }
 if ($ReportLifecycle) {
@@ -204,6 +216,53 @@ $script:ReparoIsWindows = if (Get-Variable -Name IsWindows -Scope Global -ErrorA
 $script:ReparoIsLinux = if (Get-Variable -Name IsLinux -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsLinux } else { $false }
 $script:ReparoIsMacOS = if (Get-Variable -Name IsMacOS -Scope Global -ErrorAction SilentlyContinue) { [bool]$IsMacOS } else { $false }
 $script:ReparoHostName = if (-not [string]::IsNullOrWhiteSpace($env:COMPUTERNAME)) { $env:COMPUTERNAME } elseif (-not [string]::IsNullOrWhiteSpace($env:HOSTNAME)) { $env:HOSTNAME } else { [System.Net.Dns]::GetHostName() }
+
+function Get-ReparoSignOutContext {
+    if (-not $script:ReparoIsWindows) { throw '-SignOut is Windows-only.' }
+
+    $sessionId = (Get-Process -Id $PID -ErrorAction Stop).SessionId
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try { $userSid = $identity.User.Value } finally { $identity.Dispose() }
+    if ($sessionId -le 0 -or $userSid -match '^S-1-5-(18|19|20|80|82)(-|$)') {
+        throw '-SignOut requires a user desktop session; SYSTEM, service and session-zero runs cannot sign out a user.'
+    }
+
+    # Only inspect the invoking process's session. Never select the active
+    # console, another RDP session or a different logged-in account.
+    $owners = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($desktop in @(Get-CimInstance -ClassName Win32_Process -Filter ("Name = 'explorer.exe' AND SessionId = {0}" -f $sessionId) -ErrorAction Stop)) {
+        $owner = Invoke-CimMethod -InputObject $desktop -MethodName GetOwnerSid -ErrorAction Stop
+        if ($owner.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($owner.Sid)) {
+            throw '-SignOut could not verify the invoking desktop owner. Run Reparo locally as that desktop user.'
+        }
+        [void]$owners.Add([string]$owner.Sid)
+    }
+    [pscustomobject]@{ SessionId = $sessionId; UserSid = $userSid; DesktopOwnerSids = @($owners.ToArray()) }
+}
+
+function Assert-ReparoSignOutContext {
+    param(
+        [Parameter(Mandatory)]$Context,
+        $ExpectedContext
+    )
+    if (-not $script:ReparoIsWindows) { throw '-SignOut is Windows-only.' }
+    if ($Context.SessionId -le 0 -or [string]::IsNullOrWhiteSpace($Context.UserSid) -or $Context.UserSid -match '^S-1-5-(18|19|20|80|82)(-|$)') {
+        throw '-SignOut requires a user desktop session; SYSTEM, service and session-zero runs cannot sign out a user.'
+    }
+    $owners = @($Context.DesktopOwnerSids)
+    if ($owners.Count -eq 0 -or @($owners | Where-Object { $_ -ne $Context.UserSid }).Count -gt 0) {
+        throw '-SignOut requires the invoking account to own its Windows desktop. SSH, service and different-user RunAs sessions are unsupported.'
+    }
+    if ($ExpectedContext -and ($Context.SessionId -ne $ExpectedContext.SessionId -or $Context.UserSid -ne $ExpectedContext.UserSid)) {
+        throw '-SignOut session identity changed during maintenance; refusing to sign out a different session or account.'
+    }
+}
+
+$script:ReparoSignOutContext = $null
+if ($SignOut -and -not ($Help -or $Version)) {
+    $script:ReparoSignOutContext = Get-ReparoSignOutContext
+    Assert-ReparoSignOutContext -Context $script:ReparoSignOutContext
+}
 
 function Assert-ReparoWindowsPathHasNoReparsePoint {
     param([Parameter(Mandatory)][string]$Path)
@@ -292,6 +351,7 @@ function Get-ReparoVersionFlavor {
     # On every runtime version bump, add a fresh Quote/Source pair here instead
     # of reusing the previous version's quote.
     $versionFlavors = @{
+        '1.4.4.11' = [pscustomobject]@{ Quote = 'Parting is such sweet sorrow.'; Source = 'Star Trek VI: The Undiscovered Country (1991), General Chang'; Art = '  <==[ KLINGON ]==>  CHANG' }
         '1.4.4.9' = [pscustomobject]@{ Quote = 'Your overconfidence is your weakness.'; Source = 'Star Wars: Return of the Jedi (1983), Luke Skywalker'; Art = '  (o_o) /==|  LUKE' }
         '1.4.4.10' = [pscustomobject]@{ Quote = 'A small leak will sink a great ship.'; Source = "Benjamin Franklin, Poor Richard's Almanack (1735)"; Art = '  ~\___/  LEAK WATCH' }
         '1.4.4.8' = [pscustomobject]@{ Quote = 'You must unlearn what you have learned.'; Source = 'Star Wars: The Empire Strikes Back (1980), Yoda'; Art = '  <(-_-)>  YODA -- judge outcomes by their receipts' }
@@ -560,6 +620,7 @@ function Write-ReparoParameterBlock {
         AllowReboot                  = $AllowReboot
         ForceReboot                  = $ForceReboot
         ForceShutdown                = $ForceShutdown
+        SignOut                      = $SignOut
         LogRoot                      = $LogRoot
         Syslog                       = $Syslog
         InstallRoot                  = $InstallRoot
@@ -800,6 +861,10 @@ Modes:
   -Reboot,-Restart,-R  Reboot the computer after Reparo finishes. Honors -Preview.
   -Shutdown            Shut down the computer after Reparo finishes. Honors -Preview.
                         Cannot be combined with -Reboot.
+  -SignOut             Request Windows sign-out for the invoking desktop user after
+                        maintenance and reporting finish. Honors -Preview; never forces apps closed.
+                        Requires the same desktop account; no SYSTEM, SSH, -Headless,
+                        -Task, -Time, reboot or shutdown combinations.
   -Syslog <host[:port]> Persistently set and use a TCP syslog listener. Default port: 514.
                        Example: -Syslog 192.168.50.31:514
                        Use -Syslog off or -Syslog disable to clear the saved target.
@@ -843,6 +908,7 @@ Timeouts:
   -AllowReboot                  Permit automatic reboot in Windows update and feature-update lanes.
   -Reboot,-Restart              Force a computer restart after Reparo finishes. Honors -Preview.
   -Shutdown                     Shut down the computer after Reparo finishes. Honors -Preview.
+  -SignOut                      Windows-only sign-out of the invoking desktop user after maintenance.
 
 Windows Update:
   Reparo will try to install PSWindowsUpdate from PSGallery if the module is missing
@@ -2695,6 +2761,42 @@ Log: $script:ReparoLogPath
     shutdown.exe /s /t 30 /c "Reparo completed and -Shutdown was requested." /d p:4:1 | Out-Null
 }
 
+function Invoke-ReparoSignOutRequest {
+    $shutdownPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'shutdown.exe'
+    if (-not (Test-Path -LiteralPath $shutdownPath -PathType Leaf)) {
+        throw 'The Windows system shutdown.exe command is unavailable; sign-out was not requested.'
+    }
+    # /l acts only on this process's current logon session. Do not add /f,
+    # /m, /t or a session target: -Force selects maintenance, not forced logoff.
+    & $shutdownPath /l | Out-Null
+    return $LASTEXITCODE
+}
+
+function Invoke-ReparoSignOut {
+    if (-not $SignOut) { return }
+    if ($null -eq $script:ReparoSignOutContext) {
+        throw '-SignOut has no verified starting session; refusing to request sign-out.'
+    }
+
+    $context = Get-ReparoSignOutContext
+    Assert-ReparoSignOutContext -Context $context -ExpectedContext $script:ReparoSignOutContext
+    if ($Preview) {
+        Write-Info ("Preview: would request Windows sign-out for the invoking user in session {0} after maintenance and reporting finish." -f $context.SessionId)
+        Write-ReparoLog ("[PREVIEW] SignOut requested; would sign out the invoking desktop session {0}. No applications would be forced closed." -f $context.SessionId)
+        return
+    }
+
+    # All maintenance receipts/reporting have already finished. Record intent
+    # first because a successful request can terminate this very process.
+    Write-Warning ("Maintenance finished; requesting Windows sign-out for the invoking user in session {0}. Applications may block or cancel sign-out." -f $context.SessionId)
+    Write-ReparoLog ("[SIGNOUT] Requesting Windows sign-out for the invoking desktop session {0}; applications are not forced closed." -f $context.SessionId)
+    Write-ReparoEventLog -EventId 1303 -EntryType Warning -Message ("Reparo maintenance finished; Windows sign-out requested for invoking session {0}. Log: {1}" -f $context.SessionId, $script:ReparoLogPath)
+    $signOutExitCode = Invoke-ReparoSignOutRequest
+    if ($signOutExitCode -ne 0) {
+        throw "Windows sign-out request failed with exit code $signOutExitCode. Maintenance results remain in the finalized log."
+    }
+}
+
 function Finalize-ReparoLogFile {
     param(
         [Parameter(Mandatory)][string]$Status
@@ -3982,7 +4084,7 @@ if ($DeleteStale) {
     return
 }
 
-if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $WingetHealth -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $Force -or $Preview -or $WindowsUpdate -or $WindowsFeatureUpdate -or $WslApt -or $SevenZip -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp)) {
+if ($Tail -and -not ($Update -or $Winget -or $WingetDiscover -or $WingetHealth -or $Search -or $AddVersionLock -or $ListVersionLocks -or $MigrateChocoToWinget -or $FinalizeChocolateyRemoval -or $Force -or $Preview -or $WindowsUpdate -or $WindowsFeatureUpdate -or $WslApt -or $SevenZip -or $Include -or $New -or $Kill -or $Sweep -or $DeleteStale -or $CheckApp -or $LockApp -or $SignOut)) {
     $tailTarget = Get-ReparoActiveLogPath -ExcludeProcessIds @($PID)
     if ($tailTarget) {
         Write-ReparoConsole ("Following log: {0}" -f $tailTarget) Cyan
@@ -9758,6 +9860,9 @@ Log: $script:ReparoLogPath
 "@
 }
 
+if ($SignOut) {
+    Add-ReparoSummaryNote ("Post-run action: request Windows sign-out for invoking desktop session {0} after reporting; applications are not forced closed." -f $script:ReparoSignOutContext.SessionId)
+}
 Write-ReparoLog '[MAINTENANCE-RUN] parent execution finished'
 Write-ReparoLog ("=== reparo end: {0} ===" -f (Get-Date))
 if ($script:ReparoSummary['Failed'].Count -gt 0) {
@@ -9828,6 +9933,14 @@ Invoke-ReparoReporting -EventType maintenance_summary -Data @{
 }
 Invoke-ReparoForcedReboot
 Invoke-ReparoForcedShutdown
+try {
+    Invoke-ReparoSignOut
+}
+catch {
+    Write-Fail $_.Exception.Message
+    Write-ReparoLog ("[SIGNOUT-FAILED] {0}" -f $_.Exception.Message)
+    exit 1
+}
 if ($script:ReparoFinalStatus -eq 'FAILED') {
     exit 1
 }
