@@ -1,11 +1,13 @@
 # Review, release and rollback gates
 
 Release 1.4.4.12 promotes reviewed source to `deploy/reparo-release.json` in a
-separate immutable pin transaction. `deploy/reparo-candidate.json` retains the
-reviewed 1.4.4.12 source pin. Ordinary installed `-New` uses the production manifest;
+separate immutable pin transaction. `deploy/reparo-candidate.json` now contains the
+reviewed 1.4.4.13 automatic-registry candidate. Ordinary installed `-New` uses the production manifest;
 publication does not itself run an installer or maintenance. Review and test
 future source/pin transactions using the same sequence below. Endpoint deployment,
 controller reenrollment and maintenance remain separate scoped actions.
+Controller/source-integrity enrollment below is the existing runner ownership
+mechanism. The automatic device registry has no operator enrollment step.
 
 1. Review the exact source/test/doc commits and platform receipts. Confirm no
    private evidence or host data entered the public diff. Existing PR CI uses

@@ -9,10 +9,10 @@ umask 077
 # Interactive Esc cancellation is Windows-only: this POSIX runner does not own
 # a portable cooperative-cancel API for native package managers. No fake skip,
 # keyboard polling, or wrapper kill is substituted for installer completion.
-REPARO_LINUX_VERSION='1.4.4.12'
-REPARO_VERSION_QUOTE='Sorry about the mess.'
-REPARO_VERSION_SOURCE='Star Wars: A New Hope (1977), Han Solo'
-REPARO_VERSION_ART='  --[ DL-44 ]-->  HAN SOLO'
+REPARO_LINUX_VERSION='1.4.4.13'
+REPARO_VERSION_QUOTE='I can bring you in warm, or I can bring you in cold.'
+REPARO_VERSION_SOURCE='The Mandalorian (2019), Season 1 Chapter 1, Din Djarin'
+REPARO_VERSION_ART='  [|T|]  DIN DJARIN'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-}"
 REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
 LATEST=0
@@ -171,8 +171,280 @@ windows_only_option() {
     esac
 }
 
+# Automatic, bounded registry snapshots use only Python's standard library.
+# No manual enrollment, Node runtime, daemon, scheduler or remote commands.
+report_native_registry() {
+    [ "${REPARO_REGISTRY_DISABLE:-0}" != 1 ] && [ "${REPARO_REPORT_SKIP:-0}" != 1 ] || return 0
+    [ "$PREVIEW" -eq 0 ] || return 0
+    command_exists python3 && command_exists timeout || return 0
+    # Public operation facts only in argv. Credentials stay inside private files.
+    # The owned timeout also bounds DNS/fact probes that socket timeouts cannot.
+    timeout -s KILL 3 python3 - "$STATE_ROOT/registry" "$DATA_ROOT/reparo-linux" "$0" "$REPARO_LINUX_VERSION" "$1" "$2" "${3:-}" "${4:-}" "${5:-}" "${6:-}" "${7:-0}" "${8:-}" "${RECEIPT_ROOT:-}" "${EVIDENCE_HEALTH:-unknown}" <<'REPARO_REGISTRY_PY' 3>&2 >/dev/null 2>&1 || true
+import datetime, fcntl, hashlib, http.client, json, os, pathlib, re, secrets, selectors, shutil, socket, stat, subprocess, sys, time, uuid
+
+ENDPOINT_HOST='file.thetechnologist.io'
+ENDPOINT_PATH='/api/reparo/v1/report'
+MAX_QUEUE=8
+MAX_QUEUE_BYTES=245760
+SCHEMA='reparo-registry-1'
+
+def utc():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
+
+def unique(pairs):
+    out={}
+    for k,v in pairs:
+        if k in out: raise ValueError('Duplicate key')
+        out[k]=v
+    return out
+
+def protected_root(path):
+    path=os.path.abspath(path)
+    if any(part.lower() in ('proton','dropbox','github','.git') for part in pathlib.Path(path).parts): raise ValueError('Synced state')
+    fd=os.open('/', os.O_RDONLY|os.O_DIRECTORY)
+    try:
+        parts=pathlib.Path(path).parts[1:]
+        for index,part in enumerate(parts):
+            try: child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            except FileNotFoundError:
+                try: os.mkdir(part,0o700,dir_fd=fd)
+                except FileExistsError: pass
+                child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            os.close(fd);fd=child;s=os.fstat(fd)
+            # Root-owned sticky /tmp is safe for a newly created private child;
+            # other writable/foreign ancestors are not credential storage.
+            writable=bool(s.st_mode & 0o022)
+            if s.st_uid not in (0,os.geteuid()) or (writable and not (s.st_uid==0 and s.st_mode & stat.S_ISVTX)): raise ValueError('Unsafe ancestor')
+            if index==len(parts)-1 and (s.st_uid!=os.geteuid() or stat.S_IMODE(s.st_mode)!=0o700): raise ValueError('Unsafe state')
+        return fd
+    except Exception:
+        os.close(fd);raise
+
+def file_read(fd,name,limit):
+    f=os.open(name,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=fd)
+    try:
+        s=os.fstat(f)
+        if not stat.S_ISREG(s.st_mode) or s.st_uid!=os.geteuid() or stat.S_IMODE(s.st_mode)!=0o600 or s.st_nlink!=1 or s.st_size>limit: raise ValueError('Unsafe state file')
+        raw=os.read(f,limit+1)
+        if len(raw)>limit: raise ValueError('State size')
+        return json.loads(raw,object_pairs_hook=unique)
+    finally: os.close(f)
+
+def file_write(fd,name,value,limit):
+    raw=json.dumps(value,separators=(',',':'),ensure_ascii=True).encode()
+    if len(raw)>limit: raise ValueError('State size')
+    # Validate existing files before replacing: never normalize hostile storage.
+    try: file_read(fd,name,limit)
+    except FileNotFoundError: pass
+    temporary='.'+name+'.'+secrets.token_hex(12)
+    f=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=fd)
+    try:
+        with os.fdopen(f,'wb',closefd=True) as stream: stream.write(raw);stream.flush();os.fsync(stream.fileno())
+        os.replace(temporary,name,src_dir_fd=fd,dst_dir_fd=fd);os.fsync(fd)
+    finally:
+        try: os.unlink(temporary,dir_fd=fd)
+        except FileNotFoundError: pass
+
+def bounded_command(command,limit=4096):
+    process=None
+    try:
+        # Stream at most limit+1 bytes; a fast local probe must not allocate an
+        # unbounded PIPE buffer before the size check. Probes remain in the
+        # reporter's owned timeout process group, including any descendants.
+        process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+        descriptor=process.stdout.fileno();os.set_blocking(descriptor,False)
+        deadline=time.monotonic()+0.3;output=bytearray()
+        with selectors.DefaultSelector() as selector:
+            selector.register(descriptor,selectors.EVENT_READ)
+            while True:
+                remaining=deadline-time.monotonic()
+                if remaining<=0 or not selector.select(remaining): return None
+                chunk=os.read(descriptor,min(4096,limit+1-len(output)))
+                if not chunk: break
+                output.extend(chunk)
+                if len(output)>limit: return None
+        remaining=deadline-time.monotonic()
+        if remaining<=0: return None
+        if process.wait(timeout=remaining)==0: return output.decode('utf-8','replace').strip()
+    except (OSError,ValueError,subprocess.TimeoutExpired): pass
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                try: process.kill()
+                except ProcessLookupError: pass
+                try: process.wait(timeout=0.05)
+                except subprocess.TimeoutExpired: pass
+            if process.stdout: process.stdout.close()
+    return None
+
+def limited(value,maximum=128):
+    return value[:maximum] if isinstance(value,str) and value else None
+
+def version_of(path):
+    try:
+        if os.path.getsize(path)>2097152: return None
+        text=pathlib.Path(path).read_text(encoding='utf-8')
+        matches=re.findall(r"^REPARO_LINUX_VERSION='([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)'$",text,re.M)
+        return matches[0] if len(matches)==1 else None
+    except (OSError,UnicodeError): return None
+
+def digest_file(path):
+    try:
+        if os.path.getsize(path)>2097152: return None
+        return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest().upper()
+    except OSError: return None
+
+def collect_facts(installed,executing,version,state,queued):
+    release={}
+    try:
+        for line in pathlib.Path('/etc/os-release').read_text(encoding='utf-8')[:8192].splitlines():
+            if re.fullmatch('[A-Z_]+',line.partition('=')[0]):
+                k,_,v=line.partition('=');release[k]=v.strip().strip('"').strip("'")[:256]
+    except OSError: pass
+    machine=limited(socket.gethostname())
+    fqdn=bounded_command(['hostname','--fqdn'],254)
+    if not fqdn or '.' not in fqdn or any(c.isspace() for c in fqdn): fqdn=None
+    domain=None;joined=None
+    if shutil.which('realm'):
+        realms=bounded_command(['realm','list','--name-only'],1024)
+        if realms:
+            candidates=[v for v in realms.splitlines() if re.fullmatch('[A-Za-z0-9_.-]{1,253}',v)]
+            if candidates: domain=candidates[0];joined=True
+        # Empty realmd configuration does not prove no other domain-join method.
+    uptime=None;boot=None
+    try:
+        uptime=int(float(pathlib.Path('/proc/uptime').read_text().split()[0]))
+        for line in pathlib.Path('/proc/stat').read_text().splitlines():
+            if line.startswith('btime '): boot=datetime.datetime.fromtimestamp(int(line.split()[1]),datetime.timezone.utc).isoformat().replace('+00:00','Z')
+    except (OSError,ValueError,IndexError): pass
+    pending=True if os.path.exists('/run/reboot-required') else (False if release.get('ID') in ('debian','ubuntu','linuxmint','pop') else None)
+    schedule={'supported':bool(shutil.which('crontab')),'enabled':None,'next_due':None,'last_result':None}
+    if schedule['supported']:
+        cron=bounded_command(['crontab','-l'],16384)
+        if cron is not None: schedule['enabled']=any(line.rstrip().endswith('# Reparo self-update task') and not line.lstrip().startswith('#') for line in cron.splitlines())
+    volume={'free_bytes':None,'total_bytes':None}
+    at=pathlib.Path(installed).parent
+    while not at.exists() and at.parent!=at: at=at.parent
+    try:
+        disk=shutil.disk_usage(at);volume={'free_bytes':disk.free,'total_bytes':disk.total}
+    except OSError: pass
+    source_hash=digest_file(installed)
+    source_commit=state.get('source_commit') if source_hash is not None and source_hash==state.get('installed_sha256') else None
+    return {'machine_name':machine,'fqdn':fqdn,'organization':None,'site':None,'asset_label':None,
+      'first_install_at':state['first_install_at'],'first_install_source':'recorded-install' if state['first_install_at'] else None,
+      'installed_version':version_of(installed),'executed_version':version,'source_sha256':source_hash,'source_commit':source_commit,
+      'os_family':'linux','os_edition':limited(release.get('PRETTY_NAME') or release.get('NAME')),'os_version':limited(release.get('VERSION_ID')),
+      'os_build':limited(release.get('BUILD_ID') or os.uname().release),'architecture':{'x86_64':'x64','aarch64':'arm64','i386':'x86','i686':'x86','armv7l':'arm'}.get(os.uname().machine,os.uname().machine[:32]),
+      'domain_joined':joined,'domain_name':domain,'workgroup':None,'entra_joined':None,'last_boot_at':boot,'uptime_seconds':uptime,
+      'pending_reboot':pending,'schedule':schedule,'reporting':{'identity_scope':'native-user','status':'retrying' if state['retry_count'] else 'ready','queued':queued,'retry_count':state['retry_count'],'last_success_at':state['last_success_at']},
+      'volume':volume,'package_managers':[name for name in ('apt-get','dnf','pacman','zypper','flatpak','snap','fwupdmgr','npm','pipx','pnpm','yarn','dotnet','rustup','conda','gem','composer') if shutil.which(name)]}
+
+def maintenance_results(receipts,capture_health):
+    result={'updated':None,'skipped':None,'failed':None,'unknown':None,'managers':[]}
+    if not receipts: return result
+    # Extract counts only. Raw receipts, command text and package names never leave.
+    try:
+        root=pathlib.Path(receipts);files=list(root.glob('*.command.json'))[:256]
+        manager_counts={}
+        for path in files:
+            if path.is_symlink() or path.stat().st_size>32768: continue
+            item=json.loads(path.read_text(encoding='utf-8'),object_pairs_hook=unique)
+            manager=item.get('section')
+            if not isinstance(manager,str) or not re.fullmatch('[A-Za-z][A-Za-z0-9-]{0,31}',manager): continue
+            bucket=manager_counts.setdefault(manager,{'updated':None,'skipped':None,'failed':None,'unknown':None,'outcome':'unknown'})
+            if item.get('outcome')=='failed': bucket['outcome']='failed'
+            elif item.get('outcome')=='command-success' and bucket['outcome']!='failed': bucket['outcome']='succeeded'
+        selected=dict(list(manager_counts.items())[:20])
+        # Native manager exits prove batch-command outcomes, not package counts.
+        # Apt alone supplies before/after package inventories for actual deltas.
+        before=root/'apt-before.tsv';after=root/'apt-after.tsv'
+        if capture_health=='complete' and before.is_file() and after.is_file() and not before.is_symlink() and not after.is_symlink() and before.stat().st_size<=2097152 and after.stat().st_size<=2097152:
+            def inventory(path): return dict(line.split('\t',1) for line in path.read_text(encoding='utf-8').splitlines() if '\t' in line)
+            old,new=inventory(before),inventory(after)
+            changes=sum(old[k]!=new[k] for k in old.keys() & new.keys())
+            bucket=selected.setdefault('Apt',{'updated':None,'skipped':None,'failed':None,'unknown':None,'outcome':'unknown'})
+            bucket['updated']=changes
+            # Mixed unsupported managers mean a fleet-wide total remains unknown.
+            if set(selected)=={'Apt'}: result['updated']=changes
+        result['managers']=[dict(manager=manager,**counts) for manager,counts in selected.items()][:20]
+    except (OSError,ValueError,TypeError,KeyError): pass
+    return result
+
+def send_event(secret,event,timeout):
+    connection=http.client.HTTPSConnection(ENDPOINT_HOST,443,timeout=timeout)
+    try:
+        body=json.dumps(event,separators=(',',':'),ensure_ascii=True).encode()
+        connection.request('POST',ENDPOINT_PATH,body,{'Authorization':'Bearer '+secret,'Content-Type':'application/json','User-Agent':'Reparo-Registry/Linux/1','Content-Length':str(len(body))})
+        response=connection.getresponse()
+        if response.status!=200: return False
+        raw=response.read(1025)
+        if len(raw)>1024: return False
+        answer=json.loads(raw,object_pairs_hook=unique)
+        return answer.get('accepted') is True and answer.get('event_id')==event['event_id']
+    except (OSError,ValueError,http.client.HTTPException): return False
+    finally: connection.close()
+
+def main(argv):
+    root,installed,executing,version,kind,outcome,previous,source,duration,failure,fresh,commit,receipts,capture_health=argv
+    if kind not in ('install','update','run','maintenance') or outcome not in ('started','succeeded','failed','preview','unknown','unchanged','blocked'): return
+    fd=protected_root(root)
+    try:
+        lock=os.open('state.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600,dir_fd=fd)
+        ls=os.fstat(lock)
+        if not stat.S_ISREG(ls.st_mode) or ls.st_uid!=os.geteuid() or stat.S_IMODE(ls.st_mode)!=0o600 or ls.st_nlink!=1: raise ValueError('Unsafe lock')
+        try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: return
+        try: state=file_read(fd,'identity.json',8192)
+        except FileNotFoundError:
+            state={'schema':'reparo-registry-identity-1','installation_id':str(uuid.uuid4()),'secret':secrets.token_hex(32),'first_install_at':None,'source_commit':None,'installed_sha256':None,'retry_count':0,'last_success_at':None}
+            file_write(fd,'identity.json',state,8192)
+            try: os.write(3,b'Reparo device reporting: https://file.thetechnologist.io/privacy.html (REPARO_REGISTRY_DISABLE=1 disables).\n')
+            except OSError: pass
+        if set(state)!={'schema','installation_id','secret','first_install_at','source_commit','installed_sha256','retry_count','last_success_at'} or state['schema']!='reparo-registry-identity-1' or str(uuid.UUID(state['installation_id']))!=state['installation_id'] or not re.fullmatch('[0-9a-f]{64}',state['secret']): raise ValueError('Invalid identity')
+        if not isinstance(state['retry_count'],int) or not 0<=state['retry_count']<=1000000: raise ValueError('Invalid retry state')
+        try: queue=file_read(fd,'queue.json',MAX_QUEUE_BYTES)
+        except FileNotFoundError: queue=[]
+        if not isinstance(queue,list) or len(queue)>MAX_QUEUE: raise ValueError('Invalid queue')
+        cutoff=time.time()-7*86400
+        queue=[e for e in queue if isinstance(e,dict) and e.get('schema')==SCHEMA and e.get('installation_id')==state['installation_id'] and isinstance(e.get('client_time'),str) and datetime.datetime.fromisoformat(e['client_time'].replace('Z','+00:00')).timestamp()>=cutoff]
+        now=utc()
+        if kind=='install' and outcome=='succeeded' and fresh=='1' and state['first_install_at'] is None: state['first_install_at']=now
+        if kind in ('install','update') and outcome=='succeeded':
+            state['installed_sha256']=digest_file(installed)
+            state['source_commit']=commit if re.fullmatch('[0-9a-f]{40}',commit) else None
+        facts=collect_facts(installed,executing,version,state,len(queue))
+        operation={'previous_version':previous if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+',previous) else None,'current_version':facts['installed_version'],
+          'outcome':outcome,'failure_stage':failure if failure and re.fullmatch('[A-Za-z0-9_.-]{1,64}',failure) else None,
+          'duration_ms':int(duration) if duration.isdigit() and int(duration)<=604800000 else None,
+          'source':source if source in ('mirror','github-fallback','latest','custom','offline') else None,
+          'maintenance':maintenance_results(receipts,capture_health) if kind=='maintenance' else {'updated':None,'skipped':None,'failed':None,'unknown':None,'managers':[]},
+          'attempted_at':os.environ.get('REPARO_REGISTRY_ATTEMPTED_AT') if re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z',os.environ.get('REPARO_REGISTRY_ATTEMPTED_AT','')) else None}
+        event={'schema':SCHEMA,'installation_id':state['installation_id'],'event_id':str(uuid.uuid4()),'client_time':now,'event_type':kind,'facts':facts,'operation':operation}
+        if len(json.dumps(event).encode())>32768: return
+        queue.append(event);queue=queue[-MAX_QUEUE:]
+        while len(json.dumps(queue).encode())>MAX_QUEUE_BYTES: queue.pop(0)
+        file_write(fd,'identity.json',state,8192);file_write(fd,'queue.json',queue,MAX_QUEUE_BYTES)
+        deadline=time.monotonic()+2.0
+        for attempt in range(2):
+            if not queue or time.monotonic()>=deadline: break
+            if not send_event(state['secret'],queue[0],max(0.1,deadline-time.monotonic())):
+                state['retry_count']=min(state['retry_count']+1,1000000);break
+            queue.pop(0);state['retry_count']=0;state['last_success_at']=utc()
+            file_write(fd,'queue.json',queue,MAX_QUEUE_BYTES)
+        file_write(fd,'identity.json',state,8192)
+    finally:
+        try: os.close(lock)
+        except (UnboundLocalError,OSError): pass
+        os.close(fd)
+
+try: main(sys.argv[1:])
+except Exception: pass # Reporting never replaces the caller's real result.
+REPARO_REGISTRY_PY
+    return 0
+}
+
 report_native_result() {
-    [ "${REPARO_REPORT_SKIP:-0}" != 1 ] || return 0
+    [ "${REPARO_REPORT_SKIP:-0}" != 1 ] && [ "${REPARO_LEGACY_REPORT_SKIP:-0}" != 1 ] || return 0
     reporting_root="$STATE_ROOT/reporting"
     [ -f "$reporting_root/reporting-client.json" ] || return 0
     case "$reporting_root" in */Proton/*|*/Dropbox/*|*/GitHub/*|*/.git/*) return 0 ;; esac
@@ -261,6 +533,13 @@ native_install_finalization() {
         if [ "$PREVIEW" -eq 1 ]; then outcome=preview; else outcome=succeeded; fi
     fi
     report_native_result lifecycle_result native-installer "$outcome" "${reporting_previous_version:-}"
+    # The verified installer owns successful metadata, including the original
+    # fresh-install date. The parent still reports failures before that hook.
+    if [ "${registry_child_reported:-0}" -ne 1 ]; then
+        registry_duration=''
+        [ -z "${registry_started:-}" ] || registry_duration=$(( ($(date +%s)-registry_started)*1000 ))
+        report_native_registry "${registry_kind:-update}" "$outcome" "${reporting_previous_version:-}" "${registry_source:-}" "$registry_duration" "${registry_failure_stage:-bootstrap}" 0 ''
+    fi
     exit "$status"
 }
 
@@ -276,6 +555,7 @@ run_native_installer() {
     release_file="$bootstrap_dir/release.json"
     installer_hash=''
     release_commit=''
+    registry_failure_stage=manifest
     if [ -n "$REPARO_INSTALLER_URL" ] || [ "$LATEST" -eq 1 ]; then
         REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
         printf '%s\n' 'WARNING: Explicit latest/custom installer is unpinned.'
@@ -309,7 +589,9 @@ PY
         installer_hash=$(printf '%s\n' "$release_values" | sed -n '2p')
         release_commit=$(printf '%s\n' "$release_values" | sed -n '3p')
     fi
+    registry_failure_stage=installer-download
     if [ -n "$release_commit" ]; then
+        registry_source=mirror
         # Preserve the GitHub-only manifest validator above, then map its exact
         # reviewed commit to one fixed public artifact path for observation.
         mirror_url="https://file.thetechnologist.io/reparo/$release_commit/install-reparo-linux.sh"
@@ -321,28 +603,39 @@ PY
                 5|6|7|16|18|22|28|35|47|52|55|56|60|92|95|96) ;;
                 *) die 'Public artifact download failed locally; refusing fallback' ;;
             esac
+            registry_source=github-fallback
             printf '%s\n' 'WARNING: Public artifact mirror unavailable; using the reviewed immutable GitHub installer (download observation omitted).' >&2
             curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -A 'Reparo-Download/Linux/Update' -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$REPARO_INSTALLER_URL" -o "$bootstrap_path" || die 'Could not download native Reparo installer'
         fi
     else
+        registry_source=custom
+        [ "$LATEST" -eq 0 ] || registry_source=latest
         printf '%s\n' "Downloading native Reparo installer: $REPARO_INSTALLER_URL"
         curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -A 'Reparo-Download/Linux/Update' -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$REPARO_INSTALLER_URL" -o "$bootstrap_path" || die 'Could not download native Reparo installer'
     fi
+    registry_failure_stage=installer-integrity
     if [ -n "$installer_hash" ]; then
         actual_hash=$(sha256sum "$bootstrap_path" | cut -d ' ' -f 1 | tr '[:lower:]' '[:upper:]')
         [ "$actual_hash" = "$installer_hash" ] || die 'Installer SHA-256 does not match release pin; refusing execution'
     fi
+    registry_failure_stage=installer-syntax
     if [ ! -s "$bootstrap_path" ] || ! sh -n "$bootstrap_path"; then
         rm -rf "$bootstrap_dir"
         die 'Downloaded installer is empty or fails POSIX shell syntax validation'
     fi
 
+    registry_failure_stage=installer-execution
+    registry_result="$bootstrap_dir/registry-result"
     printf '%s\n' 'Running native Reparo installer...'
     if [ -n "$installer_hash" ]; then
-        if REPARO_REPORT_SKIP=1 REPARO_URL='' REPARO_RELEASE_FILE="$release_file" sh "$bootstrap_path" --verbose; then status=0; else status=$?; fi
+        if REPARO_LEGACY_REPORT_SKIP=1 REPARO_REGISTRY_PARENT_REPORT_FD=8 REPARO_URL='' REPARO_RELEASE_FILE="$release_file" sh "$bootstrap_path" --verbose 8>"$registry_result"; then status=0; else status=$?; fi
     else
-        if REPARO_REPORT_SKIP=1 sh "$bootstrap_path" --verbose --latest; then status=0; else status=$?; fi
+        if REPARO_LEGACY_REPORT_SKIP=1 REPARO_REGISTRY_PARENT_REPORT_FD=8 sh "$bootstrap_path" --verbose --latest 8>"$registry_result"; then status=0; else status=$?; fi
     fi
+    # An inherited descriptor to this private bootstrap file is the completion
+    # ownership handoff. It carries no credentials or host facts. A validated
+    # child reports success OR failure; early child failures remain the parent's.
+    if [ -f "$registry_result" ] && [ "$(cat "$registry_result")" = owned ]; then registry_child_reported=1; fi
     rm -rf "$bootstrap_dir"
     return "$status"
 }
@@ -1198,10 +1491,20 @@ case "$ACTION" in
     report-lifecycle)
         case "${REPARO_REPORT_OUTCOME:-}" in succeeded|failed|unchanged|preview|blocked|unknown) ;; *) die 'Report utility requires a bounded lifecycle outcome' ;; esac
         report_native_result lifecycle_result native-installer "$REPARO_REPORT_OUTCOME" "${REPARO_REPORT_PREVIOUS_VERSION:-}"
+        report_native_registry "${REPARO_REGISTRY_EVENT_TYPE:-update}" "$REPARO_REPORT_OUTCOME" "${REPARO_REPORT_PREVIOUS_VERSION:-}" "${REPARO_REGISTRY_SOURCE:-}" "${REPARO_REGISTRY_DURATION_MS:-}" "${REPARO_REGISTRY_FAILURE_STAGE:-}" "${REPARO_REGISTRY_FRESH_INSTALL:-0}" "${REPARO_REGISTRY_COMMIT:-}"
+        if [ "${REPARO_REGISTRY_PARENT_REPORT_FD:-}" = 8 ]; then
+            # The parent supplies its own open descriptor, never a filename.
+            # Only a runtime with the automatic reporter claims completion.
+            printf '%s\n' owned >&8 2>/dev/null || true
+        fi
         exit 0 ;;
     install)
+        REPARO_REGISTRY_ATTEMPTED_AT=$(date -u "+%Y-%m-%dT%H:%M:%SZ"); export REPARO_REGISTRY_ATTEMPTED_AT
+        registry_started=$(date +%s); registry_kind=update; registry_child_reported=0
+        if [ ! -e "$DATA_ROOT/reparo-linux" ] && [ ! -L "$DATA_ROOT/reparo-linux" ]; then registry_kind=install; fi
         reporting_previous_version=$(sed -n "s/^REPARO_LINUX_VERSION='\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)'$/\1/p" "$DATA_ROOT/reparo-linux" 2>/dev/null || true)
         trap native_install_finalization EXIT
+        report_native_registry "$registry_kind" started "$reporting_previous_version" '' '' '' 0 ''
         run_native_installer; exit $? ;;
     task) configure_persistent_task; exit $? ;;
     status) show_status; exit 0 ;;
@@ -1209,6 +1512,9 @@ case "$ACTION" in
     tail) tail_log; exit 0 ;;
 esac
 
+REPARO_REGISTRY_ATTEMPTED_AT=$(date -u "+%Y-%m-%dT%H:%M:%SZ"); export REPARO_REGISTRY_ATTEMPTED_AT
+registry_run_started=$(date +%s)
+report_native_registry run started '' '' '' '' 0 ''
 ensure_log_root
 RECEIPT_ROOT="$LOG_ROOT/reparo_${RUN_ID}_receipts"
 if ! mkdir -p "$RECEIPT_ROOT"; then die 'Cannot create receipt root; no maintenance started'; fi
@@ -1251,4 +1557,6 @@ reporting_outcome=unknown
 [ "$RUN_FAILED" -eq 0 ] || reporting_outcome=failed
 [ "$PREVIEW" -eq 0 ] || reporting_outcome=preview
 report_native_result maintenance_summary '' "$reporting_outcome" ''
+registry_duration=$(( ($(date +%s)-registry_run_started)*1000 ))
+report_native_registry maintenance "$reporting_outcome" '' '' "$registry_duration" '' 0 ''
 exit "$RUN_FAILED"

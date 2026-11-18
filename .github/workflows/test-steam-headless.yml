@@ -45,6 +45,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+env:
+  # Disposable CI installs must never send runner facts to the live registry.
+  REPARO_REPORT_SKIP: '1'
 jobs:
   powershell:
     runs-on: windows-latest
@@ -135,6 +138,7 @@ jobs:
           .\Tests\Test-ReparoForcePreview.ps1
           .\Tests\Test-ReparoSignOut.ps1
           .\Tests\Test-ReparoReportingContracts.ps1
+          .\Tests\Test-ReparoRegistry.ps1
           .\Tests\Test-ReparoWslLifecycle.ps1
           .\Tests\Test-ReparoGracefulSkip.ps1
           # Assertions throw under Stop; intentional nonzero native fixtures
@@ -143,6 +147,9 @@ jobs:
       - name: Windows command shim inherited module-path regression
         shell: pwsh
         run: .\Tests\Test-ReparoHostModulePath.ps1
+      - name: Automatic registry PowerShell 7 boundary regression
+        shell: pwsh
+        run: .\Tests\Test-ReparoRegistry.ps1
       - name: Steam pending summary replay and genuine failure regression
         shell: powershell
         run: .\Tests\Test-ReparoSteamPendingSummary.ps1
@@ -158,6 +165,7 @@ jobs:
           sh Tests/test-reparo-linux-installer.sh
           sh Tests/test-reparo-linux-pinning.sh
           sh Tests/test-reparo-artifact-mirror.sh
+          sh Tests/test-reparo-linux-registry.sh
           sh Tests/test-reparo-linux-output.sh
           sh Tests/test-reparo-linux-signout.sh
           python3 Tests/test-reparo-reliability.py
