@@ -9,10 +9,10 @@ umask 077
 # Interactive Esc cancellation is Windows-only: this POSIX runner does not own
 # a portable cooperative-cancel API for native package managers. No fake skip,
 # keyboard polling, or wrapper kill is substituted for installer completion.
-REPARO_LINUX_VERSION='1.4.4.11'
-REPARO_VERSION_QUOTE='Parting is such sweet sorrow.'
-REPARO_VERSION_SOURCE='Star Trek VI: The Undiscovered Country (1991), General Chang'
-REPARO_VERSION_ART='  <==[ KLINGON ]==>  CHANG'
+REPARO_LINUX_VERSION='1.4.4.12'
+REPARO_VERSION_QUOTE='Sorry about the mess.'
+REPARO_VERSION_SOURCE='Star Wars: A New Hope (1977), Han Solo'
+REPARO_VERSION_ART='  --[ DL-44 ]-->  HAN SOLO'
 REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-}"
 REPARO_RELEASE_URL="${REPARO_RELEASE_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json}"
 LATEST=0
@@ -275,6 +275,7 @@ run_native_installer() {
     bootstrap_path="$bootstrap_dir/install-reparo-linux.sh"
     release_file="$bootstrap_dir/release.json"
     installer_hash=''
+    release_commit=''
     if [ -n "$REPARO_INSTALLER_URL" ] || [ "$LATEST" -eq 1 ]; then
         REPARO_INSTALLER_URL="${REPARO_INSTALLER_URL:-https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/install-reparo-linux.sh}"
         printf '%s\n' 'WARNING: Explicit latest/custom installer is unpinned.'
@@ -299,18 +300,33 @@ try:
     base = 'https://raw.githubusercontent.com/16thdoc/Reparo/' + m['commit'] + '/'
     for url, digest, path in [('linuxUrl', 'linuxSha256', 'linux/reparo-linux'), ('linuxInstallerUrl', 'linuxInstallerSha256', 'deploy/install-reparo-linux.sh')]:
         if m[url] != base + path or not re.fullmatch(r'[A-F0-9]{64}', m[digest]): raise ValueError()
-    print(m['linuxInstallerUrl']); print(m['linuxInstallerSha256'])
+    print(m['linuxInstallerUrl']); print(m['linuxInstallerSha256']); print(m['commit'])
 except (ValueError, TypeError, KeyError, OSError):
     sys.exit('ERROR: Invalid immutable Linux release manifest.')
 PY
         ) || die 'Invalid release manifest; refusing unpinned fallback'
         REPARO_INSTALLER_URL=$(printf '%s\n' "$release_values" | sed -n '1p')
         installer_hash=$(printf '%s\n' "$release_values" | sed -n '2p')
+        release_commit=$(printf '%s\n' "$release_values" | sed -n '3p')
     fi
-    printf '%s\n' "Downloading native Reparo installer: $REPARO_INSTALLER_URL"
-    if ! curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$REPARO_INSTALLER_URL" -o "$bootstrap_path"; then
-        rm -rf "$bootstrap_dir"
-        die 'Could not download native Reparo installer'
+    if [ -n "$release_commit" ]; then
+        # Preserve the GitHub-only manifest validator above, then map its exact
+        # reviewed commit to one fixed public artifact path for observation.
+        mirror_url="https://file.thetechnologist.io/reparo/$release_commit/install-reparo-linux.sh"
+        printf '%s\n' "Downloading native Reparo installer: $mirror_url"
+        if curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -A 'Reparo-Download/Linux/Update' -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$mirror_url" -o "$bootstrap_path"; then :
+        else
+            mirror_status=$?
+            case "$mirror_status" in
+                5|6|7|16|18|22|28|35|47|52|55|56|60|92|95|96) ;;
+                *) die 'Public artifact download failed locally; refusing fallback' ;;
+            esac
+            printf '%s\n' 'WARNING: Public artifact mirror unavailable; using the reviewed immutable GitHub installer (download observation omitted).' >&2
+            curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -A 'Reparo-Download/Linux/Update' -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$REPARO_INSTALLER_URL" -o "$bootstrap_path" || die 'Could not download native Reparo installer'
+        fi
+    else
+        printf '%s\n' "Downloading native Reparo installer: $REPARO_INSTALLER_URL"
+        curl --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 -fsSL -A 'Reparo-Download/Linux/Update' -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$REPARO_INSTALLER_URL" -o "$bootstrap_path" || die 'Could not download native Reparo installer'
     fi
     if [ -n "$installer_hash" ]; then
         actual_hash=$(sha256sum "$bootstrap_path" | cut -d ' ' -f 1 | tr '[:lower:]' '[:upper:]')

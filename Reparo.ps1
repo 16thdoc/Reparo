@@ -172,7 +172,7 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.11'
+$script:ReparoVersion = '1.4.4.12'
 $script:ReparoSourcePath = $PSCommandPath
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($SignOut) {
@@ -351,6 +351,7 @@ function Get-ReparoVersionFlavor {
     # On every runtime version bump, add a fresh Quote/Source pair here instead
     # of reusing the previous version's quote.
     $versionFlavors = @{
+        '1.4.4.12' = [pscustomobject]@{ Quote = 'Sorry about the mess.'; Source = 'Star Wars: A New Hope (1977), Han Solo'; Art = '  --[ DL-44 ]-->  HAN SOLO' }
         '1.4.4.11' = [pscustomobject]@{ Quote = 'Parting is such sweet sorrow.'; Source = 'Star Trek VI: The Undiscovered Country (1991), General Chang'; Art = '  <==[ KLINGON ]==>  CHANG' }
         '1.4.4.9' = [pscustomobject]@{ Quote = 'Your overconfidence is your weakness.'; Source = 'Star Wars: Return of the Jedi (1983), Luke Skywalker'; Art = '  (o_o) /==|  LUKE' }
         '1.4.4.10' = [pscustomobject]@{ Quote = 'A small leak will sink a great ship.'; Source = "Benjamin Franklin, Poor Richard's Almanack (1735)"; Art = '  ~\___/  LEAK WATCH' }
@@ -2068,12 +2069,28 @@ function Invoke-ReparoLifecycleReporting {
     } catch { } # An observer must never replace the original deployment error.
 }
 
+function Get-ReparoWindowsArtifactMirrorUrl {
+    param(
+        [Parameter(Mandatory)][string]$Commit,
+        [Parameter(Mandatory)][string]$SourceUrl
+    )
+
+    # GitHub's reviewed manifest remains the independent trust anchor. Only the
+    # exact Windows artifact from its immutable commit can use this fixed mirror.
+    if ($Commit -cnotmatch '^[0-9a-f]{40}$' -or
+        $SourceUrl -cne ('https://raw.githubusercontent.com/16thdoc/Reparo/{0}/Reparo.ps1' -f $Commit)) {
+        throw 'Artifact mirror requires the exact reviewed Reparo source commit URL.'
+    }
+    return ('https://file.thetechnologist.io/reparo/{0}/Reparo.ps1' -f $Commit)
+}
+
 function Invoke-ReparoNew {
     param(
         [Parameter(Mandatory)][string]$TargetRoot,
         [Parameter(Mandatory)][string]$Url,
         [string]$ExpectedHash,
         [string]$ExpectedVersion,
+        [string]$ReviewedCommit,
         [switch]$SkipBackup,
         [switch]$WhatIfOnly
     )
@@ -2120,19 +2137,41 @@ Log: $script:ReparoLogPath
             if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$sourceUri) -or $sourceUri.Scheme -ne 'https' -or $sourceUri.UserInfo) {
                 throw 'Remote Reparo sources must use an absolute HTTPS URL without embedded credentials.'
             }
-            $downloadUrl = $Url
-            $requestHeaders = @{}
-            if ($downloadUrl -match '^https://api\.github\.com/repos/.+/contents/') {
-                $requestHeaders['Accept'] = 'application/vnd.github.raw'
-                $requestHeaders['User-Agent'] = 'Reparo'
+            if ($ReviewedCommit) {
+                if ($ExpectedHash -cnotmatch '^[A-F0-9]{64}$' -or $ExpectedVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+                    throw 'Reviewed artifact mirror downloads require the release hash and version.'
+                }
+                $downloadUrl = Get-ReparoWindowsArtifactMirrorUrl -Commit $ReviewedCommit -SourceUrl $Url
+                $requestHeaders = @{ 'User-Agent' = 'Reparo-Download/Windows/Update'; 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' }
+                Write-Info "Downloading reviewed artifact from $downloadUrl"
+                try {
+                    Invoke-WebRequest -Uri $downloadUrl -Headers $requestHeaders -OutFile $tempScript -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+                }
+                catch {
+                    # Fallback covers transport/HTTP failure only. Parsing, hash
+                    # and version checks below never retry a different source.
+                    if (-not ($_.Exception -is [Net.WebException]) -and
+                        $_.Exception.GetType().FullName -notin @('System.Net.Http.HttpRequestException','Microsoft.PowerShell.Commands.HttpResponseException','System.Threading.Tasks.TaskCanceledException','System.TimeoutException')) { throw }
+                    Write-Warning 'Reparo download mirror unavailable; using the reviewed GitHub artifact. This download is omitted from mirror analytics.'
+                    Invoke-WebRequest -Uri $Url -Headers $requestHeaders -OutFile $tempScript -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+                }
             }
-            if ($downloadUrl -match '^https://raw\.githubusercontent\.com/') {
-                $separator = if ($downloadUrl.Contains('?')) { '&' } else { '?' }
-                $downloadUrl = '{0}{1}x={2}' -f $downloadUrl, $separator, [Uri]::EscapeDataString((Get-Date -Format 'yyyyMMddHHmmss'))
-                $requestHeaders['Cache-Control'] = 'no-cache'
-                $requestHeaders['Pragma'] = 'no-cache'
+            else {
+                # Explicit custom sources and -Latest retain their existing lane.
+                $downloadUrl = $Url
+                $requestHeaders = @{}
+                if ($downloadUrl -match '^https://api\.github\.com/repos/.+/contents/') {
+                    $requestHeaders['Accept'] = 'application/vnd.github.raw'
+                    $requestHeaders['User-Agent'] = 'Reparo'
+                }
+                if ($downloadUrl -match '^https://raw\.githubusercontent\.com/') {
+                    $separator = if ($downloadUrl.Contains('?')) { '&' } else { '?' }
+                    $downloadUrl = '{0}{1}x={2}' -f $downloadUrl, $separator, [Uri]::EscapeDataString((Get-Date -Format 'yyyyMMddHHmmss'))
+                    $requestHeaders['Cache-Control'] = 'no-cache'
+                    $requestHeaders['Pragma'] = 'no-cache'
+                }
+                Invoke-WebRequest -Uri $downloadUrl -Headers $requestHeaders -OutFile $tempScript -UseBasicParsing
             }
-            Invoke-WebRequest -Uri $downloadUrl -Headers $requestHeaders -OutFile $tempScript -UseBasicParsing
         }
         $candidateItem = Get-Item -LiteralPath $tempScript -Force -ErrorAction Stop
         if ($candidateItem.Length -lt 1 -or $candidateItem.Length -gt 2097152) {
@@ -3982,6 +4021,7 @@ if ($Install -or $New -or $Latest) {
     $installSource = $null
     $installExpectedHash = $null
     $installExpectedVersion = $null
+    $installReviewedCommit = $null
     $installMode = if ($Install) { 'offline self-install' } elseif ($New) { 'reviewed pinned release' } else { 'latest main (unpinned)' }
     if ($Install) {
         $installSource = $PSCommandPath
@@ -4001,7 +4041,7 @@ if ($Install -or $New -or $Latest) {
                 throw 'Release manifest fields do not match the reviewed schema.'
             }
             if ($manifest.version -notmatch '^\d+\.\d+\.\d+\.\d+$' -or
-                $manifest.commit -notmatch '^[0-9a-f]{40}$' -or
+                $manifest.commit -cnotmatch '^[0-9a-f]{40}$' -or
                 $manifest.reparoUrl -cne ('https://raw.githubusercontent.com/16thdoc/Reparo/{0}/Reparo.ps1' -f $manifest.commit) -or
                 $manifest.sha256 -cnotmatch '^[A-F0-9]{64}$') {
                 throw 'Release manifest is not pinned to a valid immutable Reparo source commit.'
@@ -4009,6 +4049,7 @@ if ($Install -or $New -or $Latest) {
             $installSource = [string]$manifest.reparoUrl
             $installExpectedHash = [string]$manifest.sha256
             $installExpectedVersion = [string]$manifest.version
+            $installReviewedCommit = [string]$manifest.commit
         }
         catch { throw "Unable to resolve the reviewed Reparo release: $($_.Exception.Message)" }
     }
@@ -4017,7 +4058,7 @@ if ($Install -or $New -or $Latest) {
     }
 
     Write-Info "Reparo install mode: $installMode"
-    Invoke-ReparoNew -TargetRoot $InstallRoot -Url $installSource -ExpectedHash $installExpectedHash -ExpectedVersion $installExpectedVersion -SkipBackup:$NoBackup -WhatIfOnly:$Preview
+    Invoke-ReparoNew -TargetRoot $InstallRoot -Url $installSource -ExpectedHash $installExpectedHash -ExpectedVersion $installExpectedVersion -ReviewedCommit $installReviewedCommit -SkipBackup:$NoBackup -WhatIfOnly:$Preview
     if (-not $Preview -and -not $SkipNinjaPublish) {
         Publish-ReparoInstalledNinjaVersion -TargetRoot $InstallRoot | Out-Null
     }

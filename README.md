@@ -1,5 +1,10 @@
 # Reparo
 
+Prepared **1.4.4.12** moves reviewed update/bootstrap payload downloads to the
+public `file.thetechnologist.io` mirror. GitHub retains the reviewed manifest and
+exact immutable commit/hash authority; the production channel stays at 1.4.4.11
+until this candidate passes the release gates.
+
 Release **1.4.4.11** adds Windows `-SignOut`: finish maintenance and reporting,
 then request sign-out of the user session that launched Reparo. Preview makes
 no sign-out request. Background and scheduled runs cannot select another user.
@@ -109,7 +114,11 @@ not a signed trust root or rollback-prevention mechanism. Keep a prior verified
 manifest/artifacts for rollback. `--latest` and explicit `REPARO_URL` or
 `REPARO_INSTALLER_URL` overrides are labeled unpinned; never use them to claim
 reviewed-release provenance. `REPARO_RELEASE_URL` can select a protected HTTPS mirror;
-artifact URLs remain strictly GitHub/commit-bound. A clone's standalone installer
+manifest artifact URLs remain strictly GitHub/commit-bound. Starting with the
+prepared 1.4.4.12 bridge, validated commits map to the fixed public mirror paths
+documented in [download distribution](docs/download-distribution.md); an
+availability failure can fall back to the exact validated GitHub artifact, while
+hash, syntax and version failures remain fatal. A clone's standalone installer
 is operator-trusted bootstrap code; an installed native runner verifies the downloaded
 bootstrap first. Windows Install remains offline and Windows Latest/N remains
 unpinned; native N retains its historical New meaning, with Latest spelled out.
