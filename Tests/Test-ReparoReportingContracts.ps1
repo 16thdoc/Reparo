@@ -15,13 +15,14 @@ function Invoke-ReportingFixture {
     $Preview=[bool]$PreviewOnly; $NoBackup=$false; $SkipNinjaPublish=$false
     $InstallRoot=Join-Path $env:ProgramData 'Reparo'; $SourceUrl='fixture'; $PSCommandPath='fixture'
     $script:ReparoIsWindows=$true; $script:ReparoDeploymentChanged=$false
+    $script:ReparoVersion='0.0.0.1' # Standalone lifecycle fixture supplies the runner's release identity.
     $script:ReportingFixtureRecords=@()
     function Get-ReparoInstalledVersion { param($TargetRoot) '1.4.1.3' }
     function Write-Info { param($Message) }
     function Write-ReparoLog { param($Message) }
     function Invoke-RestMethod { throw 'fixture_manifest_failure' }
     function Invoke-ReparoNew {
-        param($TargetRoot,$Url,[switch]$SkipBackup,[switch]$WhatIfOnly)
+        param($TargetRoot,$Url,$ExpectedHash,$ExpectedVersion,[switch]$SkipBackup,[switch]$WhatIfOnly)
         if($Failure -eq 'replacement'){throw 'fixture_replacement_failure'}
         $script:ReparoDeploymentChanged=-not $Unchanged
     }
