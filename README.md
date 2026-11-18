@@ -587,8 +587,13 @@ Reparo's canonical deployment is the single `Reparo.ps1` source file followed by
 `RELEASE.md` when publishing a pinned release for `-New`.
 The ProgramData install transaction rejects reparse points and replaces inherited
 permissions with an Administrators/SYSTEM-write, Users-read ACL before creating a
-SYSTEM self-update task. Network bootstraps require HTTPS and verify the manifest's
-immutable commit, SHA-256, and version before executing downloaded PowerShell.
+SYSTEM self-update task. It normalizes the runtime and command-shim tree without
+following links; machine Logs, Backups, Reporting, and SteamQueue state are private
+to Administrators/SYSTEM, while non-admin runs log under LocalAppData. Network
+bootstraps require HTTPS and verify the manifest's immutable commit, SHA-256, and
+version before executing downloaded PowerShell. Tagged production releases also
+produce SPDX, checksum, and keyless GitHub attestation evidence; see
+`docs/security-deployment.md` for verification and staged rollout gates.
 
 ### Ninja deployment options
 

@@ -18,9 +18,13 @@ foreach ($path in @($reparoPath, $remotePath, $moshiPath)) {
 $reparo = Get-Content -LiteralPath $reparoPath -Raw
 foreach ($required in @(
     'function Protect-ReparoWindowsInstallRoot',
+    'function Protect-ReparoWindowsPrivateDataRoot',
     'Refusing privileged installation through a reparse point',
+    'Refusing to normalize Reparo machine data containing a reparse point',
     '$acl.SetAccessRuleProtection($true, $false)',
+    '$privateAcl.SetAccessRuleProtection($true, $false)',
     "New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')",
+    "foreach (`$privateChild in @('Logs', 'Backups', 'Reporting', 'SteamQueue'))",
     'Remote Reparo sources must use an absolute HTTPS URL without embedded credentials.',
     'Downloaded Reparo.ps1 SHA-256 mismatch.',
     '-ExpectedHash $installExpectedHash -ExpectedVersion $installExpectedVersion',
@@ -87,6 +91,13 @@ foreach ($required in @('MoshiHookInstallSha256', 'sha256sum "$hook_installer"',
 $workflow = Get-Content -LiteralPath $workflowPath -Raw
 if ($workflow -match 'uses:\s*actions/checkout@v\d+') {
     throw 'GitHub Actions dependencies must be pinned to immutable commit SHAs.'
+}
+foreach ($required in @(
+    'persist-credentials: false',
+    '.\Tests\Test-ReparoWindowsAclIntegration.ps1',
+    '.\Tests\Test-ReparoSupplyChain.ps1'
+)) {
+    if (-not $workflow.Contains($required)) { throw "Missing CI security contract: $required" }
 }
 
 $fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('reparo-security-' + [guid]::NewGuid().ToString('N'))

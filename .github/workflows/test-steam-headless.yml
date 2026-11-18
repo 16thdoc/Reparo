@@ -18,6 +18,9 @@ on:
       - 'Tests/Test-ReparoCleanupOutcomes.ps1'
       - 'Tests/Test-ReparoOfflineIsolated.ps1'
       - 'Tests/Test-ReparoSecurity.ps1'
+      - 'Tests/Test-ReparoWindowsAclIntegration.ps1'
+      - 'Tests/Test-ReparoSupplyChain.ps1'
+      - 'scripts/New-ReparoSbom.ps1'
       - 'Tests/test-reparo-reliability.py'
       - 'deploy/reparo-candidate.json'
       - 'deploy/reparo-release.json'
@@ -26,6 +29,10 @@ on:
       - 'deploy/Install-MoshiRemote.ps1'
       - 'docs/reliability-contract.md'
       - 'docs/security-deployment.md'
+      - 'docs/security-threat-model.md'
+      - 'docs/github-repository-policy.md'
+      - 'docs/adr/**'
+      - 'docs/release-*.md'
       - 'Tests/Test-ReparoPSWindowsUpdateBootstrap.ps1'
       - 'Tests/Test-ReparoPipRecovery.ps1'
       - 'Tests/Test-ReparoForcePreview.ps1'
@@ -34,16 +41,20 @@ on:
       - 'Tests/test-reparo-wsl-guard.py'
       - 'Tests/test-reparo-linux-output.sh'
       - '.github/workflows/test-steam-headless.yml'
+      - '.github/workflows/release-attestation.yml'
+      - '.github/dependabot.yml'
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   powershell:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Steam integration regression
         shell: powershell
         run: .\Tests\Test-ReparoSteamHeadless.ps1
@@ -122,6 +133,8 @@ jobs:
           .\Tests\Test-ReparoCleanupOutcomes.ps1
           .\Tests\Test-ReparoOfflineIsolated.ps1
           .\Tests\Test-ReparoSecurity.ps1
+          .\Tests\Test-ReparoWindowsAclIntegration.ps1
+          .\Tests\Test-ReparoSupplyChain.ps1
           .\Tests\Test-ReparoPipRecovery.ps1
           .\Tests\Test-ReparoForcePreview.ps1
           .\Tests\Test-ReparoWslLifecycle.ps1
@@ -134,8 +147,11 @@ jobs:
         run: .\Tests\Test-ReparoSteamPendingSummary.ps1
   native-installer:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - name: Native syntax and isolated installer fixtures
         run: |
           sh -n linux/reparo-linux

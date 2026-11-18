@@ -171,7 +171,7 @@ function Initialize-ReparoHostModulePath {
 }
 Initialize-ReparoHostModulePath
 
-$script:ReparoVersion = '1.4.4.10'
+$script:ReparoVersion = '1.4.4.11'
 $script:ReparoSourcePath = $PSCommandPath
 $script:ReparoBoundParameters = $PSBoundParameters
 if ($Headless) {
@@ -220,6 +220,106 @@ function Assert-ReparoWindowsPathHasNoReparsePoint {
         $parent = [IO.Path]::GetDirectoryName($cursor)
         if ([string]::IsNullOrWhiteSpace($parent) -or [string]::Equals($parent, $cursor, [StringComparison]::OrdinalIgnoreCase)) { break }
         $cursor = $parent
+    }
+}
+
+function Get-ReparoWindowsTreeItemsWithoutLinks {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$ReparseMessage
+    )
+
+    $items = New-Object System.Collections.Generic.List[object]
+    $pending = New-Object System.Collections.Generic.Queue[string]
+    $pending.Enqueue([IO.Path]::GetFullPath($Path))
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Dequeue()
+        Assert-ReparoWindowsPathHasNoReparsePoint -Path $directory
+        foreach ($item in @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop)) {
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "$ReparseMessage`: $($item.FullName)"
+            }
+            Assert-ReparoWindowsPathHasNoReparsePoint -Path $item.FullName
+            [void]$items.Add($item)
+            if ($item.PSIsContainer) { $pending.Enqueue($item.FullName) }
+        }
+    }
+    return $items.ToArray()
+}
+
+function Protect-ReparoWindowsPrivateDataRoot {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$WhatIfOnly
+    )
+
+    if (-not $script:ReparoIsWindows) { return }
+
+    $fullPath = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $programData = [IO.Path]::GetFullPath($env:ProgramData).TrimEnd('\')
+    if (-not $fullPath.StartsWith($programData + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+
+    Assert-ReparoWindowsPathHasNoReparsePoint -Path $fullPath
+    if ($WhatIfOnly) {
+        if (Test-Path -LiteralPath $fullPath -PathType Container) {
+            [void]@(Get-ReparoWindowsTreeItemsWithoutLinks -Path $fullPath -ReparseMessage 'Refusing a Reparo private-data preview containing a reparse point')
+        }
+        return
+    }
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    if ($identity.User.Value -ne 'S-1-5-18' -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw 'Protecting Reparo machine data under ProgramData requires Administrator or SYSTEM.'
+    }
+
+    New-Item -ItemType Directory -Force -Path $fullPath | Out-Null
+
+    # Walk one directory level at a time and inspect links before enqueueing a
+    # child. This remains non-following even on legacy Windows PowerShell hosts.
+    $descendants = @(Get-ReparoWindowsTreeItemsWithoutLinks -Path $fullPath -ReparseMessage 'Refusing to normalize Reparo machine data containing a reparse point')
+
+    $administrators = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+    $system = New-Object Security.Principal.SecurityIdentifier('S-1-5-18')
+    $inheritance = [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
+    $propagation = [Security.AccessControl.PropagationFlags]::None
+    $privateAcl = New-Object Security.AccessControl.DirectorySecurity
+    $privateAcl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @($system, $administrators)) {
+        $privateAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, [Security.AccessControl.FileSystemRights]::FullControl, $inheritance, $propagation, [Security.AccessControl.AccessControlType]::Allow)))
+    }
+    $privateAcl.SetOwner($administrators)
+    Set-Acl -LiteralPath $fullPath -AclObject $privateAcl -ErrorAction Stop
+
+    # Locking the root closes the legacy broad-write window. Refresh the inventory
+    # so an entry raced in between validation and Set-Acl cannot escape normalization.
+    $descendants = @(Get-ReparoWindowsTreeItemsWithoutLinks -Path $fullPath -ReparseMessage 'Refusing to normalize Reparo machine data containing a reparse point after locking its root')
+
+    # Remove stale explicit rules from pre-hardening logs and backups, then make
+    # every existing descendant inherit only from the new private parent.
+    foreach ($item in @($descendants | Sort-Object { $_.FullName.Length })) {
+        Assert-ReparoWindowsPathHasNoReparsePoint -Path $item.FullName
+        $childAcl = Get-Acl -LiteralPath $item.FullName -ErrorAction Stop
+        foreach ($explicitRule in @($childAcl.Access | Where-Object { -not $_.IsInherited })) {
+            [void]$childAcl.RemoveAccessRuleSpecific($explicitRule)
+        }
+        $childAcl.SetAccessRuleProtection($false, $false)
+        $childAcl.SetOwner($administrators)
+        Set-Acl -LiteralPath $item.FullName -AclObject $childAcl -ErrorAction Stop
+    }
+
+    $broadSids = @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')
+    $verifiedItems = @(Get-ReparoWindowsTreeItemsWithoutLinks -Path $fullPath -ReparseMessage 'Reparo private machine data acquired a reparse point during ACL normalization')
+    foreach ($securedPath in @($fullPath) + @($verifiedItems | ForEach-Object FullName)) {
+        $verified = Get-Acl -LiteralPath $securedPath -ErrorAction Stop
+        foreach ($rule in @($verified.Access | Where-Object { $_.AccessControlType -eq 'Allow' })) {
+            $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+            if ($sid -in $broadSids) {
+                throw "Reparo private machine data remains accessible to a broad principal: $securedPath ($($rule.IdentityReference))"
+            }
+        }
     }
 }
 
@@ -294,6 +394,7 @@ function Get-ReparoVersionFlavor {
     $versionFlavors = @{
         '1.4.4.9' = [pscustomobject]@{ Quote = 'Your overconfidence is your weakness.'; Source = 'Star Wars: Return of the Jedi (1983), Luke Skywalker'; Art = '  (o_o) /==|  LUKE' }
         '1.4.4.10' = [pscustomobject]@{ Quote = 'A small leak will sink a great ship.'; Source = "Benjamin Franklin, Poor Richard's Almanack (1735)"; Art = '  ~\___/  LEAK WATCH' }
+        '1.4.4.11' = [pscustomobject]@{ Quote = 'The enemy''s gate is down.'; Source = 'Ender''s Game (1985), by Orson Scott Card'; Art = '  [ BATTLE ROOM ]  v  TRUST BOUNDARIES POINT DOWN' }
         '1.4.4.8' = [pscustomobject]@{ Quote = 'You must unlearn what you have learned.'; Source = 'Star Wars: The Empire Strikes Back (1980), Yoda'; Art = '  <(-_-)>  YODA -- judge outcomes by their receipts' }
         '1.0.8.1' = [pscustomobject]@{ Quote = 'Hotfix applied. The goblin has been relocated.'; Source = 'Reparo maintenance log'; Art = '  GOBLIN: evicted from version output' }
         '1.0.8.2' = [pscustomobject]@{ Quote = 'New quote online. Old ghosts denied boarding.'; Source = 'Reparo maintenance log'; Art = '  QUOTE BAY: temporal lint removed' }
@@ -1598,7 +1699,12 @@ function Protect-ReparoWindowsInstallRoot {
         $cursor = [IO.Path]::GetDirectoryName($cursor)
     }
 
-    if ($WhatIfOnly) { return }
+    if ($WhatIfOnly) {
+        if (Test-Path -LiteralPath $fullPath -PathType Container) {
+            [void]@(Get-ReparoWindowsTreeItemsWithoutLinks -Path $fullPath -ReparseMessage 'Refusing a Reparo install preview containing a reparse point')
+        }
+        return
+    }
 
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -1622,28 +1728,51 @@ function Protect-ReparoWindowsInstallRoot {
     $acl.SetOwner($administrators)
     Set-Acl -LiteralPath $fullPath -AclObject $acl -ErrorAction Stop
 
+    $readablePaths = New-Object System.Collections.Generic.List[string]
+    [void]$readablePaths.Add($fullPath)
     foreach ($securedChild in @(
         (Join-Path $fullPath 'Reparo.ps1'),
         (Join-Path $fullPath 'reparo-settings.json'),
         (Join-Path $fullPath 'winget-health.json'),
         (Join-Path $fullPath 'version-locks.json'),
-        (Join-Path $fullPath 'bin'),
-        (Join-Path $fullPath 'Logs'),
-        (Join-Path $fullPath 'Backups')
+        (Join-Path $fullPath 'bin')
     )) {
         if (-not (Test-Path -LiteralPath $securedChild)) { continue }
         Assert-ReparoWindowsPathHasNoReparsePoint -Path $securedChild
-        $childAcl = Get-Acl -LiteralPath $securedChild -ErrorAction Stop
-        foreach ($explicitRule in @($childAcl.Access | Where-Object { -not $_.IsInherited })) {
-            [void]$childAcl.RemoveAccessRuleSpecific($explicitRule)
+        $securedPaths = New-Object System.Collections.Generic.List[string]
+        [void]$securedPaths.Add($securedChild)
+        $securedItem = Get-Item -LiteralPath $securedChild -Force -ErrorAction Stop
+        if ($securedItem.PSIsContainer) {
+            foreach ($descendant in @(Get-ReparoWindowsTreeItemsWithoutLinks -Path $securedChild -ReparseMessage 'Refusing a Reparo runtime tree containing a reparse point')) {
+                [void]$securedPaths.Add($descendant.FullName)
+            }
         }
-        $childAcl.SetAccessRuleProtection($false, $false)
-        $childAcl.SetOwner($administrators)
-        Set-Acl -LiteralPath $securedChild -AclObject $childAcl -ErrorAction Stop
+        foreach ($securedPath in @($securedPaths | Sort-Object Length)) {
+            Assert-ReparoWindowsPathHasNoReparsePoint -Path $securedPath
+            $childAcl = Get-Acl -LiteralPath $securedPath -ErrorAction Stop
+            foreach ($explicitRule in @($childAcl.Access | Where-Object { -not $_.IsInherited })) {
+                [void]$childAcl.RemoveAccessRuleSpecific($explicitRule)
+            }
+            $childAcl.SetAccessRuleProtection($false, $false)
+            $childAcl.SetOwner($administrators)
+            Set-Acl -LiteralPath $securedPath -AclObject $childAcl -ErrorAction Stop
+            [void]$readablePaths.Add($securedPath)
+        }
     }
 
-    $verified = Get-Acl -LiteralPath $fullPath -ErrorAction Stop
-    if (-not $verified.AreAccessRulesProtected) {
+    # Machine logs, rollback copies, optional reporting custody and desktop-queue
+    # receipts can contain host details or operational evidence. Standard users
+    # log to LocalAppData instead, so these ProgramData trees are private to
+    # SYSTEM and Administrators rather than inheriting runtime read access.
+    foreach ($privateChild in @('Logs', 'Backups', 'Reporting', 'SteamQueue')) {
+        $privatePath = Join-Path $fullPath $privateChild
+        if (Test-Path -LiteralPath $privatePath) {
+            Protect-ReparoWindowsPrivateDataRoot -Path $privatePath
+        }
+    }
+
+    $verifiedRoot = Get-Acl -LiteralPath $fullPath -ErrorAction Stop
+    if (-not $verifiedRoot.AreAccessRulesProtected) {
         throw "Reparo install root ACL inheritance is still enabled: $fullPath"
     }
     $writeMask = [Security.AccessControl.FileSystemRights]::WriteData -bor
@@ -1654,12 +1783,15 @@ function Protect-ReparoWindowsInstallRoot {
         [Security.AccessControl.FileSystemRights]::Delete -bor
         [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
         [Security.AccessControl.FileSystemRights]::TakeOwnership
-    foreach ($rule in @($verified.Access | Where-Object {
-        $_.AccessControlType -eq 'Allow' -and
-        $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -in @('S-1-1-0','S-1-5-11','S-1-5-32-545') -and
-        ($_.FileSystemRights -band $writeMask)
-    })) {
-        throw "Reparo install root remains writable by a broad principal: $($rule.IdentityReference)"
+    foreach ($verifiedPath in $readablePaths) {
+        $verified = Get-Acl -LiteralPath $verifiedPath -ErrorAction Stop
+        foreach ($rule in @($verified.Access | Where-Object {
+            $_.AccessControlType -eq 'Allow' -and
+            $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -in @('S-1-1-0','S-1-5-11','S-1-5-32-545') -and
+            ($_.FileSystemRights -band $writeMask)
+        })) {
+            throw "Reparo runtime path remains writable by a broad principal: $verifiedPath ($($rule.IdentityReference))"
+        }
     }
 }
 
@@ -1669,6 +1801,13 @@ if ($script:ReparoIsWindows -and ($Install -or $New -or $Latest -or $Ninja)) {
 Assert-ReparoWindowsPathHasNoReparsePoint -Path $LogRoot
 if (-not (Test-Path -LiteralPath $LogRoot)) {
     New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
+}
+if ($script:ReparoIsWindows -and ($Install -or $New -or $Latest -or $Ninja)) {
+    $installedLogRoot = [IO.Path]::GetFullPath((Join-Path $InstallRoot 'Logs')).TrimEnd('\')
+    $selectedLogRoot = [IO.Path]::GetFullPath($LogRoot).TrimEnd('\')
+    if ([string]::Equals($selectedLogRoot, $installedLogRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        Protect-ReparoWindowsPrivateDataRoot -Path $LogRoot
+    }
 }
 $script:ReparoLogBaseName = "reparo_{0}_{1}_{2}" -f $script:ReparoHostName, $PID, (Get-Date -Format 'yyyy-MM-dd_HHmmss')
 $script:ReparoLogPath = Join-Path $LogRoot ($script:ReparoLogBaseName + '_RUNNING.log')
@@ -2137,11 +2276,13 @@ Log: $script:ReparoLogPath
         }
 
         New-Item -ItemType Directory -Force -Path $TargetRoot, $targetLogRoot | Out-Null
+        Protect-ReparoWindowsInstallRoot -Path $TargetRoot
 
         if (Test-Path -LiteralPath $scriptPath) {
             Copy-Item -LiteralPath $scriptPath -Destination $rollbackPath -Force
             if (-not $SkipBackup) {
                 New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+                Protect-ReparoWindowsPrivateDataRoot -Path $backupRoot
                 $backupPath = Join-Path $backupRoot ("Reparo_{0}.ps1" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
                 Copy-Item -LiteralPath $scriptPath -Destination $backupPath -Force
                 Write-Info "Backup saved: $backupPath"
@@ -2155,6 +2296,7 @@ Log: $script:ReparoLogPath
         Write-Done "Installed Reparo.ps1 updated ($newHash)."
         Write-Info "Live script: $scriptPath"
         Install-ReparoCommandShim -TargetRoot $TargetRoot
+        Protect-ReparoWindowsInstallRoot -Path $TargetRoot
         Write-ReparoEventLog -EventId 1102 -EntryType Information -Message @"
 Reparo install/update completed.
 
