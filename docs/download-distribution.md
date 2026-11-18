@@ -1,6 +1,6 @@
 # Reviewed downloads through the public file service
 
-The prepared 1.4.4.12 bridge uses `file.thetechnologist.io` for reviewed artifact
+The 1.4.4.12 bridge uses `file.thetechnologist.io` for reviewed artifact
 bytes. The independently reviewed channel remains
 `https://raw.githubusercontent.com/16thdoc/Reparo/main/deploy/reparo-release.json`.
 Its schema, lowercase full source commit, exact GitHub artifact URLs, uppercase
