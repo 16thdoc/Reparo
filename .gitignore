@@ -10,6 +10,8 @@ Logs/
 *.log
 *.tmp
 *.bak
+__pycache__/
+*.pyc
 
 # OS metadata
 Thumbs.db

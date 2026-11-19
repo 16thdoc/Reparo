@@ -29,5 +29,6 @@ Release flavor: “I can bring you in warm, or I can bring you in cold.” — D
 helmet/T-visor. Attribution checked against [Lucasfilm's official quote list](https://www.starwars.com/news/20-favorite-quotes-the-mandalorian-season-one).
 
 Publishing does not install on a live endpoint or run maintenance. The previous
-1.4.4.12 source/manifest remains the rollback anchor until the separately reviewed
-production pin is promoted.
+1.4.4.12 source/manifest remains the rollback anchor after this separate reviewed
+production-pin promotion. Local Windows/Linux checks are the default; hosted
+GitHub workflows remain available as optional manual runs.
