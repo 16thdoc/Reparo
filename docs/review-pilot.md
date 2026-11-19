@@ -1,8 +1,8 @@
 # Review, release and rollback gates
 
-Release 1.4.4.12 promotes reviewed source to `deploy/reparo-release.json` in a
-separate immutable pin transaction. `deploy/reparo-candidate.json` now contains the
-reviewed 1.4.4.13 automatic-registry candidate. Ordinary installed `-New` uses the production manifest;
+Release 1.4.4.13 promotes reviewed source to `deploy/reparo-release.json` in a
+separate immutable pin transaction. `deploy/reparo-candidate.json` retains the
+reviewed 1.4.4.13 source. Ordinary installed `-New` uses the production manifest;
 publication does not itself run an installer or maintenance. Review and test
 future source/pin transactions using the same sequence below. Endpoint deployment,
 controller reenrollment and maintenance remain separate scoped actions.
@@ -10,8 +10,9 @@ Controller/source-integrity enrollment below is the existing runner ownership
 mechanism. The automatic device registry has no operator enrollment step.
 
 1. Review the exact source/test/doc commits and platform receipts. Confirm no
-   private evidence or host data entered the public diff. Existing PR CI uses
-   hosted disposable Windows/Ubuntu runners and isolated fixtures; it does not
+   private evidence or host data entered the public diff. Local checks are the
+   default; use `Tests/run-local-checks.py` and retain both platform receipts.
+   Hosted Windows/Ubuntu workflows are optional manual runs. Verification does not
    publish a release, install on a live endpoint or run real maintenance.
 2. Review schema/exit/console compatibility with Ninja and WatchCode. Keep local
    enrollment state and source-integrity settings unchanged. Prepare explicit
@@ -40,8 +41,8 @@ For runner rollback, retain and select the previously reviewed immutable manifes
 and use the supported installation transaction after reconciling newer settings.
 Keep new-schema evidence and worker receipts even if the reader is rolled back.
 Do not reset a controller or restore somebody else's lock. The rollback artifact
-for 1.4.4.12 is the retained published 1.4.4.11 manifest/source pair at immutable
-source `88683359c0b311f17b831938daca3e5e0e51c02b`.
+for 1.4.4.13 is the retained published 1.4.4.12 manifest/source pair at immutable
+source `a20b1ac5e06802591a7b4f10fa7a10b50f674ca0`.
 Do not confuse the current production pin with that previous rollback anchor.
 
 Runner rollback does **not** undo installed OS/driver/npm/apt changes or Steam

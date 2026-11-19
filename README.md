@@ -6,11 +6,14 @@ Unknown facts stay unknown, and reporting failures preserve Reparo's outcome.
 See [the30field reference, privacy/opt-out and trust limits](docs/automatic-registry.md).
 GitHub retains the downloadable release while payload updates prefer the public
 file-server mirror with the existing immutable commit/hash/version checks.
+The production manifest pins source `a793946ed75c0654bc5ca4bf08df353f9c611cfb`.
+Routine verification runs [locally on Windows and Linux](docs/local-checks.md);
+the hosted GitHub workflows are optional manual runs.
 
 Release **1.4.4.12** moves reviewed update/bootstrap payload downloads to the
 public `file.thetechnologist.io` mirror. GitHub retains the reviewed manifest and
-exact immutable commit/hash authority. The production channel pins source
-`a20b1ac5e06802591a7b4f10fa7a10b50f674ca0`; endpoint pilots remain separately scoped.
+exact immutable commit/hash authority. Its source `a20b1ac5e06802591a7b4f10fa7a10b50f674ca0`
+is retained for rollback; endpoint pilots remain separately scoped.
 
 Release **1.4.4.11** adds Windows `-SignOut`: finish maintenance and reporting,
 then request sign-out of the user session that launched Reparo. Preview makes
